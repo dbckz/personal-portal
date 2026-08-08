@@ -62,6 +62,65 @@ export function parseVolume(raw: string | undefined): ParsedVolume {
   return out;
 }
 
+// Words in an exercise NAME that mark it as a cardio piece — a run, a swim, a
+// row on the erg — rather than a loaded lift. Used to decide which logging
+// fields a row shows (distance/time vs sets/reps/kg) and reuses the same
+// cardio vocabulary the plan parsers already lean on (run/cycle/bike/swim…),
+// widened for the machines Dave logs by name (treadmill, erg, elliptical).
+//
+// Deliberately excludes a bare "row": on its own that is far more often a
+// strength row (seated row, bent-over row) than the rowing machine, so only the
+// unambiguous "rower"/"rowing"/"erg" catch the ergometer.
+const CARDIO_NAME_WORDS =
+  /\b(run|running|jog|jogging|parkrun|treadmill|walk|walking|hike|hiking|cycle|cycling|bike|biking|spin|swim|swimming|rowing|rower|erg|ergometer|elliptical|cross[-\s]?trainer|cardio|track)\b/i;
+
+// "Walk" is the ambiguous one: a farmer's walk, walking lunge, suitcase/waiter
+// carry are loaded strength movements, not cardio. When the name reads as one of
+// those, "walk" must not win.
+const LOADED_CARRY_WORDS = /\b(lunge|farmer|carry|suitcase|waiter)\b/i;
+
+// True when an exercise NAME reads as cardio (a run, treadmill, swim, erg row).
+export function isCardioName(name: string | undefined): boolean {
+  const text = (name ?? '').trim();
+  if (LOADED_CARRY_WORDS.test(text)) return false;
+  return CARDIO_NAME_WORDS.test(text);
+}
+
+// Words in an exercise NAME that mark it as an isometric HOLD — a plank, a hang,
+// a wall sit — progressed by seconds held per set, not reps or added load. Used
+// (alongside a logged holdSeconds and the AI programmer's 'hold' kind) to decide
+// which logging fields a row shows and how its progression reads.
+//
+// "hold" is included as a general catch ("dead hang hold", "chin-up hold"); the
+// specific words come first so a "side plank" or "wall sit" is caught by name
+// even when no seconds have been logged yet.
+const HOLD_NAME_WORDS = /\b(plank|hang|wall\s?sit|l[-\s]?sit|hollow hold|hold)\b/i;
+
+// True when an exercise NAME reads as a timed hold (plank, hang, wall sit).
+// Deliberately narrow: "Dead bug", "Bird dog" and other slow bodyweight work
+// are NOT holds — they are rep-based, so they must not be swept in here.
+export function isHoldName(name: string | undefined): boolean {
+  const text = (name ?? '').trim();
+  if (!text) return false;
+  return HOLD_NAME_WORDS.test(text);
+}
+
+// Words in an exercise NAME that mark it as UNILATERAL — worked one side at a
+// time, so its sets/reps (or seconds) are "each side" rather than a total.
+// Kept sensible rather than exhaustive: it should catch the obvious single-limb
+// and anti-rotation movements without mislabelling a plain squat or bench press.
+const UNILATERAL_NAME_WORDS =
+  /\b(side plank|shoulder taps?|single[-\s](?:arm|leg)|one[-\s](?:arm|leg)|split squat|bulgarian|step[-\s]?ups?|lunges?|pistol squat|pallof|paloff|each side|per side)\b/i;
+
+// True when an exercise NAME reads as unilateral (side plank, single-arm row,
+// Bulgarian split squat, Pallof press). Used to mark seeded entries and targets
+// "each side" so the guidance and the log both say which it is.
+export function isUnilateralName(name: string | undefined): boolean {
+  const text = (name ?? '').trim();
+  if (!text) return false;
+  return UNILATERAL_NAME_WORDS.test(text);
+}
+
 // ---------------------------------------------------------------------------
 // Load: the "weight" column
 // ---------------------------------------------------------------------------

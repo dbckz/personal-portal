@@ -27,7 +27,7 @@ export function analyseExercise(
   const planned = inRange.filter(s => s.planned);
 
   const totalExercisesDone = done.reduce((sum, s) => sum + exercisesDone(s), 0);
-  const totalDistanceKm = done.reduce((sum, s) => sum + (s.distanceKm ?? 0), 0);
+  const totalDistanceKm = done.reduce((sum, s) => sum + sessionDistanceKm(s), 0);
 
   // Windows shorter than a week still divide by one week, so a three-day window
   // can't report an implausible sessions-per-week figure.
@@ -53,6 +53,20 @@ export function analyseExercise(
 
   analysis.suggestions = buildSuggestions(analysis, hardSessionShare(done));
   return analysis;
+}
+
+// The distance a session covered, in km. A run records it at the session level;
+// a gym session with a treadmill (or rowing) entry records it on the entry
+// instead — so per-entry distances have to be folded in or run-distance goals
+// under-report.
+//
+// The two can overlap (a session-level total that already includes an entry's
+// distance), so they are NOT added: the larger of the session figure and the
+// summed entry figures is taken, which counts the distance once whichever way it
+// was logged.
+function sessionDistanceKm(session: ExerciseSession): number {
+  const entryKm = (session.exercises ?? []).reduce((sum, e) => sum + (e.distanceKm ?? 0), 0);
+  return Math.max(session.distanceKm ?? 0, entryKm);
 }
 
 // Exercises ticked done in a session. Strictly done===true: sheet-imported
@@ -103,7 +117,7 @@ function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
     const row = map.get(key) ?? { type: s.type, sessions: 0, exercisesDone: 0, distanceKm: 0 };
     row.sessions += 1;
     row.exercisesDone += exercisesDone(s);
-    row.distanceKm += s.distanceKm ?? 0;
+    row.distanceKm += sessionDistanceKm(s);
     map.set(key, row);
   }
   return [...map.values()]
@@ -121,7 +135,7 @@ function summariseByWeek(done: ExerciseSession[], planned: ExerciseSession[]): E
     const r = row(key);
     r.sessions += 1;
     r.exercisesDone += exercisesDone(s);
-    r.distanceKm += s.distanceKm ?? 0;
+    r.distanceKm += sessionDistanceKm(s);
     map.set(key, r);
   }
   for (const s of planned) {

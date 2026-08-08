@@ -3,7 +3,14 @@
 import { useState } from 'react';
 import { ArrowLeftRight, Check, Loader2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 
-import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
+import {
+  isCardioEntry,
+  isHoldEntry,
+  useTodaySession,
+  type FieldPatch,
+  type TodayRow,
+} from '@/hooks/useTodaySession';
+import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { ActionBadge, FailureTag, KindTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
@@ -135,13 +142,15 @@ function RowCard({
   onCommitField: (patch: FieldPatch) => void;
   onCommitNote: (note: string) => void;
   onCommitRir: (rir: number | null) => void;
-  onCommitSwap: (replacement: { name: string; distanceKm?: number }) => void;
+  onCommitSwap: (replacement: { name: string; distanceKm?: number; durationMinutes?: number }) => void;
   onRestoreSwap: () => void;
   onRemove: () => void;
 }) {
   const [note, setNote] = useState(row.notes ?? '');
   const [swapping, setSwapping] = useState(false);
   const current = describeVolumeLoad(row);
+  const cardio = isCardioEntry(row);
+  const hold = isHoldEntry(row);
 
   return (
     <div
@@ -212,40 +221,73 @@ function RowCard({
       {open && (
         <div className="border-t border-gray-100 p-3">
           <div className="flex flex-wrap gap-2">
-            <NumberField label="Sets" value={row.sets} onCommit={v => onCommitField({ sets: v })} />
-            {row.holdSeconds !== undefined ? (
-              <NumberField
-                label="Secs"
-                value={row.holdSeconds}
-                onCommit={v => onCommitField({ holdSeconds: v })}
-              />
+            {cardio ? (
+              <>
+                <NumberField
+                  label="Distance (km)"
+                  value={row.distanceKm}
+                  step={0.1}
+                  onCommit={v => onCommitField({ distanceKm: v })}
+                />
+                <NumberField
+                  label="Time (min)"
+                  value={row.durationMinutes}
+                  onCommit={v => onCommitField({ durationMinutes: v })}
+                />
+              </>
             ) : (
-              <NumberField label="Reps" value={row.reps} onCommit={v => onCommitField({ reps: v })} />
+              <>
+                <NumberField label="Sets" value={row.sets} onCommit={v => onCommitField({ sets: v })} />
+                {hold ? (
+                  <NumberField
+                    label="Secs"
+                    value={row.holdSeconds}
+                    onCommit={v => onCommitField({ holdSeconds: v })}
+                  />
+                ) : (
+                  <NumberField label="Reps" value={row.reps} onCommit={v => onCommitField({ reps: v })} />
+                )}
+                <NumberField
+                  label="kg"
+                  value={row.weightKg}
+                  step={0.5}
+                  onCommit={v => onCommitField({ weightKg: v })}
+                />
+              </>
             )}
-            <NumberField
-              label="kg"
-              value={row.weightKg}
-              step={0.5}
-              onCommit={v => onCommitField({ weightKg: v })}
-            />
           </div>
 
           <label className="mt-3 block">
-            <span className="mb-1 block text-xs font-semibold text-gray-600">How did it feel?</span>
+            <span className="mb-1 block text-xs font-semibold text-gray-600">
+              {cardio ? 'Pace / how it went' : 'How did it feel?'}
+            </span>
             <input
               value={note}
               onChange={e => setNote(e.target.value)}
               onBlur={() => note !== (row.notes ?? '') && onCommitNote(note)}
-              placeholder="Could have done 2 more…"
+              placeholder={
+                cardio
+                  ? '9.2 on treadmill, comfortable'
+                  : hold
+                    ? 'Could have held 15s longer…'
+                    : 'Could have done 2 more…'
+              }
               className="h-11 w-full rounded-md border border-gray-300 px-3 text-sm"
             />
           </label>
-          <RirChips value={row.rir} onChange={onCommitRir} />
-
-          <p className="mt-1 text-[11px] text-gray-400">
-            The rating (or a note like &ldquo;could have done 2 more&rdquo;) sets next
-            session&apos;s target. A rating wins if you set one.
-          </p>
+          {!cardio && (
+            <>
+              <RirChips
+                value={row.rir}
+                onChange={onCommitRir}
+                label={hold ? 'Seconds in reserve' : 'Reps in reserve'}
+              />
+              <p className="mt-1 text-[11px] text-gray-400">
+                The rating (or a note like &ldquo;could have {hold ? 'held 15s longer' : 'done 2 more'}
+                &rdquo;) sets next session&apos;s target. A rating wins if you set one.
+              </p>
+            </>
+          )}
 
           {swapping ? (
             <SwapForm
@@ -303,19 +345,27 @@ function SwapForm({
   onClose,
 }: {
   knownNames: string[];
-  onSwap: (replacement: { name: string; distanceKm?: number }) => void;
+  onSwap: (replacement: { name: string; distanceKm?: number; durationMinutes?: number }) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState('');
   const [distance, setDistance] = useState('');
+  const [duration, setDuration] = useState('');
+  // Only a cardio replacement earns a time field — "20 mins at 9.2" logs in one
+  // go, but a strength swap keeps the lean name-plus-distance form.
+  const cardio = isCardioName(name);
 
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
     const km = Number(distance);
+    const min = Number(duration);
     onSwap({
       name: trimmed,
       ...(distance.trim() !== '' && Number.isFinite(km) ? { distanceKm: km } : {}),
+      ...(cardio && duration.trim() !== '' && Number.isFinite(min)
+        ? { durationMinutes: min }
+        : {}),
     });
   };
 
@@ -347,9 +397,20 @@ function SwapForm({
           type="number"
           inputMode="decimal"
           step={0.1}
-          placeholder="Distance km (optional)"
+          placeholder={cardio ? 'Distance km' : 'Distance km (optional)'}
           className="h-11 flex-1 rounded-md border border-gray-300 px-3 text-sm"
         />
+        {cardio && (
+          <input
+            value={duration}
+            onChange={e => setDuration(e.target.value)}
+            type="number"
+            inputMode="decimal"
+            step={1}
+            placeholder="Time min"
+            className="h-11 flex-1 rounded-md border border-gray-300 px-3 text-sm"
+          />
+        )}
         <button
           type="button"
           onClick={save}
@@ -442,13 +503,13 @@ function AddExerciseForm({
         <input
           value={volume}
           onChange={e => setVolume(e.target.value)}
-          placeholder="3*8"
+          placeholder="3*8 · 3*30 secs · 2 km"
           className="h-11 flex-1 rounded-md border border-gray-300 px-3 text-sm"
         />
         <input
           value={load}
           onChange={e => setLoad(e.target.value)}
-          placeholder="27kg"
+          placeholder="27kg / bodyweight"
           className="h-11 flex-1 rounded-md border border-gray-300 px-3 text-sm"
         />
       </div>

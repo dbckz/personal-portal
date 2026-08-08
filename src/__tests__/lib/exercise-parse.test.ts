@@ -7,6 +7,8 @@
  * the whole point.
  */
 import {
+  isHoldName,
+  isUnilateralName,
   parseLoad,
   parsePlannedTitle,
   parseSheetDate,
@@ -191,6 +193,49 @@ describe('parsePlannedTitle', () => {
     expect(parsePlannedTitle('Water Plants')).toBeNull();
     expect(parsePlannedTitle('🌿 Water Plants')).toBeNull();
     expect(parsePlannedTitle('💰 Transfer salary')).toBeNull();
+  });
+});
+
+describe('isHoldName', () => {
+  it('recognises the timed holds', () => {
+    expect(isHoldName('Side plank')).toBe(true);
+    expect(isHoldName('Front plank')).toBe(true);
+    expect(isHoldName('Dead hang')).toBe(true);
+    expect(isHoldName('Wall sit')).toBe(true);
+    expect(isHoldName('L-sit')).toBe(true);
+    expect(isHoldName('Chin-up hold')).toBe(true);
+  });
+
+  it('does not read rep-based work as a hold', () => {
+    // The trap: slow bodyweight core work that is NOT isometric.
+    expect(isHoldName('Dead bug')).toBe(false);
+    expect(isHoldName('Bird dog')).toBe(false);
+    expect(isHoldName('Bench press')).toBe(false);
+    expect(isHoldName('Treadmill run')).toBe(false);
+    expect(isHoldName(undefined)).toBe(false);
+  });
+});
+
+describe('isUnilateralName', () => {
+  it('recognises single-side movements', () => {
+    expect(isUnilateralName('Side plank')).toBe(true);
+    expect(isUnilateralName('Shoulder taps')).toBe(true);
+    expect(isUnilateralName('Single-arm row')).toBe(true);
+    expect(isUnilateralName('Single leg calf raise')).toBe(true);
+    expect(isUnilateralName('Pallof press')).toBe(true);
+    expect(isUnilateralName('Paloff press with cable')).toBe(true);
+    expect(isUnilateralName('Bulgarian split squat')).toBe(true);
+    expect(isUnilateralName('Walking lunge')).toBe(true);
+    expect(isUnilateralName('Step-up')).toBe(true);
+  });
+
+  it('does not over-match two-sided lifts', () => {
+    expect(isUnilateralName('Back squat')).toBe(false);
+    expect(isUnilateralName('Bench press')).toBe(false);
+    expect(isUnilateralName('Front plank')).toBe(false);
+    expect(isUnilateralName('Deadlift')).toBe(false);
+    expect(isUnilateralName('Treadmill run')).toBe(false);
+    expect(isUnilateralName(undefined)).toBe(false);
   });
 });
 

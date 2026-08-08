@@ -1,5 +1,6 @@
 'use client';
 
+import { formatEntryDuration } from '@/lib/exercise-targets';
 import type { ExerciseEntry } from '@/types/life';
 
 // Render one exercise the way it was logged: "3 × 8 · 27kg", "3 × 30s each
@@ -18,7 +19,7 @@ export function describeEntry(entry: ExerciseEntry): string {
   if (entry.perSide && parts.length > 0) parts[parts.length - 1] += ' each side';
 
   if (entry.distanceKm) parts.push(`${entry.distanceKm} km`);
-  if (entry.durationMinutes) parts.push(`${entry.durationMinutes} min`);
+  if (entry.durationMinutes) parts.push(formatEntryDuration(entry.durationMinutes));
 
   if (entry.weightKg !== undefined) parts.push(`${entry.weightKg}kg`);
   else if (entry.bodyweight) parts.push('bodyweight');

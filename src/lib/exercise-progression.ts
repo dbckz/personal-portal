@@ -13,6 +13,9 @@ export interface ProgressionPoint {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  // "each side" — the sets/reps (or seconds) are per side, not a total. Carried
+  // so a unilateral lift's "last time" and next target both read "each side".
+  perSide?: boolean;
   // Cardio work is measured in time and distance, not sets and load. Carried so
   // a treadmill "last time" reads "15 min · 3.5 km" and not "the same".
   durationMinutes?: number;
@@ -80,6 +83,7 @@ export function buildProgressions(
         ...(entry.sets !== undefined ? { sets: entry.sets } : {}),
         ...(entry.reps !== undefined ? { reps: entry.reps } : {}),
         ...(entry.holdSeconds !== undefined ? { holdSeconds: entry.holdSeconds } : {}),
+        ...(entry.perSide ? { perSide: true } : {}),
         ...(entry.durationMinutes !== undefined ? { durationMinutes: entry.durationMinutes } : {}),
         ...(entry.distanceKm !== undefined ? { distanceKm: entry.distanceKm } : {}),
         ...(entry.notes ? { notes: entry.notes } : {}),

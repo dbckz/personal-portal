@@ -86,6 +86,46 @@ describe('analyseExercise', () => {
     expect(gym?.exercisesDone).toBe(2);
   });
 
+  it('folds entry-level distance into the totals when the session has none', () => {
+    const analysis = analyseExercise(
+      [
+        // A gym session whose only distance is on a treadmill entry, not the
+        // session — this used to be invisible to the distance total.
+        session({
+          date: '2026-07-06',
+          type: 'gym',
+          distanceKm: undefined,
+          exercises: [
+            { id: 'a', name: 'Treadmill run', distanceKm: 3, done: true },
+            { id: 'b', name: 'Bench', done: true },
+          ],
+        }),
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+    expect(analysis.totalDistanceKm).toBe(3);
+    expect(analysis.byType.find(t => t.type === 'gym')?.distanceKm).toBe(3);
+  });
+
+  it('does not double-count when distance is logged at both levels', () => {
+    const analysis = analyseExercise(
+      [
+        // Session records 5 km overall; one entry restates 3 km of it. The larger
+        // (session) figure is taken, not the sum.
+        session({
+          date: '2026-07-06',
+          type: 'run',
+          distanceKm: 5,
+          exercises: [{ id: 'a', name: 'Treadmill run', distanceKm: 3, done: true }],
+        }),
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+    expect(analysis.totalDistanceKm).toBe(5);
+  });
+
   it('measures adherence by date, since plans and logs are separate records', () => {
     const analysis = analyseExercise(
       [

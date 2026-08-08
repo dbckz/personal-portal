@@ -112,6 +112,17 @@ describe('buildProgrammerPrompt', () => {
     expect(prompt).toContain('15min');
     expect(prompt).toContain('2.5km');
   });
+
+  it('teaches how holds and cardio progress and read, and how to mark each side', () => {
+    const prompt = buildProgrammerPrompt(input());
+    // Holds are seconds, cardio is distance/duration/pace — not reps.
+    expect(prompt).toContain('sets/holdSeconds for a timed hold');
+    expect(prompt).toMatch(/held it longer/i);
+    expect(prompt).toMatch(/never as reps in reserve/i);
+    // The 'hold' kind is offered and unilateral work is flagged perSide.
+    expect(prompt).toContain('cardio|hold');
+    expect(prompt).toContain('perSide');
+  });
 });
 
 describe('validateProgramme', () => {
@@ -141,6 +152,28 @@ describe('validateProgramme', () => {
     );
     expect(rows[0].kind).toBe('rotation');
     expect(rows[0].target).toEqual({ reps: 12 });
+  });
+
+  it('keeps holdSeconds, perSide and the hold kind for a timed hold', () => {
+    const holdInput = buildProgrammerInput(
+      [progression('Side plank', [{ date: '2026-08-02', sets: 3, holdSeconds: 30, perSide: true }])],
+      { label: 'Core', components: [] },
+      '2026-08-06',
+      4
+    );
+    const rows = validateProgramme(
+      [
+        {
+          name: 'Side plank',
+          kind: 'hold',
+          toFailure: false,
+          target: { sets: 3, holdSeconds: 40, perSide: true },
+        },
+      ],
+      holdInput
+    );
+    expect(rows[0].kind).toBe('hold');
+    expect(rows[0].target).toEqual({ sets: 3, holdSeconds: 40, perSide: true });
   });
 
   it('puts the to-failure marker on the last SAFE exercise, never a barbell', () => {
@@ -237,6 +270,21 @@ describe('programmeRowToTarget', () => {
     expect(target.durationMinutes).toBe(16);
     expect(target.distanceKm).toBe(2.6);
     expect(target.action).toBeUndefined();
+  });
+
+  it('maps a hold row’s seconds and per-side flag onto the target', () => {
+    const target = programmeRowToTarget({
+      name: 'Side plank',
+      key: exerciseKey('Side plank'),
+      kind: 'hold',
+      toFailure: false,
+      target: { sets: 3, holdSeconds: 40, perSide: true },
+      rationale: 'Last time was 3 × 30s each side — add 10 seconds.',
+      lastSummary: '2 Aug · 3 × 30s each side',
+    });
+    expect(target.kind).toBe('hold');
+    expect(target.holdSeconds).toBe(40);
+    expect(target.perSide).toBe(true);
   });
 });
 

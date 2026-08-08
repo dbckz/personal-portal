@@ -48,8 +48,8 @@ export function TodayTargets({ date }: { date?: string }) {
         )}
       </div>
       <p className="mb-3 text-xs text-gray-500">
-        Double progression: hit the reps with something left over, then the weight goes up. Based on
-        your last session and the note you wrote about it.
+        Progress each exercise from last time: more weight, more reps, longer holds or more distance,
+        depending on how the last one felt. Based on your last session and the note you wrote about it.
       </p>
 
       <ul className="divide-y divide-gray-100">

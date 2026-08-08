@@ -6,6 +6,7 @@ import { Check, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, Wand2 } from
 
 import { api } from '@/lib/api';
 import { parseLoad, parseVolume } from '@/lib/exercise-parse';
+import { formatEntryDuration } from '@/lib/exercise-targets';
 import type { ExerciseAnalysis, ExerciseIntensity, ExerciseSession } from '@/types/life';
 import { SectionGoals } from '@/components/goals/SectionGoals';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
@@ -245,7 +246,7 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
                   </div>
                   <div className="text-sm text-gray-500">
                     {format(parseISO(session.date), 'EEE d MMM')}
-                    {session.durationMinutes ? ` · ${session.durationMinutes} min` : ''}
+                    {session.durationMinutes ? ` · ${formatEntryDuration(session.durationMinutes)}` : ''}
                     {session.distanceKm ? ` · ${session.distanceKm} km` : ''}
                     {entries.length > 0
                       ? ` · ${entries.length} exercise${entries.length === 1 ? '' : 's'}`
@@ -446,7 +447,7 @@ function SessionForm({
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-gray-600">Exercises</span>
             <span className="text-[11px] text-gray-400">
-              Same shorthand as your log: 3*8 · 27kg · 3*30 secs each side
+              Same shorthand as your log: 3*8 · 27kg · 3*30 secs each side · 2 km · 20 mins
             </span>
           </div>
 
@@ -462,14 +463,14 @@ function SessionForm({
                 <input
                   value={entry.volume}
                   onChange={e => updateEntry(entry.key, { volume: e.target.value })}
-                  placeholder="3*8"
-                  className="w-24 px-2 py-1.5 text-sm border border-gray-300 rounded-md"
+                  placeholder="3*8 · 3*30 secs · 2 km"
+                  className="min-w-40 flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-md"
                 />
                 <input
                   value={entry.load}
                   onChange={e => updateEntry(entry.key, { load: e.target.value })}
-                  placeholder="27kg"
-                  className="w-24 px-2 py-1.5 text-sm border border-gray-300 rounded-md"
+                  placeholder="27kg / bodyweight"
+                  className="w-40 px-2 py-1.5 text-sm border border-gray-300 rounded-md"
                 />
                 <input
                   value={entry.notes}

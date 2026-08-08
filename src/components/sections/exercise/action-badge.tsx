@@ -9,6 +9,7 @@ import type { ExerciseKind, TargetAction } from '@/lib/exercise-targets';
 const ACTION_STYLE: Record<TargetAction, { label: string; className: string; Icon: LucideIcon }> = {
   increase: { label: 'Go up', className: 'text-emerald-700 bg-emerald-50', Icon: ArrowUp },
   'add-reps': { label: 'Add reps', className: 'text-emerald-700 bg-emerald-50', Icon: ArrowUp },
+  'add-time': { label: 'Hold longer', className: 'text-emerald-700 bg-emerald-50', Icon: ArrowUp },
   hold: { label: 'Repeat', className: 'text-blue-700 bg-blue-50', Icon: Equal },
   reduce: { label: 'Ease off', className: 'text-amber-700 bg-amber-50', Icon: TrendingDown },
   'no-history': { label: 'New', className: 'text-gray-600 bg-gray-100', Icon: Sparkles },
@@ -35,6 +36,7 @@ const KIND_STYLE: Record<ExerciseKind, { label: string; className: string }> = {
   core: { label: 'Staple', className: 'text-indigo-700 bg-indigo-50' },
   rotation: { label: 'Rotating', className: 'text-gray-500 bg-gray-100' },
   cardio: { label: 'Cardio', className: 'text-sky-700 bg-sky-50' },
+  hold: { label: 'Hold', className: 'text-teal-700 bg-teal-50' },
 };
 
 export function KindTag({ kind }: { kind: ExerciseKind }) {

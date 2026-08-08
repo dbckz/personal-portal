@@ -17,13 +17,16 @@
 import { format, parseISO } from 'date-fns';
 
 import type { ExerciseProgression, ProgressionPoint } from './exercise-progression';
+import { isCardioName, isHoldName, isUnilateralName } from './exercise-parse';
 
 // How an exercise sits in the programme:
 //   core     — kept identical session to session so it can be driven up
 //   rotation — an accessory swapped between sessions
 //   cardio   — a run or treadmill piece, measured in time/distance
-// Set by the AI programmer; the deterministic fallback only ever knows 'cardio'.
-export type ExerciseKind = 'core' | 'rotation' | 'cardio';
+//   hold     — an isometric hold (plank, hang, wall sit), measured in seconds
+// Set by the AI programmer; the deterministic builder infers 'cardio' and 'hold'
+// from the last session's shape.
+export type ExerciseKind = 'core' | 'rotation' | 'cardio' | 'hold';
 
 // Reps in reserve: how many more reps were left at the end of a set.
 // 0 means nothing left; 4+ means the weight was comfortably light.
@@ -35,8 +38,23 @@ export interface EffortReading {
   explicit?: 'up' | 'down';
 }
 
-const RANGE = /could(?:'ve| have)?\s+(?:done|do)\s+(?:a\s+)?(\d+)\s*(?:-|to)\s*(\d+)\s*more/i;
-const SINGLE = /could(?:'ve| have)?\s+(?:done|do)\s+(?:a\s+)?(\d+)\s*more/i;
+// The verbs an effort-to-spare note uses, widened past reps: a rep set "could
+// have done 2 more", but a hold "could have held it 20 seconds longer" and a run
+// "could have gone another 2 km". The unit word (more/seconds/minutes/km) lets
+// the same shape read the spare capacity off any of them.
+const EFFORT_VERB = String.raw`(?:done|do|held|hold|gone|run|ran|kept going|lasted)`;
+const EFFORT_UNIT = String.raw`(?:more|seconds?|secs?|minutes?|mins?|km)`;
+const RANGE = new RegExp(
+  String.raw`could(?:'ve| have)?\s+${EFFORT_VERB}\s+(?:it\s+)?(?:another\s+|a\s+)?(\d+)\s*(?:-|to)\s*(\d+)\s*${EFFORT_UNIT}`,
+  'i'
+);
+const SINGLE = new RegExp(
+  String.raw`could(?:'ve| have)?\s+${EFFORT_VERB}\s+(?:it\s+)?(?:another\s+|a\s+)?(\d+)\s*${EFFORT_UNIT}`,
+  'i'
+);
+// "had another 5 minutes in me", "got another 3 reps left" — capacity stated as
+// a remainder rather than as "could have …".
+const HAD_MORE = /\b(?:had|got)\s+another\s+(\d+)\s*(?:more\s+)?(?:reps?|seconds?|secs?|minutes?|mins?|km)?\s*(?:in me|left|in the tank)/i;
 const ONLY_MANAGED = /only\s+managed\s+\d+/i;
 
 // Read an effort estimate out of a free-text note. Returns {} when the note says
@@ -65,10 +83,13 @@ export function readEffort(note: string | undefined): EffortReading {
 
   const range = text.match(RANGE);
   const single = !range ? text.match(SINGLE) : null;
+  const had = !range && !single ? text.match(HAD_MORE) : null;
   if (range) {
     out.rir = (Number(range[1]) + Number(range[2])) / 2;
   } else if (single) {
     out.rir = Number(single[1]);
+  } else if (had) {
+    out.rir = Number(had[1]);
   } else if (/\bquite a few more\b/i.test(text)) {
     out.rir = 4;
   } else if (/\ba few more\b/i.test(text)) {
@@ -88,7 +109,10 @@ export function readEffort(note: string | undefined): EffortReading {
   return out;
 }
 
-export type TargetAction = 'increase' | 'hold' | 'add-reps' | 'reduce' | 'no-history';
+// 'add-time' is the hold counterpart of 'add-reps': the recommender added
+// seconds to a timed hold rather than reps to a rep set, so the badge reads
+// "Hold longer" instead of "Add reps".
+export type TargetAction = 'increase' | 'hold' | 'add-reps' | 'add-time' | 'reduce' | 'no-history';
 
 export interface ExerciseTarget {
   name: string;
@@ -102,6 +126,9 @@ export interface ExerciseTarget {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  // "each side" — the volume is per side, not a total. Set for unilateral work
+  // so the aim and the log both read "3 × 8 each side".
+  perSide?: boolean;
   durationMinutes?: number;
   distanceKm?: number;
   // Where the exercise sits in the programme (AI path), and whether it is the
@@ -118,6 +145,19 @@ export interface ExerciseTarget {
   rationale: string;
 }
 
+// A logged duration, read for humans: whole minutes stay "20 min", but a
+// sub-minute piece (a 0.75-minute plank) reads "45 secs" rather than "0.75 min",
+// and a fractional one over a minute splits into "1 min 30 secs". Seconds are
+// rounded, so a stored 0.75 min is exactly 45 secs.
+export function formatEntryDuration(minutes: number): string {
+  const totalSeconds = Math.round(minutes * 60);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  if (mins === 0) return `${secs} secs`;
+  if (secs === 0) return `${mins} min`;
+  return `${mins} min ${secs} secs`;
+}
+
 // How a target (or a logged row's actuals) reads on screen, e.g. "3 × 8 · 40kg".
 // Empty when neither volume nor load is known. Shared by the Plan tab's targets
 // and both Today checklists so an aim and what was logged always look alike.
@@ -125,6 +165,7 @@ export function describeVolumeLoad(t: {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  perSide?: boolean;
   weightKg?: number;
   durationMinutes?: number;
   distanceKm?: number;
@@ -132,9 +173,12 @@ export function describeVolumeLoad(t: {
   let volume = '';
   if (t.sets && t.reps) volume = `${t.sets} × ${t.reps}`;
   else if (t.sets && t.holdSeconds) volume = `${t.sets} × ${t.holdSeconds}s`;
+  // A single hold with no set count — a lone "90s plank", as it often arrives.
+  else if (t.holdSeconds) volume = `${t.holdSeconds}s`;
+  if (volume && t.perSide) volume += ' each side';
   const load = t.weightKg !== undefined ? `${t.weightKg}kg` : '';
   const cardio = [
-    t.durationMinutes !== undefined ? `${t.durationMinutes} min` : '',
+    t.durationMinutes !== undefined ? formatEntryDuration(t.durationMinutes) : '',
     t.distanceKm !== undefined ? `${t.distanceKm} km` : '',
   ].filter(Boolean);
   return [volume, load, ...cardio].filter(Boolean).join(' · ');
@@ -180,6 +224,10 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
   const effort: EffortReading = last.rir !== undefined ? { rir: last.rir } : readEffort(last.notes);
   const sets = last.sets;
   const reps = last.reps;
+  // Unilateral either because the log said so last time or because the name
+  // reads that way ("side plank", "Bulgarian split squat") even if the "each
+  // side" was left off the sheet.
+  const perSide = !!last.perSide || isUnilateralName(base.name);
   const context = {
     ...base,
     last,
@@ -187,11 +235,17 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
     sets,
     reps,
     ...(last.holdSeconds ? { holdSeconds: last.holdSeconds } : {}),
+    ...(perSide ? { perSide: true } : {}),
   };
 
-  // Cardio: a run or treadmill piece has time and/or distance but no load or
-  // reps. Repeat it with the actual numbers — "the same" told Dave nothing.
-  if (last.weightKg === undefined && (last.durationMinutes !== undefined || last.distanceKm !== undefined)) {
+  // Cardio: a run or treadmill piece, recognised by its logged measures OR by
+  // its name. Checked BEFORE the bodyweight path so a run logged with no numbers
+  // (and a spare-effort note) isn't told to "add a couple of reps" — it's asked
+  // for the distance and time instead.
+  const isCardio =
+    last.weightKg === undefined &&
+    (last.durationMinutes !== undefined || last.distanceKm !== undefined || isCardioName(base.name));
+  if (isCardio) {
     const detail = describeVolumeLoad({
       durationMinutes: last.durationMinutes,
       distanceKm: last.distanceKm,
@@ -202,34 +256,50 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
       kind: 'cardio',
       ...(last.durationMinutes !== undefined ? { durationMinutes: last.durationMinutes } : {}),
       ...(last.distanceKm !== undefined ? { distanceKm: last.distanceKm } : {}),
-      rationale: `Last time was ${detail} — match or beat it.`,
+      rationale: detail
+        ? `Last time was ${detail} — match or beat it.`
+        : 'No distance or time logged last time — record them today.',
     };
   }
 
-  // Bodyweight or unloaded work: progress by reps or time, never by weight.
+  // Bodyweight or unloaded work: progress by reps or seconds held, never weight.
   if (last.weightKg === undefined) {
+    // A hold either logged seconds last time or reads as one by name (a plank
+    // with no seconds yet). Tagged so the row shows the Secs field and its
+    // progression reads in seconds, not reps.
+    const isHold = last.holdSeconds !== undefined || isHoldName(base.name);
+    const holdTag = isHold ? { kind: 'hold' as const } : {};
+    const eachSide = perSide ? ' each side' : '';
     if (effort.failed) {
       return {
         ...context,
+        ...holdTag,
         action: 'hold',
         rationale: `Last time was a struggle — repeat ${describeVolume(last)} before adding anything.`,
       };
     }
     if ((effort.rir ?? 0) >= 2) {
-      const target = last.holdSeconds
-        ? { holdSeconds: last.holdSeconds + 10 }
-        : { reps: (reps ?? 8) + 2 };
+      // A timed hold gains seconds; a rep movement gains reps.
+      if (last.holdSeconds !== undefined) {
+        return {
+          ...context,
+          ...holdTag,
+          holdSeconds: last.holdSeconds + 10,
+          action: 'add-time',
+          rationale: `Had more in reserve — add 10 seconds a set${eachSide}.`,
+        };
+      }
       return {
         ...context,
-        ...target,
+        ...holdTag,
+        reps: (reps ?? 8) + 2,
         action: 'add-reps',
-        rationale: last.holdSeconds
-          ? `Had ${effort.rir} in reserve — add 10 seconds a set.`
-          : `Had about ${effort.rir} reps in reserve — add a couple of reps a set.`,
+        rationale: `Had about ${effort.rir} reps in reserve — add a couple of reps a set${eachSide}.`,
       };
     }
     return {
       ...context,
+      ...holdTag,
       action: 'hold',
       rationale: `Repeat ${describeVolume(last)} — no clear sign it was easy.`,
     };
@@ -248,12 +318,19 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
     };
   }
 
+  // The volume clause in words, built from what was actually logged — never a
+  // fabricated "3 × 8". Omitted entirely when neither reps nor a hold is known
+  // (a weighted carry, say), so the rationale doesn't invent one.
+  const volumeWords = describeVolumeWords(last);
+
   if (effort.failed) {
     return {
       ...context,
       action: 'hold',
       weightKg: last.weightKg,
-      rationale: `Stay at ${last.weightKg}kg until you complete all ${sets ?? 3} sets of ${reps ?? 8}.`,
+      rationale: volumeWords
+        ? `Stay at ${last.weightKg}kg until you complete all ${volumeWords}.`
+        : `Stay at ${last.weightKg}kg until every set is complete.`,
     };
   }
 
@@ -268,8 +345,8 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
       weightKg: next,
       rationale:
         effort.explicit === 'up'
-          ? `You said to go up — try ${next}kg for ${sets ?? 3}×${reps ?? 8}.`
-          : `About ${rir} reps left in reserve at ${last.weightKg}kg — try ${next}kg for the same reps.`,
+          ? `You said to go up — try ${next}kg${volumeWords ? ` for ${volumeWords}` : ''}.`
+          : `About ${rir} reps left in reserve at ${last.weightKg}kg — try ${next}kg${volumeWords ? ` for ${volumeWords}` : ' for the same'}.`,
     };
   }
 
@@ -285,9 +362,28 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
 }
 
 function describeVolume(point: ProgressionPoint): string {
-  if (point.sets && point.reps) return `${point.sets}×${point.reps}`;
-  if (point.sets && point.holdSeconds) return `${point.sets}×${point.holdSeconds}s`;
+  const side = point.perSide ? ' each side' : '';
+  if (point.sets && point.reps) return `${point.sets}×${point.reps}${side}`;
+  if (point.sets && point.holdSeconds) return `${point.sets}×${point.holdSeconds}s${side}`;
+  if (point.holdSeconds) return `${point.holdSeconds}s`;
   return 'the same';
+}
+
+// The volume clause in prose ("3 sets of 8", "3 × 30s", "45s"), with "each side"
+// appended for unilateral work. Null when there is no set/rep/hold detail to
+// state — the caller then omits the clause rather than inventing "3 × 8".
+function describeVolumeWords(point: {
+  sets?: number;
+  reps?: number;
+  holdSeconds?: number;
+  perSide?: boolean;
+}): string | null {
+  let words: string | null = null;
+  if (point.sets && point.reps) words = `${point.sets} sets of ${point.reps}`;
+  else if (point.sets && point.holdSeconds) words = `${point.sets} × ${point.holdSeconds}s`;
+  else if (point.holdSeconds) words = `${point.holdSeconds}s`;
+  if (words && point.perSide) words += ' each side';
+  return words;
 }
 
 // Targets for a session, most-relevant first.

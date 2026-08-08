@@ -5,7 +5,13 @@
  * training log — reading effort out of them is the whole basis of the
  * recommendation, so they are the cases that matter.
  */
-import { buildTarget, describeLast, describeVolumeLoad, readEffort } from '@/lib/exercise-targets';
+import {
+  buildTarget,
+  describeLast,
+  describeVolumeLoad,
+  formatEntryDuration,
+  readEffort,
+} from '@/lib/exercise-targets';
 import type { ExerciseProgression, ProgressionPoint } from '@/lib/exercise-progression';
 
 function progression(latest: ProgressionPoint, name = 'Converging chest press machine'): ExerciseProgression {
@@ -48,6 +54,16 @@ describe('readEffort', () => {
     expect(readEffort(undefined)).toEqual({});
     // Silence must not be read as "that was easy".
     expect(readEffort('Did it at the new gym').rir).toBeUndefined();
+  });
+
+  it('reads spare capacity from hold and cardio phrasing, not just reps', () => {
+    // A hold: seconds it could have held on for.
+    expect(readEffort('Could have held it 20 seconds longer').rir).toBe(20);
+    // A run: capacity stated as a remainder rather than "could have".
+    expect(readEffort('Had another 5 minutes in me').rir).toBe(5);
+    expect(readEffort('Could have gone another 2 km').rir).toBe(2);
+    // Rep phrasing is unchanged.
+    expect(readEffort('Could have done 2 more').rir).toBe(2);
   });
 });
 
@@ -125,15 +141,36 @@ describe('buildTarget', () => {
     expect(target.reps).toBe(10);
   });
 
-  it('progresses a timed hold by seconds', () => {
+  it('progresses a timed hold by seconds, tagged as a hold and each side', () => {
     const target = buildTarget(
       progression(
         { date: '2026-08-04', sets: 3, holdSeconds: 30, notes: 'Felt really good, could have done a couple more' },
         'Side plank'
       )
     );
-    expect(target.action).toBe('add-reps');
+    // A hold gains seconds, not reps, so the action is the distinct 'add-time'.
+    expect(target.action).toBe('add-time');
     expect(target.holdSeconds).toBe(40);
+    expect(target.reps).toBeUndefined();
+    expect(target.kind).toBe('hold');
+    // "Side plank" reads as unilateral, so the aim is per side.
+    expect(target.perSide).toBe(true);
+    expect(target.rationale).toMatch(/each side/);
+  });
+
+  it('tags a plank a hold even before any seconds are logged', () => {
+    // Named a plank but logged as reps by mistake: still shows as a hold so the
+    // Today form asks for seconds.
+    const target = buildTarget(progression({ date: '2026-08-04', sets: 3, reps: 30 }, 'Front plank'));
+    expect(target.kind).toBe('hold');
+  });
+
+  it('does NOT treat a Dead bug as a hold', () => {
+    const target = buildTarget(
+      progression({ date: '2026-08-04', sets: 3, reps: 8, notes: 'Could have done a couple more' }, 'Dead bug')
+    );
+    expect(target.kind).toBeUndefined();
+    expect(target.action).toBe('add-reps');
   });
 
   it('lets an explicit rir rating override the prose note', () => {
@@ -175,6 +212,40 @@ describe('buildTarget', () => {
     expect(buildTarget(empty).action).toBe('no-history');
   });
 
+  it('asks a run with no numbers logged for its distance and time, not reps', () => {
+    // A run recognised by name but logged with no measures, and a spare-effort
+    // note: it must NOT be told to "add a couple of reps".
+    const target = buildTarget(
+      progression({ date: '2026-08-02', notes: 'Felt easy, could have kept going' }, 'Outdoor run')
+    );
+    expect(target.kind).toBe('cardio');
+    expect(target.action).toBe('hold');
+    expect(target.rationale).toBe('No distance or time logged last time — record them today.');
+    expect(target.reps).toBeUndefined();
+  });
+
+  it('does not fabricate rep targets for a weighted hold', () => {
+    // A weighted plank has a load, so it lands on the loaded path — but the
+    // clause must be built from the logged hold, never "3 × 8".
+    const target = buildTarget(
+      progression(
+        { date: '2026-08-02', sets: 3, holdSeconds: 45, weightKg: 10, notes: 'Struggled on the last set' },
+        'Weighted plank'
+      )
+    );
+    expect(target.action).toBe('hold');
+    expect(target.rationale).toContain('45s');
+    expect(target.rationale).not.toMatch(/sets of 8|× ?8\b/);
+  });
+
+  it('omits the volume clause when a loaded carry has neither reps nor a hold', () => {
+    const target = buildTarget(
+      progression({ date: '2026-08-02', sets: 3, weightKg: 24, notes: 'Struggled' }, "Farmer's carry")
+    );
+    expect(target.rationale).toMatch(/every set is complete/);
+    expect(target.rationale).not.toMatch(/sets of/);
+  });
+
   it('repeats a cardio piece with its real numbers, not "the same"', () => {
     // The exact complaint: a treadmill run that used to say "Repeat the same".
     const target = buildTarget(
@@ -188,13 +259,42 @@ describe('buildTarget', () => {
   });
 });
 
+describe('formatEntryDuration', () => {
+  it('keeps whole minutes as minutes', () => {
+    expect(formatEntryDuration(20)).toBe('20 min');
+  });
+
+  it('renders a sub-minute piece in seconds', () => {
+    expect(formatEntryDuration(0.75)).toBe('45 secs');
+    expect(formatEntryDuration(0.5)).toBe('30 secs');
+  });
+
+  it('splits a fractional minute over a minute into minutes and seconds', () => {
+    expect(formatEntryDuration(1.5)).toBe('1 min 30 secs');
+  });
+});
+
 describe('describeVolumeLoad', () => {
   it('renders duration and distance for cardio', () => {
     expect(describeVolumeLoad({ durationMinutes: 15, distanceKm: 3.5 })).toBe('15 min · 3.5 km');
   });
 
+  it('renders a sub-minute plank hold in seconds', () => {
+    expect(describeVolumeLoad({ durationMinutes: 0.75 })).toBe('45 secs');
+  });
+
   it('renders sets, reps and load for strength', () => {
     expect(describeVolumeLoad({ sets: 3, reps: 8, weightKg: 40 })).toBe('3 × 8 · 40kg');
+  });
+
+  it('appends "each side" for unilateral work', () => {
+    expect(describeVolumeLoad({ sets: 3, reps: 8, perSide: true })).toBe('3 × 8 each side');
+    expect(describeVolumeLoad({ sets: 3, holdSeconds: 30, perSide: true })).toBe('3 × 30s each side');
+  });
+
+  it('renders a set-less hold on its own', () => {
+    // A lone "90s plank" with no set count must not render blank.
+    expect(describeVolumeLoad({ holdSeconds: 90 })).toBe('90s');
   });
 });
 

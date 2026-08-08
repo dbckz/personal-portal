@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 
 import { api } from '@/lib/api';
 import { exerciseKey, type ProgressionPoint } from '@/lib/exercise-progression';
+import { isCardioName, isHoldName } from '@/lib/exercise-parse';
 import {
   describeVolumeLoad,
   type ExerciseKind,
@@ -34,6 +35,7 @@ export interface TodayRow {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  perSide?: boolean;
   weightKg?: number;
   durationMinutes?: number;
   distanceKm?: number;
@@ -64,7 +66,40 @@ export interface TodayPlan {
   components: string[];
 }
 
-export type FieldPatch = Partial<Pick<TodayRow, 'sets' | 'reps' | 'holdSeconds' | 'weightKg'>>;
+export type FieldPatch = Partial<
+  Pick<TodayRow, 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'distanceKm' | 'durationMinutes'>
+>;
+
+// Does this row read as cardio — a run, a swim, an erg row — so its logging form
+// should ask for distance and time rather than sets/reps/kg, and skip the
+// reps-in-reserve rating (which is meaningless off the bar)?
+//
+// A run can arrive tagged (kind 'cardio', from the programmer or the
+// deterministic builder), already measured (distance/duration on the entry, e.g.
+// after a cardio swap), or just named ("Outdoor run", "Treadmill run"). Any of
+// the three is enough. Timed holds (planks) carry holdSeconds, not
+// durationMinutes, so they are NOT swept in here.
+export function isCardioEntry(
+  row: Pick<TodayRow, 'name' | 'kind' | 'distanceKm' | 'durationMinutes'>
+): boolean {
+  if (row.kind === 'cardio') return true;
+  if (row.distanceKm !== undefined || row.durationMinutes !== undefined) return true;
+  return isCardioName(row.name);
+}
+
+// Does this row read as a timed HOLD — a plank, a hang, a wall sit — so its
+// logging form asks for seconds (not reps or, when there is no logged
+// holdSeconds yet, sets/reps/kg)? A hold arrives tagged (kind 'hold'), already
+// timed (holdSeconds present), or just named ("Side plank", "Dead hang"). Cardio
+// wins first: a run is never a hold, even though neither carries reps.
+export function isHoldEntry(
+  row: Pick<TodayRow, 'name' | 'kind' | 'holdSeconds' | 'distanceKm' | 'durationMinutes'>
+): boolean {
+  if (isCardioEntry(row)) return false;
+  if (row.kind === 'hold') return true;
+  if (row.holdSeconds !== undefined) return true;
+  return isHoldName(row.name);
+}
 
 function today(): string {
   return format(new Date(), 'yyyy-MM-dd');
@@ -85,6 +120,7 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     sets: t.sets,
     reps: t.reps,
     holdSeconds: t.holdSeconds,
+    perSide: t.perSide,
     weightKg: t.weightKg,
     durationMinutes: t.durationMinutes,
     distanceKm: t.distanceKm,
@@ -107,6 +143,7 @@ function rowFromEntry(e: ExerciseEntry): TodayRow {
     sets: e.sets,
     reps: e.reps,
     holdSeconds: e.holdSeconds,
+    perSide: e.perSide,
     weightKg: e.weightKg,
     durationMinutes: e.durationMinutes,
     distanceKm: e.distanceKm,
@@ -129,6 +166,7 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
     sets: e.sets ?? row.sets,
     reps: e.reps ?? row.reps,
     holdSeconds: e.holdSeconds ?? row.holdSeconds,
+    perSide: e.perSide ?? row.perSide,
     weightKg: e.weightKg ?? row.weightKg,
     durationMinutes: e.durationMinutes ?? row.durationMinutes,
     distanceKm: e.distanceKm ?? row.distanceKm,
@@ -398,20 +436,26 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
   // recording what it stood in for. The original's guidance/target is dropped —
   // it no longer describes this exercise. Un-done stays un-done.
   const commitSwap = useCallback(
-    (row: TodayRow, replacement: { name: string; distanceKm?: number }) => {
+    (row: TodayRow, replacement: { name: string; distanceKm?: number; durationMinutes?: number }) => {
       const name = replacement.name.trim();
       if (!name) return Promise.resolve();
       // Preserve the ORIGINAL planned name through a re-swap.
       const original = row.substitutedFor ?? row.name;
-      const distance =
-        replacement.distanceKm !== undefined ? { distanceKm: replacement.distanceKm } : {};
+      // Cardio swaps can carry distance and/or time so "Parkrun → 20 min on the
+      // treadmill" is one save; only the fields actually given are patched.
+      const measures = {
+        ...(replacement.distanceKm !== undefined ? { distanceKm: replacement.distanceKm } : {}),
+        ...(replacement.durationMinutes !== undefined
+          ? { durationMinutes: replacement.durationMinutes }
+          : {}),
+      };
       return runWrite(
         row,
         r => ({
           ...r,
           name,
           substitutedFor: original,
-          ...distance,
+          ...measures,
           action: undefined,
           rationale: undefined,
           last: undefined,
@@ -426,7 +470,7 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
               name,
               substitutedFor: original,
               targetText: null,
-              ...distance,
+              ...measures,
             })
             .then(res => res.session)
       );

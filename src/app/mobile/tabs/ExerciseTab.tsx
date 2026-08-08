@@ -3,6 +3,7 @@
 import { format, parseISO } from 'date-fns';
 
 import { describeEntry } from '@/components/sections/exercise/ExerciseEntryList';
+import { formatEntryDuration } from '@/lib/exercise-targets';
 import type { ExerciseAnalysis, ExerciseSession } from '@/types/life';
 import { FreeformLogCard } from '../components/FreeformLogCard';
 import { TodayChecklist } from '../components/TodayChecklist';
@@ -116,7 +117,7 @@ function SessionGroup({
                       </p>
                     </div>
                     <span className="flex-shrink-0 text-xs tabular-nums text-gray-600">
-                      {session.durationMinutes ? `${session.durationMinutes} min` : ''}
+                      {session.durationMinutes ? formatEntryDuration(session.durationMinutes) : ''}
                       {session.distanceKm ? ` · ${session.distanceKm} km` : ''}
                     </span>
                   </div>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { format } from 'date-fns';
 
 import { buildProgressions } from '@/lib/exercise-progression';
-import { buildSessionTargets, type ExerciseTarget } from '@/lib/exercise-targets';
+import { buildSessionTargets, describeVolumeLoad, type ExerciseTarget } from '@/lib/exercise-targets';
 import { createSession, getAllSessions } from '@/lib/storage/exercise';
 
 // POST /api/exercise/start { date? }
@@ -55,25 +55,20 @@ export async function POST(request: NextRequest) {
 
 // Seed an entry from its target: the numbers to aim for are pre-filled as the
 // numbers done, so a session that goes to plan needs only a tick per exercise.
+// Cardio measures (duration/distance) and the per-side flag are carried too, so
+// a seeded run or a side plank starts with the right shape rather than reverting
+// to sets/reps/kg on the checklist.
 function toEntry(target: ExerciseTarget) {
   return {
     name: target.name,
     ...(target.sets !== undefined ? { sets: target.sets } : {}),
     ...(target.reps !== undefined ? { reps: target.reps } : {}),
     ...(target.holdSeconds !== undefined ? { holdSeconds: target.holdSeconds } : {}),
+    ...(target.perSide ? { perSide: true } : {}),
     ...(target.weightKg !== undefined ? { weightKg: target.weightKg } : {}),
-    targetText: describeTarget(target),
+    ...(target.durationMinutes !== undefined ? { durationMinutes: target.durationMinutes } : {}),
+    ...(target.distanceKm !== undefined ? { distanceKm: target.distanceKm } : {}),
+    targetText: describeVolumeLoad(target),
     done: false,
   };
-}
-
-function describeTarget(target: ExerciseTarget): string {
-  const volume =
-    target.sets && target.reps
-      ? `${target.sets}×${target.reps}`
-      : target.sets && target.holdSeconds
-        ? `${target.sets}×${target.holdSeconds}s`
-        : '';
-  const load = target.weightKg !== undefined ? `${target.weightKg}kg` : '';
-  return [volume, load].filter(Boolean).join(' · ');
 }

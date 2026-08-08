@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useTodaySession } from '@/hooks/useTodaySession';
+import { useTodaySession, isCardioEntry, isHoldEntry } from '@/hooks/useTodaySession';
 import { api } from '@/lib/api';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
 import type { ExerciseSession } from '@/types/life';
@@ -204,6 +204,56 @@ describe('useTodaySession', () => {
     expect(result.current.rows.find(r => r.key === 'bench')!.done).toBe(false);
   });
 
+  it('logs distance and time on a cardio row through the shared write path', async () => {
+    const existing: ExerciseSession = {
+      ...startedSession(),
+      exercises: [{ id: 'e1', name: 'Treadmill run', done: false }],
+    };
+    mockApi.getExerciseSessions.mockResolvedValue({ sessions: [existing] });
+    mockApi.getExerciseTargets.mockResolvedValue({
+      date: DATE,
+      plan: { label: 'Run', components: ['Run'] },
+      targets: [target('Treadmill run', { key: 'treadmill run', kind: 'cardio', weightKg: undefined })],
+    });
+
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const run = result.current.rows.find(r => r.name === 'Treadmill run')!;
+    expect(isCardioEntry(run)).toBe(true);
+
+    await act(async () => {
+      await result.current.commitField(run, { durationMinutes: 20 });
+    });
+    expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', { durationMinutes: 20 });
+
+    await act(async () => {
+      await result.current.commitField(run, { distanceKm: 3.2 });
+    });
+    expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', { distanceKm: 3.2 });
+  });
+
+  it('carries distance and time through a cardio swap in one save', async () => {
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.commitSwap(result.current.rows[0], {
+        name: 'Treadmill run',
+        distanceKm: 3,
+        durationMinutes: 20,
+      });
+    });
+
+    expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', {
+      name: 'Treadmill run',
+      substitutedFor: 'Bench',
+      targetText: null,
+      distanceKm: 3,
+      durationMinutes: 20,
+    });
+  });
+
   it('restores the original exercise and brings its guidance back', async () => {
     const { result } = renderHook(() => useTodaySession(DATE));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -226,5 +276,50 @@ describe('useTodaySession', () => {
     // Guidance from the original target is back.
     expect(restored.action).toBe('increase');
     expect(restored.rationale).toBe('Try heavier on Bench.');
+  });
+});
+
+describe('isCardioEntry', () => {
+  it('reads runs as cardio, by name', () => {
+    expect(isCardioEntry({ name: 'Treadmill run' })).toBe(true);
+    expect(isCardioEntry({ name: 'Outdoor run' })).toBe(true);
+    expect(isCardioEntry({ name: 'Parkrun' })).toBe(true);
+    expect(isCardioEntry({ name: 'Erg row' })).toBe(true);
+  });
+
+  it('reads the cardio kind tag and measured fields as cardio', () => {
+    expect(isCardioEntry({ name: 'Intervals', kind: 'cardio' })).toBe(true);
+    expect(isCardioEntry({ name: 'Something', distanceKm: 3 })).toBe(true);
+    expect(isCardioEntry({ name: 'Something', durationMinutes: 20 })).toBe(true);
+  });
+
+  it('does not read strength or timed-hold work as cardio', () => {
+    expect(isCardioEntry({ name: 'Side plank' })).toBe(false);
+    expect(isCardioEntry({ name: 'Dead bug' })).toBe(false);
+    expect(isCardioEntry({ name: 'Bench press' })).toBe(false);
+    // A bare strength "row" must not be mistaken for the rowing machine.
+    expect(isCardioEntry({ name: 'Seated row' })).toBe(false);
+    expect(isCardioEntry({ name: 'Bent-over row' })).toBe(false);
+    // Loaded "walk" movements are strength, not cardio.
+    expect(isCardioEntry({ name: "Farmer's walk" })).toBe(false);
+    expect(isCardioEntry({ name: 'Walking lunge' })).toBe(false);
+  });
+});
+
+describe('isHoldEntry', () => {
+  it('reads holds by tag, by logged seconds, and by name', () => {
+    expect(isHoldEntry({ name: 'Anything', kind: 'hold' })).toBe(true);
+    expect(isHoldEntry({ name: 'Some plank variant', holdSeconds: 45 })).toBe(true);
+    expect(isHoldEntry({ name: 'Side plank' })).toBe(true);
+    expect(isHoldEntry({ name: 'Dead hang' })).toBe(true);
+    expect(isHoldEntry({ name: 'Wall sit' })).toBe(true);
+  });
+
+  it('does not read rep-based or cardio work as a hold', () => {
+    expect(isHoldEntry({ name: 'Dead bug' })).toBe(false);
+    expect(isHoldEntry({ name: 'Bench press' })).toBe(false);
+    // Cardio wins: a run is never a hold, even though neither carries reps.
+    expect(isHoldEntry({ name: 'Treadmill run', kind: 'cardio' })).toBe(false);
+    expect(isHoldEntry({ name: 'Outdoor run' })).toBe(false);
   });
 });

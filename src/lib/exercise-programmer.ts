@@ -27,11 +27,14 @@ import {
   type ExerciseTarget,
 } from './exercise-targets';
 
-// What to aim for on one exercise. Any of the four measures may be present: a
-// press has sets/reps/weight, a plank sets/holdSeconds, a run duration/distance.
+// What to aim for on one exercise. Any of the measures may be present: a press
+// has sets/reps/weight, a plank sets/holdSeconds, a run duration/distance;
+// perSide marks unilateral work as "each side".
 export interface ProgrammeTarget {
   sets?: number;
   reps?: number;
+  holdSeconds?: number;
+  perSide?: boolean;
   weightKg?: number;
   durationMinutes?: number;
   distanceKm?: number;
@@ -161,21 +164,23 @@ function exerciseBlock(e: ProgrammerExercise): string {
   return `- ${e.name} (done in ${e.frequency}/${e.totalSessions} of these sessions)\n${history}`;
 }
 
-const PROMPT_HEADER = `You are programming one strength-and-cardio session for someone who logs every set. Below is the session's plan and, for each exercise in it, how often it appears and its last few sessions with the person's own notes (which read as reps-in-reserve: "could have done 3-4 more", "at limit", "struggled").
+const PROMPT_HEADER = `You are programming one strength-and-cardio session for someone who logs every set. Below is the session's plan and, for each exercise in it, how often it appears and its last few sessions with the person's own notes (which read as effort to spare: "could have done 3-4 more", "held it 20s longer", "at limit", "struggled").
 
 Program the session as a coach would. Apply this judgement:
 
-- Core vs rotation. Some exercises are kept identical session to session so they can be driven up progressively; others are accessories that rotate in and out. Infer which is which from how often each exercise appears in these sessions — one present in most of them is a core lift; an occasional one is rotation. Tag each row "core", "rotation" or "cardio".
-- Progressive loading, balancing weight AND volume. Do not only add weight. For each exercise decide whether to add weight, add reps, or add a set, aiming over time at a sensible mix that builds balanced fitness. Use the person's last effort notes: reps in reserve means room to progress; "at limit" or "struggled" means consolidate. Trust your judgement on the mix.
+- Core vs rotation. Some exercises are kept identical session to session so they can be driven up progressively; others are accessories that rotate in and out. Infer which is which from how often each exercise appears in these sessions — one present in most of them is a core lift; an occasional one is rotation. Tag each row "core", "rotation", "cardio" or "hold".
+- Progressive loading, balancing weight AND volume. Do not only add weight. For a loaded lift decide whether to add weight, add reps, or add a set; for a timed hold add seconds per set or an extra set; for cardio add distance, duration or pace. Aim over time at a sensible mix that builds balanced fitness. Use the person's last effort notes: room to spare means room to progress; "at limit" or "struggled" means consolidate. Trust your judgement on the mix.
+- How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
+- Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST.
 - Finish to failure — safely. Mark exactly ONE exercise as the last set to failure, and make it the final row. It MUST be an exercise that is safe to push to failure alone: a machine, cable or bodyweight movement. Never a barbell or heavy dumbbell exercise where failing means dropping a weight.
-- Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights, reps, or minutes/distance for cardio).
+- Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights and reps, seconds for a hold, or minutes/distance for cardio).
 
 Return ONLY a JSON array, in the order the exercises should be done, no prose, no code fences:
-[{"name":"<exact exercise name from the input>","kind":"core|rotation|cardio","toFailure":true|false,"target":{"sets":N,"reps":N,"weightKg":N,"durationMinutes":N,"distanceKm":N},"rationale":"<one sentence, cites last time's numbers>"}]
+[{"name":"<exact exercise name from the input>","kind":"core|rotation|cardio|hold","toFailure":true|false,"target":{"sets":N,"reps":N,"holdSeconds":N,"perSide":true,"weightKg":N,"durationMinutes":N,"distanceKm":N},"rationale":"<one sentence, cites last time's numbers>"}]
 
-Include in "target" only the measures that fit the exercise: sets/reps/weightKg for lifts, sets/reps for bodyweight, durationMinutes/distanceKm for cardio. Omit the rest.
+Include in "target" only the measures that fit the exercise: sets/reps/weightKg for a loaded lift, sets/reps for rep-based bodyweight, sets/holdSeconds for a timed hold (plank, hang, wall sit), durationMinutes/distanceKm for cardio. Add "perSide": true for anything worked one side at a time. Omit the rest.
 
 `;
 
@@ -218,7 +223,7 @@ function isSafeToFailure(name: string): boolean {
   return !UNSAFE_TO_FAILURE.test(name);
 }
 
-const KINDS: ExerciseKind[] = ['core', 'rotation', 'cardio'];
+const KINDS: ExerciseKind[] = ['core', 'rotation', 'cardio', 'hold'];
 
 function cleanTarget(raw: unknown): ProgrammeTarget {
   const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -227,14 +232,17 @@ function cleanTarget(raw: unknown): ProgrammeTarget {
   const out: ProgrammeTarget = {};
   const sets = num(t.sets);
   const reps = num(t.reps);
+  const holdSeconds = num(t.holdSeconds);
   const weightKg = num(t.weightKg);
   const durationMinutes = num(t.durationMinutes);
   const distanceKm = num(t.distanceKm);
   if (sets !== undefined) out.sets = Math.round(sets);
   if (reps !== undefined) out.reps = Math.round(reps);
+  if (holdSeconds !== undefined) out.holdSeconds = Math.round(holdSeconds);
   if (weightKg !== undefined) out.weightKg = weightKg;
   if (durationMinutes !== undefined) out.durationMinutes = durationMinutes;
   if (distanceKm !== undefined) out.distanceKm = distanceKm;
+  if (t.perSide === true) out.perSide = true;
   return out;
 }
 
@@ -325,6 +333,8 @@ export function programmeRowToTarget(row: ProgrammeRow): ExerciseTarget {
     lastSummary: row.lastSummary,
     ...(row.target.sets !== undefined ? { sets: row.target.sets } : {}),
     ...(row.target.reps !== undefined ? { reps: row.target.reps } : {}),
+    ...(row.target.holdSeconds !== undefined ? { holdSeconds: row.target.holdSeconds } : {}),
+    ...(row.target.perSide ? { perSide: true } : {}),
     ...(row.target.weightKg !== undefined ? { weightKg: row.target.weightKg } : {}),
     ...(row.target.durationMinutes !== undefined ? { durationMinutes: row.target.durationMinutes } : {}),
     ...(row.target.distanceKm !== undefined ? { distanceKm: row.target.distanceKm } : {}),

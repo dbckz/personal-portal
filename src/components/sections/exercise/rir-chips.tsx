@@ -21,14 +21,18 @@ const CHOICES: Array<{ value: number; label: string }> = [
 export function RirChips({
   value,
   onChange,
+  label = 'Reps in reserve',
 }: {
   value?: number;
   onChange: (rir: number | null) => void;
+  // What the chips measure. Defaults to reps in reserve; a timed hold passes
+  // "Seconds in reserve" so the same 0-4 control reads for holds too.
+  label?: string;
 }) {
   return (
     <div className="mt-3">
-      <span className="mb-1 block text-xs font-semibold text-gray-600">Reps in reserve</span>
-      <div className="flex gap-1.5" role="group" aria-label="Reps in reserve">
+      <span className="mb-1 block text-xs font-semibold text-gray-600">{label}</span>
+      <div className="flex gap-1.5" role="group" aria-label={label}>
         {CHOICES.map(choice => {
           const selected = value === choice.value;
           return (

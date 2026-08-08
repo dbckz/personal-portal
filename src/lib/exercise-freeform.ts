@@ -21,6 +21,7 @@
 // depends on the model being up.
 
 import { extractJsonArray, runClaudeText } from './ai-classifier';
+import { formatEntryDuration } from './exercise-targets';
 import type { ExerciseEntry, ExerciseIntensity, ExerciseSession } from '@/types/life';
 
 // A session as read out of a text blob, before it is given ids and written to
@@ -219,7 +220,7 @@ export async function parseFreeform(
 // A one-line summary of what a draft amounts to, for the confirmation step.
 export function describeDraft(draft: Pick<ExerciseSession, 'type' | 'label'> & FreeformDraft): string {
   const parts: string[] = [draft.label || draft.type];
-  if (draft.durationMinutes) parts.push(`${draft.durationMinutes} min`);
+  if (draft.durationMinutes) parts.push(formatEntryDuration(draft.durationMinutes));
   if (draft.distanceKm) parts.push(`${draft.distanceKm} km`);
   if (draft.exercises.length) {
     parts.push(`${draft.exercises.length} exercise${draft.exercises.length === 1 ? '' : 's'}`);
