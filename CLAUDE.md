@@ -28,14 +28,27 @@ from `/mobile`. Those writes save per-action and optimistically, because the
 connection is unreliable and a lost session is unrecoverable. Anything else
 stays read-only unless Dave says otherwise.
 
-## Deployment
+## Staging vs production
 
-This app runs in production via a launchd service.
+Dave uses the production app (`portal.localhost`) all day, so development must
+never disturb it. **Do all development in the staging worktree, not here:**
 
-**After pushing changes**, always rebuild and restart the service:
+- **Staging worktree**: `/Users/dave/working_dir/github/dbckz/personal-portal-staging`
+  (branch `staging`), served at `portal-staging.localhost` (port 3002) by the
+  launchd service `com.davebuckley.portal-staging` running `next dev` via
+  `scripts/start-staging.sh`. It points `PORTAL_DATA_DIR` at
+  `~/.claude/data/portal-staging`, a **copy** of production data — staging
+  writes never touch real data. Refresh the copy with:
+  `rsync -a --delete ~/.claude/data/portal/ ~/.claude/data/portal-staging/`
+- Implement and test on the `staging` branch in that worktree. Never run
+  `npm run build` in the production checkout during development — it replaces
+  `.next` under the live server and breaks the running app.
+- **Only when Dave explicitly says to deploy/build to production**: merge
+  `staging` into `main` (fast-forward preferred), then in the production
+  checkout run:
 
 ```bash
 npm run build && launchctl stop com.davebuckley.portal && launchctl start com.davebuckley.portal
 ```
 
-This applies whenever code is pushed to the remote, including after `/commit` with push.
+Push to the remote as part of deploying, per the usual commit flow.
