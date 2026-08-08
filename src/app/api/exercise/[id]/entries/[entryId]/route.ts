@@ -37,9 +37,30 @@ export async function PATCH(
         ? { weightKg: body.weightKg === null ? undefined : Number(body.weightKg) }
         : {}),
       ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
+      // Cardio actuals: patchable so a Parkrun entry can be swapped for a shorter
+      // treadmill run and carry its own distance/time. null clears the figure.
+      ...(body.distanceKm !== undefined
+        ? { distanceKm: body.distanceKm === null ? null : Number(body.distanceKm) }
+        : {}),
+      ...(body.durationMinutes !== undefined
+        ? { durationMinutes: body.durationMinutes === null ? null : Number(body.durationMinutes) }
+        : {}),
       // Explicit reps-in-reserve, 0-10 (the UI only offers 0-4). null clears it;
       // an out-of-range or non-numeric value is ignored rather than stored.
       ...(body.rir !== undefined ? { rir: parseRir(body.rir) } : {}),
+      // Per-exercise swap provenance: the original planned name this entry stands
+      // in for. An empty string or null clears it (the original was restored).
+      ...(body.substitutedFor !== undefined
+        ? {
+            substitutedFor:
+              body.substitutedFor === null ? null : String(body.substitutedFor).trim() || null,
+          }
+        : {}),
+      // The pre-filled "aim for" text. Cleared on a swap (the original's target
+      // no longer describes the substitute); null clears, a string overwrites.
+      ...(body.targetText !== undefined
+        ? { targetText: body.targetText === null ? null : String(body.targetText) }
+        : {}),
     });
     if (!session) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Loader2, Plus, Trash2, X } from 'lucide-react';
+import { ArrowLeftRight, Check, Loader2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 
 import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
@@ -23,10 +23,13 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
     generating,
     error,
     busyKey,
+    knownNames,
     toggleDone,
     commitField,
     commitNote,
     commitRir,
+    commitSwap,
+    restoreSwap,
     addExercise,
     removeRow,
   } = useTodaySession(undefined, onSessionChanged);
@@ -74,11 +77,14 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
             row={row}
             busy={busyKey === row.key}
             open={openKey === row.key}
+            knownNames={knownNames}
             onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
             onToggleDone={() => toggleDone(row)}
             onCommitField={patch => commitField(row, patch)}
             onCommitNote={note => commitNote(row, note)}
             onCommitRir={rir => commitRir(row, rir)}
+            onCommitSwap={replacement => commitSwap(row, replacement)}
+            onRestoreSwap={() => restoreSwap(row)}
             onRemove={() => removeRow(row)}
           />
         ))}
@@ -110,24 +116,31 @@ function RowCard({
   row,
   busy,
   open,
+  knownNames,
   onToggleOpen,
   onToggleDone,
   onCommitField,
   onCommitNote,
   onCommitRir,
+  onCommitSwap,
+  onRestoreSwap,
   onRemove,
 }: {
   row: TodayRow;
   busy: boolean;
   open: boolean;
+  knownNames: string[];
   onToggleOpen: () => void;
   onToggleDone: () => void;
   onCommitField: (patch: FieldPatch) => void;
   onCommitNote: (note: string) => void;
   onCommitRir: (rir: number | null) => void;
+  onCommitSwap: (replacement: { name: string; distanceKm?: number }) => void;
+  onRestoreSwap: () => void;
   onRemove: () => void;
 }) {
   const [note, setNote] = useState(row.notes ?? '');
+  const [swapping, setSwapping] = useState(false);
   const current = describeVolumeLoad(row);
 
   return (
@@ -179,6 +192,9 @@ function RowCard({
             {row.toFailure && <FailureTag />}
             {row.action && <ActionBadge action={row.action} />}
           </div>
+          {row.substitutedFor && (
+            <p className="mt-0.5 text-[11px] text-amber-600">was: {row.substitutedFor}</p>
+          )}
           <p className="mt-0.5 text-xs tabular-nums text-gray-600">
             {current || row.targetText || '—'}
             {row.targetText && row.targetText !== current && (
@@ -231,6 +247,38 @@ function RowCard({
             session&apos;s target. A rating wins if you set one.
           </p>
 
+          {swapping ? (
+            <SwapForm
+              knownNames={knownNames}
+              onSwap={replacement => {
+                onCommitSwap(replacement);
+                setSwapping(false);
+              }}
+              onClose={() => setSwapping(false)}
+            />
+          ) : (
+            <div className="mt-3 flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => setSwapping(true)}
+                className="flex items-center gap-1.5 text-xs font-medium text-gray-500 active:text-gray-900"
+              >
+                <ArrowLeftRight className="h-3.5 w-3.5" />
+                Swap exercise
+              </button>
+              {row.substitutedFor && (
+                <button
+                  type="button"
+                  onClick={onRestoreSwap}
+                  className="flex items-center gap-1.5 text-xs font-medium text-gray-500 active:text-gray-900"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Restore {row.substitutedFor}
+                </button>
+              )}
+            </div>
+          )}
+
           <button
             type="button"
             onClick={onRemove}
@@ -241,6 +289,76 @@ function RowCard({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Swap a planned exercise for another: a replacement name (autocompleting known
+// names, but free text is fine) and an optional distance for a cardio swap
+// (Parkrun → a shorter treadmill run). One save, optimistic like every other row
+// action.
+function SwapForm({
+  knownNames,
+  onSwap,
+  onClose,
+}: {
+  knownNames: string[];
+  onSwap: (replacement: { name: string; distanceKm?: number }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [distance, setDistance] = useState('');
+
+  const save = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const km = Number(distance);
+    onSwap({
+      name: trimmed,
+      ...(distance.trim() !== '' && Number.isFinite(km) ? { distanceKm: km } : {}),
+    });
+  };
+
+  return (
+    <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-2.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-600">Swap for</span>
+        <button type="button" onClick={onClose} aria-label="Cancel swap" className="p-1 text-gray-400">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <input
+        value={name}
+        onChange={e => setName(e.target.value)}
+        list="today-exercise-names"
+        placeholder="Replacement exercise"
+        className="h-11 w-full rounded-md border border-gray-300 px-3 text-sm"
+        autoFocus
+      />
+      <datalist id="today-exercise-names">
+        {knownNames.map(n => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          value={distance}
+          onChange={e => setDistance(e.target.value)}
+          type="number"
+          inputMode="decimal"
+          step={0.1}
+          placeholder="Distance km (optional)"
+          className="h-11 flex-1 rounded-md border border-gray-300 px-3 text-sm"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={!name.trim()}
+          className="h-11 rounded-md bg-gray-900 px-4 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          Swap
+        </button>
+      </div>
     </div>
   );
 }

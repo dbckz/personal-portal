@@ -1814,7 +1814,16 @@ export const api = {
     entryId: string,
     patch: Partial<
       Pick<ExerciseEntry, 'name' | 'done' | 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'notes'>
-    > & { rir?: number | null }
+    > & {
+      rir?: number | null;
+      // Nullable extras: a swap sets a new name + substitutedFor (and, for
+      // cardio, distanceKm), and clears the old targetText; a restore clears
+      // substitutedFor. null is an explicit clear, undefined leaves it alone.
+      substitutedFor?: string | null;
+      targetText?: string | null;
+      distanceKm?: number | null;
+      durationMinutes?: number | null;
+    }
   ): Promise<{ session: ExerciseSession }> {
     return fetchWithRetry(
       `/api/exercise/${sessionId}/entries/${entryId}`,

@@ -214,6 +214,13 @@ export interface ExerciseEntry {
   // preference to the reps-in-reserve the recommender otherwise parses out of
   // `notes` (see exercise-targets).
   rir?: number;
+  // Provenance for a per-exercise swap: the name of the ORIGINAL planned
+  // exercise this entry replaced ("Parkrun 5K" when a shorter treadmill run was
+  // done instead). Set when a planned exercise is swapped for another mid-session
+  // and cleared (null in the patch) when the original is restored. The entry's
+  // own `name`/numbers are the substitute's, so progression files under the
+  // substitute; this only records what it stood in for.
+  substitutedFor?: string;
   // Ticked off during the session itself. An entry seeded from a target starts
   // false and is set when the exercise is actually done, so a session can be
   // logged set-by-set in the gym rather than written up afterwards.

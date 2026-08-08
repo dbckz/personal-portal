@@ -15,6 +15,7 @@ jest.mock('@/lib/api', () => ({
     updateExerciseEntry: jest.fn(),
     addExerciseEntry: jest.fn(),
     removeExerciseEntry: jest.fn(),
+    getExerciseProgressions: jest.fn(),
   },
 }));
 
@@ -60,6 +61,12 @@ beforeEach(() => {
     targets: [target('Bench'), target('Squat', { key: 'squat', weightKg: 60 })],
   });
   mockApi.getExerciseSessions.mockResolvedValue({ sessions: [] });
+  mockApi.getExerciseProgressions.mockResolvedValue({
+    progressions: [
+      { name: 'Bench', key: 'bench', sessions: 3, points: [] },
+      { name: 'Treadmill run', key: 'treadmill run', sessions: 2, points: [] },
+    ],
+  });
   mockApi.startExerciseSession.mockResolvedValue({ session: startedSession(), resumed: false });
   mockApi.updateExerciseEntry.mockImplementation(async (sid, eid, patch) => {
     const s = startedSession();
@@ -152,5 +159,72 @@ describe('useTodaySession', () => {
     // Session already existed — no new one created.
     expect(mockApi.startExerciseSession).not.toHaveBeenCalled();
     expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e2', { done: true });
+  });
+
+  it('exposes known exercise names for the swap autocomplete', async () => {
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.knownNames).toContain('Treadmill run'));
+    expect(result.current.knownNames).toContain('Bench');
+  });
+
+  it('swaps a planned exercise, recording provenance and dropping the old guidance', async () => {
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.commitSwap(result.current.rows[0], {
+        name: 'Treadmill run',
+        distanceKm: 3,
+      });
+    });
+
+    expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', {
+      name: 'Treadmill run',
+      substitutedFor: 'Bench',
+      targetText: null,
+      distanceKm: 3,
+    });
+    const swapped = result.current.rows.find(r => r.key === 'bench')!;
+    expect(swapped.name).toBe('Treadmill run');
+    expect(swapped.substitutedFor).toBe('Bench');
+    expect(swapped.distanceKm).toBe(3);
+    // The original's guidance no longer describes the substitute.
+    expect(swapped.action).toBeUndefined();
+    expect(swapped.rationale).toBeUndefined();
+  });
+
+  it('keeps the un-done state through a swap', async () => {
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.commitSwap(result.current.rows[0], { name: 'Treadmill run' });
+    });
+
+    expect(result.current.rows.find(r => r.key === 'bench')!.done).toBe(false);
+  });
+
+  it('restores the original exercise and brings its guidance back', async () => {
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.commitSwap(result.current.rows[0], { name: 'Treadmill run' });
+    });
+    await act(async () => {
+      await result.current.restoreSwap(result.current.rows.find(r => r.key === 'bench')!);
+    });
+
+    expect(mockApi.updateExerciseEntry).toHaveBeenLastCalledWith(
+      's1',
+      'e1',
+      expect.objectContaining({ name: 'Bench', substitutedFor: null })
+    );
+    const restored = result.current.rows.find(r => r.key === 'bench')!;
+    expect(restored.name).toBe('Bench');
+    expect(restored.substitutedFor).toBeUndefined();
+    // Guidance from the original target is back.
+    expect(restored.action).toBe('increase');
+    expect(restored.rationale).toBe('Try heavier on Bench.');
   });
 });

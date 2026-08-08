@@ -43,6 +43,10 @@ export interface TodayRow {
   rir?: number;
   // What to aim for, e.g. "3 × 8 · 40kg".
   targetText?: string;
+  // The name of the planned exercise this row was swapped in for, if any. Shown
+  // as "was: …" with a restore affordance; the row's own name/numbers are the
+  // substitute's.
+  substitutedFor?: string;
   // Guidance from the previous workout. Absent on added-on-the-spot exercises.
   action?: TargetAction;
   // AI-programme tags: where the exercise sits and whether it's the to-failure
@@ -108,15 +112,19 @@ function rowFromEntry(e: ExerciseEntry): TodayRow {
     distanceKm: e.distanceKm,
     notes: e.notes,
     rir: e.rir,
+    substitutedFor: e.substitutedFor,
     targetText: e.targetText,
   };
 }
 
 // Server entry state laid over a row, keeping the row's guidance fields.
 function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
-  return {
+  const base: TodayRow = {
     ...row,
     entryId: e.id,
+    // A swap changes the name, so the entry's name is authoritative here (it is
+    // the substitute now); a plain edit leaves it equal to the row's name.
+    name: e.name ?? row.name,
     done: !!e.done,
     sets: e.sets ?? row.sets,
     reps: e.reps ?? row.reps,
@@ -128,8 +136,24 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
     // No fallback: rir has no target-side source, so the entry is the whole
     // truth — a cleared rating must read as cleared, not revert to the old row.
     rir: e.rir,
+    substitutedFor: e.substitutedFor,
     targetText: e.targetText ?? row.targetText,
   };
+  // A substituted entry is a different exercise now: the original's guidance and
+  // target no longer describe it, so drop them rather than mislabel the row.
+  if (e.substitutedFor) {
+    return {
+      ...base,
+      action: undefined,
+      rationale: undefined,
+      last: undefined,
+      lastSummary: undefined,
+      kind: undefined,
+      toFailure: undefined,
+      targetText: e.targetText,
+    };
+  }
+  return base;
 }
 
 // How hard the checklist chases the AI programme once the server says it is
@@ -143,9 +167,20 @@ function mergeRows(targets: ExerciseTarget[], session: ExerciseSession | null): 
   const entries = session?.exercises ?? [];
   const used = new Set<string>();
   const rows = targets.map(t => {
-    const match = entries.find(e => !used.has(e.id) && exerciseKey(e.name) === t.key);
+    // Match by the entry's own name, or — when it was swapped out — by the
+    // original planned name it stands in for, so a substitute keeps the original
+    // target's slot instead of leaving a ghost target plus a loose entry.
+    const match = entries.find(
+      e =>
+        !used.has(e.id) &&
+        (exerciseKey(e.name) === t.key ||
+          (!!e.substitutedFor && exerciseKey(e.substitutedFor) === t.key))
+    );
     if (match) {
       used.add(match.id);
+      // A substituted entry shows itself (its name, actuals and provenance), not
+      // the original target's guidance — but stays keyed to the target's slot.
+      if (match.substitutedFor) return { ...rowFromEntry(match), key: t.key };
       return applyEntry(rowFromTarget(t), match);
     }
     return rowFromTarget(t);
@@ -167,6 +202,9 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
   // True while the AI programme is being generated server-side; the checklist
   // shows the deterministic targets and quietly upgrades when it lands.
   const [generating, setGenerating] = useState(false);
+  // Every exercise name the log has seen, for the swap form's autocomplete.
+  // Free text still resolves — this only saves typing a known name.
+  const [knownNames, setKnownNames] = useState<string[]>([]);
 
   const targetsRef = useRef<ExerciseTarget[]>([]);
   const sessionRef = useRef<ExerciseSession | null>(null);
@@ -214,6 +252,20 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
   useEffect(() => {
     pollsRef.current = 0;
   }, [date]);
+
+  // Known exercise names for the swap autocomplete — fetched once, best-effort.
+  // Guarded so a test that doesn't stub this endpoint can't throw here.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve(api.getExerciseProgressions?.())
+      .then(res => {
+        if (!cancelled && res) setKnownNames(res.progressions.map(p => p.name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     load();
@@ -271,7 +323,11 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     ) => {
       setBusyKey(row.key);
       setError(null);
-      setRows(rs => rs.map(r => (r.key === row.key ? optimistic(r) : r)));
+      // Compute the optimistic row once and reconcile the server actuals onto
+      // it, so an optimistic change that alters more than one field (a swap:
+      // name + provenance + cleared guidance) survives the reconcile.
+      const optimisticRow = optimistic(row);
+      setRows(rs => rs.map(r => (r.key === row.key ? optimisticRow : r)));
       try {
         const base = await ensureSession();
         const entryId = await resolveEntryId(base, row);
@@ -279,7 +335,9 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
         sessionRef.current = updated;
         const entry = (updated.exercises ?? []).find(e => e.id === entryId);
         setRows(rs =>
-          rs.map(r => (r.key === row.key ? (entry ? applyEntry(row, entry) : optimistic(row)) : r))
+          rs.map(r =>
+            r.key === row.key ? (entry ? applyEntry(optimisticRow, entry) : optimisticRow) : r
+          )
         );
         onSessionChanged?.();
       } catch (err) {
@@ -332,6 +390,82 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
         r => ({ ...r, rir: rir ?? undefined }),
         (s, id) => api.updateExerciseEntry(s.id, id, { rir }).then(res => res.session)
       ),
+    [runWrite]
+  );
+
+  // Swap one planned exercise for another, keeping the rest of the session: the
+  // entry becomes the substitute (its name, and for cardio its distance), while
+  // recording what it stood in for. The original's guidance/target is dropped —
+  // it no longer describes this exercise. Un-done stays un-done.
+  const commitSwap = useCallback(
+    (row: TodayRow, replacement: { name: string; distanceKm?: number }) => {
+      const name = replacement.name.trim();
+      if (!name) return Promise.resolve();
+      // Preserve the ORIGINAL planned name through a re-swap.
+      const original = row.substitutedFor ?? row.name;
+      const distance =
+        replacement.distanceKm !== undefined ? { distanceKm: replacement.distanceKm } : {};
+      return runWrite(
+        row,
+        r => ({
+          ...r,
+          name,
+          substitutedFor: original,
+          ...distance,
+          action: undefined,
+          rationale: undefined,
+          last: undefined,
+          lastSummary: undefined,
+          kind: undefined,
+          toFailure: undefined,
+          targetText: undefined,
+        }),
+        (s, id) =>
+          api
+            .updateExerciseEntry(s.id, id, {
+              name,
+              substitutedFor: original,
+              targetText: null,
+              ...distance,
+            })
+            .then(res => res.session)
+      );
+    },
+    [runWrite]
+  );
+
+  // Undo a swap: restore the original planned name and clear the provenance. The
+  // original target's guidance is brought back if it is still in today's plan.
+  const restoreSwap = useCallback(
+    (row: TodayRow) => {
+      const original = row.substitutedFor;
+      if (!original) return Promise.resolve();
+      const target = targetsRef.current.find(t => t.key === row.key);
+      const guidance = target ? rowFromTarget(target) : null;
+      return runWrite(
+        row,
+        r => ({
+          ...r,
+          name: original,
+          substitutedFor: undefined,
+          action: guidance?.action,
+          rationale: guidance?.rationale,
+          last: guidance?.last,
+          lastSummary: guidance?.lastSummary,
+          kind: guidance?.kind,
+          toFailure: guidance?.toFailure,
+          targetText: guidance?.targetText,
+        }),
+        (s, id) =>
+          api
+            .updateExerciseEntry(s.id, id, {
+              name: original,
+              substitutedFor: null,
+              targetText: guidance?.targetText ?? null,
+            })
+            .then(res => res.session)
+      );
+    },
     [runWrite]
   );
 
@@ -397,11 +531,14 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     generating,
     error,
     busyKey,
+    knownNames,
     reload: load,
     toggleDone,
     commitField,
     commitNote,
     commitRir,
+    commitSwap,
+    restoreSwap,
     addExercise,
     removeRow,
   };
