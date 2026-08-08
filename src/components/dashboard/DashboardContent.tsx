@@ -9,6 +9,7 @@ import { api, DashboardCapacityResponse, type WeekStateResponse, type AiClaim } 
 import type { UnscheduledTask } from '@/lib/weekly-stats';
 import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/scheduling/week-state';
 import { usePlanningNudge } from '@/hooks/usePlanningNudge';
+import { useReflectionNudge } from '@/hooks/useReflectionNudge';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
@@ -133,6 +134,8 @@ export function DashboardContent({
   // Friday wrap-up / Sunday plan-next-week reminders, through the same
   // notification toggle as the event alerts.
   usePlanningNudge(weekState, rolloverHour);
+  // Month-end / quarter-end reflection reminders, through the same toggle.
+  useReflectionNudge(weekState?.workingDays);
 
   const loadWeekState = useCallback(() => {
     api.getWeekState()

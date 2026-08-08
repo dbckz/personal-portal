@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWorkspaceTags, createTag, refreshAsanaToken } from '@/lib/asana';
-import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
-import { AsanaIntegration } from '@/types';
+import { getIntegrationById, getIntegrations, updateIntegration } from '@/lib/integration-storage';
+import { AsanaIntegration, AsanaTagWithIntegration } from '@/types';
 
 async function getRefreshedCredentials(integration: AsanaIntegration) {
   let credentials = integration.credentials!;
@@ -33,12 +33,38 @@ async function resolveIntegration(integrationId: string | null) {
 export async function GET(request: NextRequest) {
   try {
     const integrationId = request.nextUrl.searchParams.get('integrationId');
-    const resolved = await resolveIntegration(integrationId);
-    if ('error' in resolved) return resolved.error;
 
-    const credentials = await getRefreshedCredentials(resolved.integration);
-    const tags = await getWorkspaceTags(credentials.accessToken, resolved.integration.workspaceId!);
-    return NextResponse.json(tags);
+    // With an explicit integration, return that one workspace's bare tag array —
+    // the original single-workspace contract the tag creator relies on.
+    if (integrationId) {
+      const resolved = await resolveIntegration(integrationId);
+      if ('error' in resolved) return resolved.error;
+
+      const credentials = await getRefreshedCredentials(resolved.integration);
+      const tags = await getWorkspaceTags(credentials.accessToken, resolved.integration.workspaceId!);
+      return NextResponse.json(tags);
+    }
+
+    // With no integration, aggregate tags across every enabled Asana workspace,
+    // each tagged with its origin (mirrors /api/asana-projects).
+    const { asanaIntegrations } = await getIntegrations();
+    const enabled = asanaIntegrations.filter(i => i.enabled && !!i.credentials && !!i.workspaceId);
+
+    const tags: AsanaTagWithIntegration[] = [];
+    for (const integration of enabled) {
+      try {
+        const credentials = await getRefreshedCredentials(integration);
+        const workspaceTags = await getWorkspaceTags(credentials.accessToken, integration.workspaceId!);
+        for (const tag of workspaceTags) {
+          tags.push({ ...tag, integrationId: integration.id, integrationName: integration.name });
+        }
+      } catch (err) {
+        console.error(`Error fetching tags for ${integration.name}:`, err);
+        // Continue with other integrations.
+      }
+    }
+
+    return NextResponse.json({ tags });
   } catch (error) {
     console.error('Error fetching Asana tags:', error);
     return NextResponse.json(

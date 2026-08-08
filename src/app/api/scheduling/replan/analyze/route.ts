@@ -390,6 +390,12 @@ export async function POST(request: NextRequest) {
       grooming: 'Backlog grooming',
       retro: 'Retrospective',
       delegationReview: 'Delegation review',
+      walk: 'Walk',
+      consulting: 'Consulting',
+      sideProjects: 'Side projects',
+      newBookies: 'New bookies',
+      reading: 'Reading',
+      learning: 'Learning',
       break: 'Break',
     } as const;
     for (const r of ritualBlocks) {

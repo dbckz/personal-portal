@@ -33,6 +33,12 @@ interface SchedulingConfig {
     kindleNotes?: string;
     grooming?: string;
     retro?: string;
+    walk?: string;
+    consulting?: string;
+    sideProjects?: string;
+    newBookies?: string;
+    reading?: string;
+    learning?: string;
   };
   overflow?: {
     start: string;
@@ -582,6 +588,12 @@ export default function WorkflowConfig() {
               { kind: 'kindleNotes', label: 'Kindle notes' },
               { kind: 'grooming', label: 'Grooming' },
               { kind: 'retro', label: 'Retro' },
+              { kind: 'walk', label: 'Walk' },
+              { kind: 'consulting', label: 'Consulting' },
+              { kind: 'sideProjects', label: 'Side projects' },
+              { kind: 'newBookies', label: 'New bookies' },
+              { kind: 'reading', label: 'Reading' },
+              { kind: 'learning', label: 'Learning' },
             ] as const).map(({ kind, label }) => {
               // Lunch/emails fall back to the legacy single id so an existing
               // config keeps showing the right calendar until it's re-saved. The
@@ -592,7 +604,7 @@ export default function WorkflowConfig() {
               const emailsDefault = cals?.emails ?? legacy ?? '';
               const value =
                 cals?.[kind] ??
-                (kind === 'exercise'
+                (kind === 'exercise' || kind === 'walk'
                   ? ''
                   : kind === 'lunch' || kind === 'emails'
                     ? legacy ?? ''

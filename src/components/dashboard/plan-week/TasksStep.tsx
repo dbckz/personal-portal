@@ -14,7 +14,6 @@ import {
   roughDuration,
   blockLengthOptions,
   RowSelect,
-  PARKED_IDEAS_NOTE,
 } from './helpers';
 
 // 1 → "1st", 2 → "2nd", 3 → "3rd", 4+ → "4th" (11-13 are always "th").
@@ -252,6 +251,40 @@ export function TasksStep({
     );
   };
 
+  // Evidence-based calibration hints under a category header (see
+  // calibrateQuotas). Purely informational — a muted line the user can act on or
+  // ignore. The quota line shows only with a real run of history (≥ 3 weeks); the
+  // block-size hint only with enough completed-task samples (≥ 5).
+  const renderCalibration = (cat: WeekCandidateCategory) => {
+    const cal = cat.calibration;
+    if (!cal) return null;
+    const showQuota = cal.weeksOfData >= 3;
+    const showBlock =
+      cal.blockSamples >= 5 && typeof cal.suggestedBlockMinutes === 'number';
+    if (!showQuota && !showBlock) return null;
+    return (
+      <div className="mb-2 -mt-1 space-y-0.5">
+        {showQuota && (
+          <p className="text-[11px] text-gray-400">
+            Completed {Math.round(cal.avgCompletionRate * 100)}% of scheduled over{' '}
+            {cal.weeksOfData} wks
+            {typeof cal.suggestedQuota === 'number' && (
+              <span className="text-gray-500">
+                {' '}
+                · suggest {cal.suggestedQuota}/wk instead of {cal.currentQuota}
+              </span>
+            )}
+          </p>
+        )}
+        {showBlock && (
+          <p className="text-[11px] text-gray-400">
+            Done tasks here usually got {cal.suggestedBlockMinutes}m
+          </p>
+        )}
+      </div>
+    );
+  };
+
   // Compact per-task block-length select for single-task category rows. Default
   // = the category's target length; only explicit picks are stored in
   // taskDurationOverrides.
@@ -342,6 +375,8 @@ export function TasksStep({
               </div>
             </div>
 
+            {renderCalibration(cat)}
+
             {cat.candidates.length === 0 ? (
               <p className="text-xs text-gray-400 italic">No candidate tasks.</p>
             ) : cat.autoSelect ? (
@@ -405,9 +440,6 @@ export function TasksStep({
           </div>
         );
       })}
-      <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-        {PARKED_IDEAS_NOTE}
-      </p>
     </div>
   );
 }

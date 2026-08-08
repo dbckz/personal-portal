@@ -275,3 +275,32 @@ export function parsePlannedTitle(title: string): ParsedPlannedSession | null {
     type: hasCardio && hasStrength ? 'strength + cardio' : hasCardio ? 'run' : 'strength',
   };
 }
+
+// Generic words that only mark a TIMED slot as exercise, never a plan: "Gym",
+// "Workout". Too vague to seed a session from, but fine for recognising the
+// calendar slot a planned session was actually done in.
+const TIMED_ONLY_WORDS = ['gym', 'workout', 'session', 'training', 'lift', 'weights'];
+
+// Recognise a TIMED event ("🏋️ Gym", "🏃 Track @Southwark Park") as the slot an
+// existing plan was done in, and classify it the same way parsePlannedTitle does.
+//
+// Deliberately looser than parsePlannedTitle: a bare "🏋️ Gym" carries no
+// muscle-group word, so it is no good as a PLAN (it would be indistinguishable
+// from "🏋️ Change gym membership"), but it is a perfectly good duration source
+// for a plan that already exists that day — enrichment can only fill a blank on
+// an existing session, never create one, so the weaker signal is safe here.
+export function parseTimedExerciseTitle(title: string): { type: string } | null {
+  const { body, hadPrefix } = stripPrefix(title);
+  if (!hadPrefix || !body) return null;
+
+  const lower = body.toLowerCase();
+  const words = [...TRAINING_WORDS, ...TIMED_ONLY_WORDS];
+  if (!words.some(word => new RegExp(`\\b${word}\\b`).test(lower))) return null;
+
+  const hasCardio = /\b(run|parkrun|track|cycle|bike|swim)\b/i.test(body);
+  const hasStrength =
+    /\b(push|pull|legs?|core|chest|back|arms|shoulders|glutes|abs|gym|workout|lift|weights)\b/i.test(
+      body
+    );
+  return { type: hasCardio && hasStrength ? 'strength + cardio' : hasCardio ? 'run' : 'strength' };
+}

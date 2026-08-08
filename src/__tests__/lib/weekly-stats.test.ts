@@ -357,3 +357,23 @@ describe('out-of-office days', () => {
     expect(workingDaysAvailable(summariseWeek((await getWeeklyStats(WEEK))!))).toBe(0);
   });
 });
+
+describe('scheduledMinutes (estimate-vs-actual evidence)', () => {
+  it('stores a task block length and keeps it through an outcome update', async () => {
+    await recordWeeklyTasks(WEEK, [{ taskId: 'w1', category: 'Writing', scheduledMinutes: 120 }]);
+    expect((await getWeeklyStats(WEEK))!.tasks.w1.scheduledMinutes).toBe(120);
+
+    // Settling the outcome later must not drop the recorded block length.
+    await setWeeklyTaskOutcomes(WEEK, [{ taskId: 'w1', outcome: 'done' }]);
+    const task = (await getWeeklyStats(WEEK))!.tasks.w1;
+    expect(task.outcome).toBe('done');
+    expect(task.scheduledMinutes).toBe(120);
+  });
+
+  it('leaves a stored block length intact when a later record omits it', async () => {
+    await recordWeeklyTasks(WEEK, [{ taskId: 'w1', category: 'Writing', scheduledMinutes: 90 }]);
+    // Re-running a plan that carries no minutes must not erase the known length.
+    await recordWeeklyTasks(WEEK, [{ taskId: 'w1', category: 'Writing' }]);
+    expect((await getWeeklyStats(WEEK))!.tasks.w1.scheduledMinutes).toBe(90);
+  });
+});

@@ -174,7 +174,10 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
     return { ...base, action: 'no-history', rationale: 'No history for this exercise yet.' };
   }
 
-  const effort = readEffort(last.notes);
+  // An explicit RIR rating is decisive: it stands in for the whole effort read,
+  // so a tapped "2 in reserve" beats whatever the free-text note happens to say.
+  // Silence in the rating still falls back to reading effort out of the note.
+  const effort: EffortReading = last.rir !== undefined ? { rir: last.rir } : readEffort(last.notes);
   const sets = last.sets;
   const reps = last.reps;
   const context = {

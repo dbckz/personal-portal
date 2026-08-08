@@ -21,12 +21,13 @@ import {
   listEventsInRange,
   updateCalendarEvent,
 } from './google-calendar';
-import { parsePlannedTitle } from './exercise-parse';
+import { parsePlannedTitle, parseTimedExerciseTitle } from './exercise-parse';
 import { getEnabledGoogleIntegrations } from './integration-storage';
 import {
   attachCalendarEvent,
   getSessionsByImportPrefix,
   deleteSession,
+  updateSession,
   upsertSessionByImportKey,
 } from './storage/exercise';
 import type { ExerciseSession } from '@/types/life';
@@ -86,19 +87,111 @@ export interface PullResult {
   created: number;
   updated: number;
   removed: number;
+  // Planned sessions given a durationMinutes from a same-day timed event.
+  enriched: number;
+}
+
+// A timed event as the enricher needs it — a title to classify and a start/end
+// to measure. Kept minimal so planTimedEnrichments stays testable without Google.
+export interface TimedExerciseEvent {
+  summary: string;
+  startDateTime: string;
+  endDateTime: string;
+}
+
+// A planned session as the enricher reasons about it: enough to match by day and
+// type, and to decide whether its duration may be overwritten.
+type EnrichableSession = Pick<
+  ExerciseSession,
+  'id' | 'date' | 'type' | 'durationMinutes' | 'durationSource'
+>;
+
+export interface TimedEnrichment {
+  sessionId: string;
+  durationMinutes: number;
+}
+
+const isCardioType = (type: string) => /\b(run|cardio|cycle|swim|track)\b/i.test(type);
+
+// Minutes between two ISO timestamps, or null when the pair is unusable (bad
+// parse, non-positive, or longer than a day — an all-day slot masquerading as a
+// timed one, which is not a session length).
+function timedDurationMinutes(startISO: string, endISO: string): number | null {
+  const start = parseISO(startISO).getTime();
+  const end = parseISO(endISO).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const minutes = Math.round((end - start) / 60000);
+  if (minutes <= 0 || minutes > 24 * 60) return null;
+  return minutes;
+}
+
+// Of the day's enrichable plans, the one a timed slot belongs to: an exact type
+// match first, then one on the same cardio/strength side, else the first. Callers
+// pass only plans that are still on the table (not already taken this run).
+function pickSessionToEnrich(candidates: EnrichableSession[], parsedType: string): EnrichableSession | null {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  const exact = candidates.find(s => s.type === parsedType);
+  if (exact) return exact;
+  const wantCardio = isCardioType(parsedType);
+  return candidates.find(s => isCardioType(s.type) === wantCardio) ?? candidates[0];
+}
+
+// Pure core of the timed-event enrichment: given the plans just synced and the
+// timed exercise events for the same window, decide which plans get a duration
+// and how long. No I/O, so the matching rules are unit-testable on their own.
+//
+// A plan is a candidate only when its duration is unset or was itself set by a
+// previous calendar sync — a duration Dave logged by hand is never overwritten.
+// Each timed event claims at most one plan, and each plan at most one event, so
+// two gym slots on one day don't both land on the same session.
+export function planTimedEnrichments(
+  plannedSessions: EnrichableSession[],
+  timedEvents: TimedExerciseEvent[]
+): TimedEnrichment[] {
+  const out: TimedEnrichment[] = [];
+  const claimed = new Set<string>();
+
+  for (const event of timedEvents) {
+    const parsed = parseTimedExerciseTitle(event.summary);
+    if (!parsed) continue;
+
+    const durationMinutes = timedDurationMinutes(event.startDateTime, event.endDateTime);
+    if (durationMinutes === null) continue;
+
+    const day = event.startDateTime.slice(0, 10);
+    const candidates = plannedSessions.filter(
+      s =>
+        s.date === day &&
+        !claimed.has(s.id) &&
+        (s.durationMinutes === undefined || s.durationSource === 'calendar')
+    );
+
+    const match = pickSessionToEnrich(candidates, parsed.type);
+    if (!match) continue;
+
+    claimed.add(match.id);
+    out.push({ sessionId: match.id, durationMinutes });
+  }
+
+  return out;
 }
 
 // Read planned sessions out of the calendar for a date window.
 //
-// Only all-day events count: a timed "🏋️ Gym" is where the session was slotted,
-// not the plan itself, and treating both as plans would double-count every day.
+// The all-day events ARE the plan: "🏋️ Push (shoulders) + Run (2 km)" becomes a
+// planned session. Timed events are NOT plans — treating both as plans would
+// double-count every day — but a timed "🏋️ Gym" or "🏃 Track" is where that
+// day's plan was actually done, so its start/end is read to fill in the planned
+// session's durationMinutes (see planTimedEnrichments). A timed event never
+// creates a session; it only enriches one that already exists for the day.
 //
 // Events that have since disappeared from the calendar have their portal
 // sessions removed — but ONLY if still unlogged. A session Dave has completed is
 // history and is kept whatever the calendar now says.
 export async function pullPlannedSessions(from: Date, to: Date): Promise<PullResult> {
   const target = await resolveCalendarTarget();
-  if (!target) return { scanned: 0, created: 0, updated: 0, removed: 0 };
+  if (!target) return { scanned: 0, created: 0, updated: 0, removed: 0, enriched: 0 };
 
   const events = await listEventsInRange(
     target.credentials,
@@ -113,6 +206,7 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
   let created = 0;
   let updated = 0;
   const seen = new Set<string>();
+  const plannedSessions: ExerciseSession[] = [];
 
   for (const event of allDay) {
     const parsed = parsePlannedTitle(event.summary);
@@ -133,8 +227,21 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
       googleCalendarId: target.calendarId,
       source: 'calendar',
     });
+    plannedSessions.push(result.session);
     if (result.created) created++;
     else updated++;
+  }
+
+  // Fill each plan's duration from a same-day timed exercise event, where one is
+  // there to read it from. Only the plans just synced are eligible, so a timed
+  // slot can never conjure a session — it only measures one already planned.
+  const timedEvents: TimedExerciseEvent[] = events
+    .filter(e => !!e.startDateTime && !!e.endDateTime)
+    .map(e => ({ summary: e.summary, startDateTime: e.startDateTime!, endDateTime: e.endDateTime! }));
+  let enriched = 0;
+  for (const { sessionId, durationMinutes } of planTimedEnrichments(plannedSessions, timedEvents)) {
+    await updateSession(sessionId, { durationMinutes, durationSource: 'calendar' });
+    enriched++;
   }
 
   // Retire sessions whose event is gone from the window we just read.
@@ -148,7 +255,7 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
     if (await deleteSession(session.id)) removed++;
   }
 
-  return { scanned: allDay.length, created, updated, removed };
+  return { scanned: allDay.length, created, updated, removed, enriched };
 }
 
 // ---------------------------------------------------------------------------

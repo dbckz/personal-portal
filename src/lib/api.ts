@@ -1,7 +1,7 @@
 // API utilities with retry logic and proper typing
 
 import { EventAttributionRule } from '@/types';
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
@@ -212,6 +212,20 @@ export interface WeekCandidateCategory {
   // workflow config's targetLength). Used as the default for the per-week
   // block-length override on the tasks step.
   targetLengthMinutes: number;
+  // Evidence-based calibration from recent weeks (see calibrateQuotas). Present
+  // only when there is any history for the category; the wizard shows the quota
+  // line only when weeksOfData ≥ 3 and the block hint only when blockSamples ≥ 5.
+  // Purely informational — nothing here is auto-applied.
+  calibration?: {
+    weeksOfData: number;
+    avgCompletionRate: number; // 0..1
+    currentQuota: number;
+    suggestedQuota?: number;
+    reason?: string;
+    blockSamples: number;
+    suggestedBlockMinutes?: number;
+    blockReason?: string;
+  };
   candidates: WeekCandidate[];
 }
 
@@ -664,10 +678,15 @@ export const api = {
     });
   },
 
-  async getAsanaTags(integrationId: string): Promise<AsanaTag[]> {
-    return fetchWithRetry<AsanaTag[]>(
-      `/api/asana-tags?integrationId=${encodeURIComponent(integrationId)}`
-    );
+  // Tags across every enabled Asana workspace, each tagged with its origin.
+  async getAsanaTags(): Promise<{ tags: AsanaTagWithIntegration[] }> {
+    return fetchWithRetry<{ tags: AsanaTagWithIntegration[] }>('/api/asana-tags');
+  },
+
+  // Calendar-category suggestions for the goal editor's datalist (autocomplete
+  // only — free text still resolves).
+  async getGoalCategories(): Promise<{ categories: string[] }> {
+    return fetchWithRetry<{ categories: string[] }>('/api/goals/categories');
   },
 
   async createAsanaTag(integrationId: string, name: string, color?: string): Promise<AsanaTag> {
@@ -1795,7 +1814,7 @@ export const api = {
     entryId: string,
     patch: Partial<
       Pick<ExerciseEntry, 'name' | 'done' | 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'notes'>
-    >
+    > & { rir?: number | null }
   ): Promise<{ session: ExerciseSession }> {
     return fetchWithRetry(
       `/api/exercise/${sessionId}/entries/${entryId}`,

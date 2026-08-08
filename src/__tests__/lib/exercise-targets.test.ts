@@ -136,6 +136,34 @@ describe('buildTarget', () => {
     expect(target.holdSeconds).toBe(40);
   });
 
+  it('lets an explicit rir rating override the prose note', () => {
+    const target = buildTarget(
+      progression({ date: '2026-08-03', weightKg: 40, sets: 3, reps: 8, notes: 'At limit', rir: 3 })
+    );
+    // The note alone ("At limit") would hold; the tapped 3-in-reserve is
+    // decisive and says go up.
+    expect(target.action).toBe('increase');
+    expect(target.weightKg).toBe(44); // 10% of 40 for a comfortable set
+  });
+
+  it('acts on an explicit rir with no note at all', () => {
+    const up = buildTarget(progression({ date: '2026-08-03', weightKg: 40, sets: 3, reps: 8, rir: 2 }));
+    expect(up.action).toBe('increase');
+    expect(up.weightKg).toBe(42); // 5% of 40 for a rep or two spare
+
+    const hold = buildTarget(progression({ date: '2026-08-03', weightKg: 40, sets: 3, reps: 8, rir: 0 }));
+    expect(hold.action).toBe('hold');
+    expect(hold.weightKg).toBe(40);
+  });
+
+  it('progresses bodyweight work off an explicit rir', () => {
+    const target = buildTarget(
+      progression({ date: '2026-08-04', sets: 3, reps: 8, rir: 2 }, 'Dead bug')
+    );
+    expect(target.action).toBe('add-reps');
+    expect(target.reps).toBe(10);
+  });
+
   it('holds when the note gives no reason to move', () => {
     const target = buildTarget(progression({ date: '2026-08-03', weightKg: 15, sets: 3, reps: 12 }));
     expect(target.action).toBe('hold');

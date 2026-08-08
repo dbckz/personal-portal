@@ -61,6 +61,13 @@ export interface AsanaTag {
   color?: string | null;
 }
 
+// A tag carrying the workspace it came from, for pickers that aggregate tags
+// across every enabled Asana integration (mirrors AsanaProject).
+export interface AsanaTagWithIntegration extends AsanaTag {
+  integrationId: string;
+  integrationName: string;
+}
+
 export interface AsanaTask {
   id: string;
   gid: string;
@@ -521,6 +528,11 @@ export interface WeeklyTaskOutcome {
   scheduledAt: string; // ISO — when it first entered this week's plan
   outcome: WeeklyTaskOutcomeKind;
   outcomeAt?: string; // ISO — when the outcome last changed
+  // Minutes of calendar time this task's block reserved when it was scheduled
+  // (a grouped block's time split evenly across its members). Estimate-vs-actual
+  // evidence for block-size calibration. Absent on records written before this
+  // was tracked — those contribute no sizing evidence, nothing more.
+  scheduledMinutes?: number;
 }
 
 export interface WeeklyStatsIntegrationDay {

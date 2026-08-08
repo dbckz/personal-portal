@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { classifyBlockCategoryWithCatchAll, parseTargetLength, resolveSelectionCap } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { getEnabledAsanaIntegrations } from '@/lib/integration-storage';
+import { getAllWeeklyStats } from '@/lib/user-data-storage';
+import { calibrateQuotas } from '@/lib/quota-calibration';
 import { taskSortKey, compareKeys } from '@/lib/scheduling/engine';
 import type { CandidateTask } from '@/lib/scheduling/types';
 
@@ -25,6 +27,21 @@ export async function POST(request: NextRequest) {
     // integrationId) get no name.
     const integrations = await getEnabledAsanaIntegrations();
     const integrationNameById = new Map(integrations.map(i => [i.id, i.name]));
+
+    // Evidence-based calibration from recent complete weeks. Best-effort: a
+    // failure to read the history must never break candidate selection, so it
+    // degrades to "no calibration" rather than erroring the request.
+    const currentQuotas: Record<string, number> = Object.fromEntries(
+      ctx.quotas.map(q => [q.category, q.weeklyCount ?? 0])
+    );
+    let calibration: Record<string, ReturnType<typeof calibrateQuotas>[string]> = {};
+    try {
+      calibration = calibrateQuotas(await getAllWeeklyStats(), currentQuotas, {
+        currentWeekStart: ctx.weekStartStr,
+      });
+    } catch (err) {
+      console.error('[Candidates] Failed to compute quota calibration:', err);
+    }
 
     // Apply priority flags + category overrides, then bucket by category.
     const tasksByCategory = new Map<string, CandidateTask[]>();
@@ -80,6 +97,26 @@ export async function POST(request: NextRequest) {
           deferredCount: ctx.deferredCountsByCategory[q.category] ?? 0,
           autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
           targetLengthMinutes: parseTargetLength(ctx.config.taskQuotas[q.category]?.targetLength) || 30,
+          ...(calibration[q.category]
+            ? {
+                calibration: {
+                  weeksOfData: calibration[q.category].weeksOfData,
+                  avgCompletionRate: calibration[q.category].avgCompletionRate,
+                  currentQuota: calibration[q.category].currentQuota,
+                  ...(calibration[q.category].suggestedQuota != null
+                    ? { suggestedQuota: calibration[q.category].suggestedQuota }
+                    : {}),
+                  ...(calibration[q.category].reason ? { reason: calibration[q.category].reason } : {}),
+                  blockSamples: calibration[q.category].blockSamples,
+                  ...(calibration[q.category].suggestedBlockMinutes != null
+                    ? { suggestedBlockMinutes: calibration[q.category].suggestedBlockMinutes }
+                    : {}),
+                  ...(calibration[q.category].blockReason
+                    ? { blockReason: calibration[q.category].blockReason }
+                    : {}),
+                },
+              }
+            : {}),
           candidates: list.map(t => ({
             id: t.gid ?? t.adhocId ?? '',
             gid: t.gid,

@@ -81,6 +81,12 @@ export interface RitualCalendars {
   grooming?: string;
   retro?: string;
   delegationReview?: string;
+  walk?: string;
+  consulting?: string;
+  sideProjects?: string;
+  newBookies?: string;
+  reading?: string;
+  learning?: string;
 }
 
 // Parse+validate per-kind ritual calendars from untrusted JSON. Keep only the
@@ -90,7 +96,21 @@ function parseRitualCalendars(raw: unknown): RitualCalendars | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const src = raw as Record<string, unknown>;
   const out: RitualCalendars = {};
-  for (const kind of ['lunch', 'emails', 'exercise', 'kindleNotes', 'grooming', 'retro'] as const) {
+  for (const kind of [
+    'lunch',
+    'emails',
+    'exercise',
+    'kindleNotes',
+    'grooming',
+    'retro',
+    'delegationReview',
+    'walk',
+    'consulting',
+    'sideProjects',
+    'newBookies',
+    'reading',
+    'learning',
+  ] as const) {
     const v = src[kind];
     if (typeof v === 'string' && v.trim()) out[kind] = v.trim();
   }

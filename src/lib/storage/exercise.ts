@@ -51,6 +51,7 @@ export interface CreateSessionInput {
   date: string;
   type: string;
   durationMinutes?: number;
+  durationSource?: ExerciseSession['durationSource'];
   distanceKm?: number;
   intensity?: ExerciseSession['intensity'];
   notes?: string;
@@ -91,6 +92,7 @@ export async function createSession(
     ...(input.durationMinutes !== undefined
       ? { durationMinutes: Math.round(input.durationMinutes) }
       : {}),
+    ...(input.durationSource ? { durationSource: input.durationSource } : {}),
     ...(typeof input.distanceKm === 'number' && input.distanceKm > 0
       ? { distanceKm: input.distanceKm }
       : {}),
@@ -206,10 +208,26 @@ export async function getSessionsByImportPrefix(prefix: string): Promise<Exercis
 // Scoped to a single entry rather than replacing the whole exercises array:
 // this is written from a phone in a gym, one set at a time, and a whole-array
 // write would lose a concurrent edit (or everything, on a dropped connection).
+// A field left `undefined` in a patch is not asserted (leave it alone); a field
+// set to `null` is an explicit clear (drop it from the entry). Everything else
+// overwrites. Clearing is why this can't be a plain spread: a spread can set a
+// field but never remove one.
+type EntryPatch = { [K in keyof Omit<ExerciseEntry, 'id'>]?: ExerciseEntry[K] | null };
+
+function applyEntryPatch(entry: ExerciseEntry, patch: EntryPatch): ExerciseEntry {
+  const next: ExerciseEntry = { ...entry };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) delete (next as unknown as Record<string, unknown>)[key];
+    else (next as unknown as Record<string, unknown>)[key] = value;
+  }
+  return next;
+}
+
 export async function updateSessionEntry(
   sessionId: string,
   entryId: string,
-  patch: Partial<Omit<ExerciseEntry, 'id'>>,
+  patch: EntryPatch,
   now = new Date().toISOString()
 ): Promise<ExerciseSession | null> {
   const sessions = await getAllSessions();
@@ -223,14 +241,7 @@ export async function updateSessionEntry(
 
   const next: ExerciseSession = {
     ...existing,
-    exercises: existing.exercises.map(e =>
-      e.id === entryId
-        ? {
-            ...e,
-            ...Object.fromEntries(Object.entries(canonicalPatch).filter(([, v]) => v !== undefined)),
-          }
-        : e
-    ),
+    exercises: existing.exercises.map(e => (e.id === entryId ? applyEntryPatch(e, canonicalPatch) : e)),
     updatedAt: now,
   };
   await writeSessions(sessions.map(s => (s.id === sessionId ? next : s)));

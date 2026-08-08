@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { removeSessionEntry, updateSessionEntry } from '@/lib/storage/exercise';
 
+// A reps-in-reserve rating: a number 0-10, null to clear an existing rating, or
+// undefined when the value is unusable (out of range / non-numeric) and should be
+// left alone. updateSessionEntry treats null as an explicit clear and undefined as
+// "not asserted", so a bad value never disturbs a rating already stored.
+function parseRir(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 10 ? n : undefined;
+}
+
 // PATCH /api/exercise/:id/entries/:entryId
 //
 // One exercise at a time: tick it done, correct the weight actually used, add a
@@ -27,6 +37,9 @@ export async function PATCH(
         ? { weightKg: body.weightKg === null ? undefined : Number(body.weightKg) }
         : {}),
       ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
+      // Explicit reps-in-reserve, 0-10 (the UI only offers 0-4). null clears it;
+      // an out-of-range or non-numeric value is ignored rather than stored.
+      ...(body.rir !== undefined ? { rir: parseRir(body.rir) } : {}),
     });
     if (!session) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
 

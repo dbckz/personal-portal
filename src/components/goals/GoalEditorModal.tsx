@@ -10,7 +10,7 @@ import { periodLabel, quarterKeyForMonth } from '@/lib/goal-periods';
 import { milestoneDate } from '@/lib/goal-plan';
 // Type-only: goal-inference itself is server-side, so nothing is bundled here.
 import type { InferredGoal } from '@/lib/goal-inference';
-import type { AsanaProject } from '@/types';
+import type { AsanaProject, AsanaTagWithIntegration } from '@/types';
 import type { Goal, GoalEvidenceKind, GoalMilestone, GoalPeriodKind } from '@/types/life';
 
 type EvidenceUnit = 'count' | 'minutes' | 'max-distance-km';
@@ -21,6 +21,11 @@ const EVIDENCE_OPTIONS: Array<{ kind: GoalEvidenceKind; label: string; hint: str
     kind: 'asana-project',
     label: 'Asana project',
     hint: 'Counts tasks completed in the project during the period.',
+  },
+  {
+    kind: 'asana-tag',
+    label: 'Asana tag',
+    hint: 'Counts tasks completed under the tag during the period.',
   },
   {
     kind: 'calendar-category',
@@ -74,8 +79,13 @@ export function GoalEditorModal({
   const [evidenceKind, setEvidenceKind] = useState<GoalEvidenceKind>(goal?.evidence.kind ?? 'manual');
   const [evidenceRef, setEvidenceRef] = useState(goal?.evidence.ref ?? '');
   const [evidenceUnit, setEvidenceUnit] = useState<EvidenceUnit>(goal?.evidence.unit ?? 'count');
+  // The workspace a chosen Asana tag lives in — stored so the resolver reads
+  // exactly one workspace rather than probing all of them.
+  const [evidenceIntegrationId, setEvidenceIntegrationId] = useState(goal?.evidence.integrationId ?? '');
   const [parentGoalId, setParentGoalId] = useState(goal?.parentGoalId ?? '');
   const [projects, setProjects] = useState<AsanaProject[]>([]);
+  const [tags, setTags] = useState<AsanaTagWithIntegration[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,6 +109,22 @@ export function GoalEditorModal({
       .then(res => setProjects(res.projects))
       .catch(err => console.error('Failed to load Asana projects:', err));
   }, [evidenceKind, projects.length]);
+
+  useEffect(() => {
+    if (evidenceKind !== 'asana-tag' || tags.length > 0) return;
+    api
+      .getAsanaTags()
+      .then(res => setTags(res.tags))
+      .catch(err => console.error('Failed to load Asana tags:', err));
+  }, [evidenceKind, tags.length]);
+
+  useEffect(() => {
+    if (evidenceKind !== 'calendar-category' || categories.length > 0) return;
+    api
+      .getGoalCategories()
+      .then(res => setCategories(res.categories))
+      .catch(err => console.error('Failed to load goal categories:', err));
+  }, [evidenceKind, categories.length]);
 
   const eligibleParents = useMemo(() => {
     // Parents only apply to monthly goals; quarterKeyForMonth would choke on a
@@ -128,6 +154,7 @@ export function GoalEditorModal({
     setEvidenceKind(proposal.evidence.kind);
     setEvidenceRef(proposal.evidence.ref ?? '');
     setEvidenceUnit((proposal.evidence.unit as EvidenceUnit) ?? 'count');
+    setEvidenceIntegrationId(proposal.evidence.integrationId ?? '');
     setMilestones(proposal.milestones);
     setPlanSource('ai');
   };
@@ -191,6 +218,10 @@ export function GoalEditorModal({
         ...(evidenceKind !== 'manual' && evidenceRef.trim() ? { ref: evidenceRef.trim() } : {}),
         ...(evidenceKind === 'calendar-category' || evidenceKind === 'exercise'
           ? { unit: evidenceUnit }
+          : {}),
+        // A tag gid is workspace-specific, so pin the resolver to its workspace.
+        ...(evidenceKind === 'asana-tag' && evidenceIntegrationId
+          ? { integrationId: evidenceIntegrationId }
           : {}),
       },
       plan: cleanMilestones,
@@ -339,6 +370,7 @@ export function GoalEditorModal({
                 setEvidenceKind(e.target.value as GoalEvidenceKind);
                 setEvidenceRef('');
                 setEvidenceUnit('count');
+                setEvidenceIntegrationId('');
               }}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
             >
@@ -369,6 +401,28 @@ export function GoalEditorModal({
             </Field>
           )}
 
+          {evidenceKind === 'asana-tag' && (
+            <Field label="Tag" htmlFor="goal-tag">
+              <select
+                id="goal-tag"
+                value={evidenceRef}
+                onChange={e => {
+                  const gid = e.target.value;
+                  setEvidenceRef(gid);
+                  setEvidenceIntegrationId(tags.find(t => t.gid === gid)?.integrationId ?? '');
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
+              >
+                <option value="">Choose a tag…</option>
+                {tags.map(t => (
+                  <option key={`${t.integrationId}-${t.gid}`} value={t.gid}>
+                    {t.name} ({t.integrationName})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+
           {(evidenceKind === 'calendar-category' || evidenceKind === 'exercise') && (
             <div className="grid grid-cols-2 gap-3">
               <Field
@@ -380,8 +434,16 @@ export function GoalEditorModal({
                   value={evidenceRef}
                   onChange={e => setEvidenceRef(e.target.value)}
                   placeholder={evidenceKind === 'exercise' ? 'run' : 'Deep work'}
+                  list={evidenceKind === 'calendar-category' ? 'goal-category-options' : undefined}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
                 />
+                {evidenceKind === 'calendar-category' && (
+                  <datalist id="goal-category-options">
+                    {categories.map(c => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                )}
               </Field>
               <Field label="Count" htmlFor="goal-evidence-unit">
                 <select

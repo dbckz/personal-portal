@@ -6,10 +6,12 @@
  */
 jest.mock('@/lib/scheduling/gather', () => ({ gatherWeekContext: jest.fn() }));
 jest.mock('@/lib/integration-storage', () => ({ getEnabledAsanaIntegrations: jest.fn() }));
+jest.mock('@/lib/user-data-storage', () => ({ getAllWeeklyStats: jest.fn() }));
 
 import { POST } from '@/app/api/scheduling/candidates/route';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { getEnabledAsanaIntegrations } from '@/lib/integration-storage';
+import { getAllWeeklyStats } from '@/lib/user-data-storage';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 import type { CandidateTask } from '@/lib/scheduling/types';
 
@@ -54,6 +56,7 @@ const task = (over: Partial<CandidateTask> & { gid: string; title: string }): Ca
 beforeEach(() => {
   jest.clearAllMocks();
   (getEnabledAsanaIntegrations as jest.Mock).mockResolvedValue([]);
+  (getAllWeeklyStats as jest.Mock).mockResolvedValue({});
 });
 
 describe('candidates — carry-over surfacing', () => {
@@ -72,6 +75,35 @@ describe('candidates — carry-over surfacing', () => {
       expect.objectContaining({ carriedOver: true, carriedFromWeek: '2026-07-13' })
     );
     expect(byId['g-plain']).not.toHaveProperty('carriedOver');
+  });
+
+  it('surfaces per-category calibration from recent weekly history', async () => {
+    setCandidates([task({ gid: 'g1', title: 'Draft' })]);
+    // Four complete weeks that scheduled the full quota of 3 Writing tasks but
+    // finished only one each → 33% completion, so the quota should be nudged down.
+    const wk = (weekStart: string) => {
+      const tasks: Record<string, unknown> = {};
+      for (let i = 0; i < 3; i++) {
+        tasks[`${weekStart}-${i}`] = {
+          taskId: `${weekStart}-${i}`,
+          category: 'Writing',
+          scheduledAt: `${weekStart}T09:00:00.000Z`,
+          outcome: i === 0 ? 'done' : 'carried',
+        };
+      }
+      return [weekStart, { weekStart, createdAt: '', updatedAt: '', tasks, integrations: {} }];
+    };
+    (getAllWeeklyStats as jest.Mock).mockResolvedValue(
+      Object.fromEntries(
+        ['2026-06-15', '2026-06-22', '2026-06-29', '2026-07-06'].map(wk)
+      )
+    );
+
+    const out = await candidates();
+    const cal = out.categories[0].calibration;
+    expect(cal.weeksOfData).toBe(4);
+    expect(cal.avgCompletionRate).toBeCloseTo(1 / 3);
+    expect(cal.suggestedQuota).toBe(2);
   });
 
   it('sorts priorities first, then carried-over, then the rest', async () => {

@@ -260,7 +260,12 @@ export async function POST(request: NextRequest) {
           }
         } else if (isGrouped) {
           // Record each listed task as scheduled to the shared container event, so
-          // they show as scheduled and drop out of future candidate pools.
+          // they show as scheduled and drop out of future candidate pools. The
+          // block's time is split evenly across its members for estimate-vs-actual
+          // evidence (a 90-minute block of 3 tasks → 30m each).
+          const groupedMinutes = Math.round(
+            proposal.durationMinutes / Math.max(1, proposal.tasks!.length)
+          );
           for (const t of proposal.tasks!) {
             if (t.gid || t.adhocId) {
               const taskId = (t.gid ?? t.adhocId)!;
@@ -269,6 +274,7 @@ export async function POST(request: NextRequest) {
                 taskId,
                 category: proposal.category,
                 title: t.title,
+                scheduledMinutes: groupedMinutes,
                 ...(t.integrationId ? { integrationId: t.integrationId } : {}),
               });
             }
@@ -305,6 +311,7 @@ export async function POST(request: NextRequest) {
               taskId,
               category: proposal.category,
               title: proposal.task.title,
+              scheduledMinutes: proposal.durationMinutes,
               ...(integrationId ? { integrationId } : {}),
             });
           }

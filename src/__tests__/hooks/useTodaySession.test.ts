@@ -63,8 +63,14 @@ beforeEach(() => {
   mockApi.startExerciseSession.mockResolvedValue({ session: startedSession(), resumed: false });
   mockApi.updateExerciseEntry.mockImplementation(async (sid, eid, patch) => {
     const s = startedSession();
+    // A null in the patch is an explicit clear; drop those keys so the mocked
+    // entry stays a valid ExerciseEntry, mirroring the storage layer.
+    const applied = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
     return {
-      session: { ...s, exercises: (s.exercises ?? []).map(e => (e.id === eid ? { ...e, ...patch } : e)) },
+      session: {
+        ...s,
+        exercises: (s.exercises ?? []).map(e => (e.id === eid ? { ...e, ...applied } : e)),
+      },
     };
   });
 });

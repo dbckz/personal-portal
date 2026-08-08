@@ -11,6 +11,10 @@ import path from 'path';
 // this repo runs on two machines, and one of them may not have been migrated
 // yet. Starting against an empty directory would look exactly like data loss.
 function resolveDataDir(): string {
+  // Explicit override wins — the staging instance points this at a copied
+  // data directory so its writes never touch production data.
+  const override = process.env.PORTAL_DATA_DIR;
+  if (override) return override;
   const current = path.join(homedir(), '.claude', 'data', 'portal');
   const legacy = path.join(homedir(), '.claude', 'data', 'calendar');
   // This runs at module load, and tests that mock `fs` leave existsSync

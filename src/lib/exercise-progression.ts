@@ -20,6 +20,9 @@ export interface ProgressionPoint {
   // sets × reps × weight for the session — the usual rough proxy for work done.
   volume?: number;
   notes?: string;
+  // Explicit reps-in-reserve logged for the exercise, if any. Carried so the
+  // recommender can prefer it over the effort it parses out of `notes`.
+  rir?: number;
 }
 
 export interface ExerciseProgression {
@@ -80,6 +83,7 @@ export function buildProgressions(
         ...(entry.durationMinutes !== undefined ? { durationMinutes: entry.durationMinutes } : {}),
         ...(entry.distanceKm !== undefined ? { distanceKm: entry.distanceKm } : {}),
         ...(entry.notes ? { notes: entry.notes } : {}),
+        ...(entry.rir !== undefined ? { rir: entry.rir } : {}),
       };
       if (entry.weightKg !== undefined && entry.sets && entry.reps) {
         point.volume = entry.weightKg * entry.sets * entry.reps;

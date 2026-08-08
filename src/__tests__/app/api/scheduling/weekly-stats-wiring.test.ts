@@ -147,6 +147,45 @@ describe('plan confirm → weekly record', () => {
       expect.objectContaining({ taskId: 'w1', category: 'Writing', title: 'Draft the brief' }),
     ]);
   });
+
+  it('records block length per task: single = full block, grouped = split evenly', async () => {
+    await post(planConfirm, {
+      weekStart: '2026-07-20',
+      proposals: [
+        {
+          id: 'p-group',
+          category: 'Engagement',
+          date: '2026-07-21',
+          start: '10:00',
+          durationMinutes: 90,
+          reason: 'quota',
+          tasks: [
+            { gid: 'e1', title: 'Email Ana', integrationId: 'ai1' },
+            { gid: 'e2', title: 'Email Bo', integrationId: 'ai1' },
+            { gid: 'e3', title: 'Email Cy', integrationId: 'ai1' },
+          ],
+        },
+        {
+          id: 'p-single',
+          category: 'Writing',
+          date: '2026-07-22',
+          start: '09:00',
+          durationMinutes: 120,
+          reason: 'quota',
+          task: { gid: 'w1', title: 'Draft the brief', integrationId: 'ai1' },
+        },
+      ],
+    });
+
+    const [, tasks] = (recordWeeklyTasks as jest.Mock).mock.calls[0];
+    // 90-minute grouped block over 3 tasks → 30m each; single keeps its full 120.
+    expect(tasks).toEqual([
+      expect.objectContaining({ taskId: 'e1', scheduledMinutes: 30 }),
+      expect.objectContaining({ taskId: 'e2', scheduledMinutes: 30 }),
+      expect.objectContaining({ taskId: 'e3', scheduledMinutes: 30 }),
+      expect.objectContaining({ taskId: 'w1', scheduledMinutes: 120 }),
+    ]);
+  });
 });
 
 describe('replan / daily-review confirm → weekly outcomes', () => {

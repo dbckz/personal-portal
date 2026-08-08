@@ -80,6 +80,12 @@ export interface ReplanBlock {
     | 'grooming'
     | 'retro'
     | 'delegationReview'
+    | 'walk'
+    | 'consulting'
+    | 'sideProjects'
+    | 'newBookies'
+    | 'reading'
+    | 'learning'
     | 'break';
   isBreak?: boolean;
   // A CATEGORY CONTAINER: one block holding several tasks of a category (a
@@ -478,9 +484,10 @@ export function planReplan(input: ReplanInput): ReplanResult {
     const usesRitualWindow =
       block.ritualKind === 'lunch' ||
       block.ritualKind === 'exercise' ||
+      block.ritualKind === 'walk' ||
       block.ritualKind === 'emails';
     let windows = usesRitualWindow
-      ? ritualWindows(block.ritualKind as 'lunch' | 'exercise' | 'emails', workingDays)
+      ? ritualWindows(block.ritualKind as 'lunch' | 'exercise' | 'walk' | 'emails', workingDays)
       : buildWindowsForTask(
           undefined,
           preferredWindowsForCategory(config, block.category, workingHoursEnd),
@@ -574,7 +581,10 @@ export function planReplan(input: ReplanInput): ReplanResult {
 // 11:30–13:00 (falling back to 11:00–14:00); exercise prefers a 15:00 start,
 // widening outward toward 13:00–18:00; emails prefers the final two hours of the
 // working day (falling back to the wider afternoon from 12:00).
-function ritualWindows(kind: 'lunch' | 'exercise' | 'emails', workingDays: WorkingDay[]): Window[] {
+function ritualWindows(
+  kind: 'lunch' | 'exercise' | 'walk' | 'emails',
+  workingDays: WorkingDay[]
+): Window[] {
   const at = (day: WorkingDay, h: number, m: number): number =>
     new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), h, m, 0, 0).getTime();
 
@@ -583,6 +593,12 @@ function ritualWindows(kind: 'lunch' | 'exercise' | 'emails', workingDays: Worki
       ? [
           day => ({ startMs: at(day, 11, 30), endMs: at(day, 13, 0) }),
           day => ({ startMs: at(day, 11, 0), endMs: at(day, 14, 0) }),
+        ]
+      : kind === 'walk'
+      ? [
+          // Mirror the placer: mid-morning ideal, widening around it.
+          day => ({ startMs: at(day, 10, 30), endMs: at(day, 11, 30) }),
+          day => ({ startMs: at(day, 9, 30), endMs: at(day, 12, 0) }),
         ]
       : kind === 'exercise'
         ? [

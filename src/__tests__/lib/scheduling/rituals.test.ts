@@ -22,6 +22,12 @@ import {
   BREAK_TITLE,
   DELEGATION_REVIEW_TITLE,
   DELEGATION_REVIEW_WEEKLY_COUNT,
+  WALK_TITLE,
+  CONSULTING_TITLE,
+  SIDE_PROJECTS_TITLE,
+  NEW_BOOKIES_TITLE,
+  READING_TITLE,
+  LEARNING_TITLE,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -213,7 +219,12 @@ describe('proposeRitualBlocks', () => {
 
   it('falls back to 11:00–14:00 when the ideal lunch window is busy', () => {
     // Block 11:30–13:00 entirely; lunch should fall back to a free slot 11:00–14:00.
-    const blocks = run({ busyIntervals: [busy(11, 30, 13, 0)] });
+    // Mark the walk as already present so it doesn't auto-place into the late
+    // morning and eat the 11:00 fallback slot — this test isolates lunch.
+    const blocks = run({
+      busyIntervals: [busy(11, 30, 13, 0)],
+      existingRitualTitlesByDate: { '2026-07-13': new Set([WALK_TITLE]) },
+    });
     const lunch = blocks.find(b => b.title === LUNCH_TITLE);
     expect(lunch).toBeDefined();
     // 11:00 is free within the fallback window (before the 11:30 block).
@@ -414,7 +425,13 @@ describe('proposeRitualBlocks — weekly rituals (grooming + retro)', () => {
 });
 
 describe('placeWeekRituals — prep/propose determinism', () => {
-  const wide = makeConfig({ workingHours: { start: '08:30', end: '19:00' } });
+  // A full working week so the whole ritual set (daily + weekly, including the
+  // walk and the weekly work singles) has room to land without spilling into the
+  // mornings the synthetic prep below occupies.
+  const wide = makeConfig({
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    workingHours: { start: '08:30', end: '19:00' },
+  });
 
   const placeWith = (busyIntervals: BusyInterval[]) =>
     placeWeekRituals({
@@ -432,10 +449,11 @@ describe('placeWeekRituals — prep/propose determinism', () => {
     expect(exercise!.start).toBe('15:00');
 
     // Prep is then placed with the rituals reserved, so it lands elsewhere; that
-    // accepted prep block never overlaps a ritual slot.
+    // accepted prep block never overlaps a ritual slot. Early Monday (before the
+    // 10:30 walk) is ritual-free, so it stands in for a real prep placement.
     const acceptedPrep: BusyInterval = {
-      start: new Date(2026, 6, 13, 10, 0),
-      end: new Date(2026, 6, 13, 11, 0),
+      start: new Date(2026, 6, 13, 8, 30),
+      end: new Date(2026, 6, 13, 9, 30),
     };
 
     // Propose step: rituals placed against calendar + accepted prep. Because the
@@ -445,8 +463,10 @@ describe('placeWeekRituals — prep/propose determinism', () => {
   });
 
   it('prep cannot take the 15:00 exercise slot once rituals are reserved first', () => {
+    // Wednesday carries the daily rituals plus a single weekly work block, so it
+    // has room for a same-day prep while still reserving the 15:00 exercise slot.
     const rituals = placeWith([]);
-    const exercise = rituals.find(b => b.title === EXERCISE_TITLE)!;
+    const exercise = rituals.find(b => b.title === EXERCISE_TITLE && b.date === '2026-07-15')!;
     expect(exercise.start).toBe('15:00');
 
     // Mirror the prep-candidates route: rituals join the busy set before prep.
@@ -456,8 +476,8 @@ describe('placeWeekRituals — prep/propose determinism', () => {
         {
           eventId: 'm1',
           title: 'Sync',
-          startMs: new Date(2026, 6, 13, 17, 0).getTime(),
-          date: '2026-07-13',
+          startMs: new Date(2026, 6, 15, 17, 0).getTime(),
+          date: '2026-07-15',
           durationMinutes: 60,
         },
       ],
@@ -469,10 +489,10 @@ describe('placeWeekRituals — prep/propose determinism', () => {
     expect(placed).toHaveLength(1);
     const prep = placed[0];
     const [ph, pm] = prep.start.split(':').map(Number);
-    const prepStartMs = new Date(2026, 6, 13, ph, pm).getTime();
+    const prepStartMs = new Date(2026, 6, 15, ph, pm).getTime();
     const prepEndMs = prepStartMs + prep.durationMinutes * 60 * 1000;
-    const exStartMs = new Date(2026, 6, 13, 15, 0).getTime();
-    const exEndMs = new Date(2026, 6, 13, 16, 0).getTime();
+    const exStartMs = new Date(2026, 6, 15, 15, 0).getTime();
+    const exEndMs = new Date(2026, 6, 15, 16, 0).getTime();
     // Prep must not overlap the reserved 15:00–16:00 exercise slot.
     expect(prepStartMs < exEndMs && prepEndMs > exStartMs).toBe(false);
   });
@@ -511,5 +531,123 @@ describe('delegation review ritual', () => {
     // It forms part of a work run rather than splitting one.
     expect(isBreakTitle(DELEGATION_REVIEW_TITLE)).toBe(false);
     expect(isRitualTitle(DELEGATION_REVIEW_TITLE)).toBe(true);
+  });
+});
+
+describe('walk ritual (daily, break)', () => {
+  it('resolves to its own kind, a daily cadence, and reads as a break', () => {
+    expect(ritualKindForTitle(WALK_TITLE)).toBe('walk');
+    expect(ritualCadenceForTitle(WALK_TITLE)).toBe('daily');
+    expect(isBreakTitle(WALK_TITLE)).toBe(true);
+    expect(isRitualTitle(WALK_TITLE)).toBe(true);
+    expect(isRitualLikeTitle('walk')).toBe(true);
+  });
+
+  it('places a 45-min walk mid-morning (from 10:30) every working day, as a break', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
+    const walks = blocks.filter(b => b.title === WALK_TITLE);
+    expect(walks).toHaveLength(5); // one per working day
+    expect(new Set(walks.map(w => w.date)).size).toBe(5);
+    for (const w of walks) {
+      expect(w.kind).toBe('ritual');
+      expect(w.category).toBe('Walk');
+      expect(w.durationMinutes).toBe(45);
+      expect(w.start).toBe('10:30'); // earliest free within the ideal window
+    }
+  });
+
+  it('tags the walk block as a break busy interval (splits work runs)', () => {
+    const walk = run({}).find(b => b.title === WALK_TITLE)!;
+    expect(proposedBlockToBusyInterval(walk).isBreak).toBe(true);
+  });
+
+  it('widens to 09:30–12:00 when the ideal 10:30–11:30 window is busy', () => {
+    // Block the ideal window; the walk falls back to the earliest free 45-min
+    // slot in 09:30–12:00 (here 09:30, before the block).
+    const blocks = run({ busyIntervals: [busy(10, 30, 11, 30)] });
+    const walk = blocks.find(b => b.title === WALK_TITLE);
+    expect(walk).toBeDefined();
+    expect(walk!.start).toBe('09:30');
+  });
+
+  it('dedupes against an existing walk that day', () => {
+    const blocks = run({
+      existingRitualTitlesByDate: { '2026-07-13': new Set([WALK_TITLE]) },
+    });
+    expect(blocks.find(b => b.title === WALK_TITLE)).toBeUndefined();
+  });
+
+  it('routes to its own calendar, else the exercise (personal) calendar', () => {
+    const scheduling = {
+      ritualCalendars: { exercise: 'personal', walk: 'walk-cal' },
+    } as WorkflowConfig['scheduling'];
+    expect(ritualIntegrationIdForKind(scheduling, 'walk')).toBe('walk-cal');
+    const noWalkCal = {
+      ritualCalendars: { exercise: 'personal' },
+    } as WorkflowConfig['scheduling'];
+    expect(ritualIntegrationIdForKind(noWalkCal, 'walk')).toBe('personal');
+  });
+});
+
+describe('weekly WORK singles (consulting / side projects / new bookies / reading / learning)', () => {
+  const week = {
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    workingHours: { start: '08:30', end: '19:00' },
+  };
+
+  const singles = [
+    { title: CONSULTING_TITLE, category: 'Consulting', kind: 'consulting', minutes: 60 },
+    { title: SIDE_PROJECTS_TITLE, category: 'Side projects', kind: 'sideProjects', minutes: 90 },
+    { title: NEW_BOOKIES_TITLE, category: 'New bookies', kind: 'newBookies', minutes: 30 },
+    { title: READING_TITLE, category: 'Reading', kind: 'reading', minutes: 60 },
+    { title: LEARNING_TITLE, category: 'Learning', kind: 'learning', minutes: 60 },
+  ] as const;
+
+  it('resolves each to its own kind and a weekly cadence', () => {
+    for (const s of singles) {
+      expect(ritualKindForTitle(s.title)).toBe(s.kind);
+      expect(ritualCadenceForTitle(s.title)).toBe('weekly');
+      expect(isBreakTitle(s.title)).toBe(false); // work, not a break
+      expect(isRitualTitle(s.title)).toBe(true);
+    }
+  });
+
+  it('places each ONCE for the week at its own duration', () => {
+    const blocks = run({ scheduling: week });
+    for (const s of singles) {
+      const placed = blocks.filter(b => b.title === s.title);
+      expect(placed).toHaveLength(1);
+      expect(placed[0].kind).toBe('ritual');
+      expect(placed[0].category).toBe(s.category);
+      expect(placed[0].durationMinutes).toBe(s.minutes);
+    }
+  });
+
+  it('spreads the singles across distinct days rather than piling onto Monday', () => {
+    const blocks = run({ scheduling: week });
+    const days = singles.map(s => blocks.find(b => b.title === s.title)!.date);
+    // Five singles, five working days → each lands on a different day.
+    expect(new Set(days).size).toBe(days.length);
+  });
+
+  it('dedupes a single by title across the whole week (present any day → skip)', () => {
+    const blocks = run({
+      scheduling: week,
+      existingRitualTitlesByDate: { '2026-07-15': new Set([CONSULTING_TITLE]) },
+    });
+    expect(blocks.find(b => b.title === CONSULTING_TITLE)).toBeUndefined();
+    // The others are unaffected.
+    expect(blocks.find(b => b.title === READING_TITLE)).toBeDefined();
+  });
+
+  it('routes the singles to the emails calendar setting by default, per-kind overridable', () => {
+    const scheduling = {
+      ritualCalendars: { emails: 'om', reading: 'reading-cal' },
+    } as WorkflowConfig['scheduling'];
+    expect(ritualIntegrationIdForKind(scheduling, 'consulting')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'learning')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'reading')).toBe('reading-cal');
   });
 });

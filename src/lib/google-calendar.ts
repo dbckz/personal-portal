@@ -354,6 +354,7 @@ export interface RawCalendarEvent {
   startDate?: string;
   startDateTime?: string;
   endDate?: string;
+  endDateTime?: string;
 }
 
 export async function listEventsInRange(
@@ -392,6 +393,7 @@ export async function listEventsInRange(
         ...(event.start?.date ? { startDate: event.start.date } : {}),
         ...(event.start?.dateTime ? { startDateTime: event.start.dateTime } : {}),
         ...(event.end?.date ? { endDate: event.end.date } : {}),
+        ...(event.end?.dateTime ? { endDateTime: event.end.dateTime } : {}),
       });
     }
 

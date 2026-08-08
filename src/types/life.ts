@@ -208,6 +208,12 @@ export interface ExerciseEntry {
   distanceKm?: number;
   durationMinutes?: number;
   notes?: string;
+  // Explicit reps-in-reserve for the exercise, 0-5: 0 means nothing left in the
+  // tank, 5 means it was comfortably light. Set from the Today checklist's RIR
+  // control. When present it drives the next session's target directly, in
+  // preference to the reps-in-reserve the recommender otherwise parses out of
+  // `notes` (see exercise-targets).
+  rir?: number;
   // Ticked off during the session itself. An entry seeded from a target starts
   // false and is set when the exercise is actually done, so a session can be
   // logged set-by-set in the gym rather than written up afterwards.
@@ -233,6 +239,11 @@ export interface ExerciseSession {
   // Optional: a session imported from the training log has per-exercise detail
   // but no overall duration, and inventing one would be a lie.
   durationMinutes?: number;
+  // Set to 'calendar' when `durationMinutes` was filled in from a same-day timed
+  // exercise event on the Google calendar (see exercise-calendar). Lets a resync
+  // refresh a duration it set itself while never overwriting one a human logged
+  // (which has no durationSource). Absent means the duration, if any, is manual.
+  durationSource?: 'calendar';
   distanceKm?: number;
   intensity?: ExerciseIntensity;
   notes?: string;

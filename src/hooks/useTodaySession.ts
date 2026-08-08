@@ -38,6 +38,9 @@ export interface TodayRow {
   durationMinutes?: number;
   distanceKm?: number;
   notes?: string;
+  // Explicit reps-in-reserve rating, 0-4 from the RIR control. Decides next
+  // session's target when set (see exercise-targets).
+  rir?: number;
   // What to aim for, e.g. "3 × 8 · 40kg".
   targetText?: string;
   // Guidance from the previous workout. Absent on added-on-the-spot exercises.
@@ -104,6 +107,7 @@ function rowFromEntry(e: ExerciseEntry): TodayRow {
     durationMinutes: e.durationMinutes,
     distanceKm: e.distanceKm,
     notes: e.notes,
+    rir: e.rir,
     targetText: e.targetText,
   };
 }
@@ -121,6 +125,9 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
     durationMinutes: e.durationMinutes ?? row.durationMinutes,
     distanceKm: e.distanceKm ?? row.distanceKm,
     notes: e.notes ?? row.notes,
+    // No fallback: rir has no target-side source, so the entry is the whole
+    // truth — a cleared rating must read as cleared, not revert to the old row.
+    rir: e.rir,
     targetText: e.targetText ?? row.targetText,
   };
 }
@@ -317,6 +324,17 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     [runWrite]
   );
 
+  // Explicit reps-in-reserve. A number sets the rating; null taps it off again.
+  const commitRir = useCallback(
+    (row: TodayRow, rir: number | null) =>
+      runWrite(
+        row,
+        r => ({ ...r, rir: rir ?? undefined }),
+        (s, id) => api.updateExerciseEntry(s.id, id, { rir }).then(res => res.session)
+      ),
+    [runWrite]
+  );
+
   const addExercise = useCallback(
     async (input: { name: string; volume?: string; load?: string }) => {
       setError(null);
@@ -383,6 +401,7 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     toggleDone,
     commitField,
     commitNote,
+    commitRir,
     addExercise,
     removeRow,
   };

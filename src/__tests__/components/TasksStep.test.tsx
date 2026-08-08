@@ -18,7 +18,8 @@ function renderStep(
     onOpenTask: jest.Mock;
     toggleSelection: jest.Mock;
     deletingIds: Set<string>;
-  }> = {}
+  }> = {},
+  catOver: Partial<WeekCandidateCategory> = {}
 ) {
   const cat: WeekCandidateCategory = {
     category: 'Writing',
@@ -27,6 +28,7 @@ function renderStep(
     autoSelect: false,
     targetLengthMinutes: 60,
     candidates,
+    ...catOver,
   };
   const props = {
     deleteTask: handlers.deleteTask ?? jest.fn(),
@@ -81,6 +83,46 @@ describe('TasksStep delete', () => {
     renderStep([candidate({ id: 'g1' })], { deletingIds: new Set(['g1']) });
     expect(screen.getByLabelText('Deleting "Write the brief"')).toBeInTheDocument();
     expect(screen.queryByLabelText('Delete "Write the brief"')).not.toBeInTheDocument();
+  });
+});
+
+describe('TasksStep calibration hints', () => {
+  it('shows the quota + block-size hints when there is enough history', () => {
+    renderStep([candidate({ id: 'g1' })], {}, {
+      calibration: {
+        weeksOfData: 6,
+        avgCompletionRate: 0.58,
+        currentQuota: 5,
+        suggestedQuota: 4,
+        reason: 'x',
+        blockSamples: 8,
+        suggestedBlockMinutes: 60,
+        blockReason: 'y',
+      },
+    });
+    expect(screen.getByText(/Completed 58% of scheduled over 6 wks/)).toBeInTheDocument();
+    expect(screen.getByText(/suggest 4\/wk instead of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Done tasks here usually got 60m/)).toBeInTheDocument();
+  });
+
+  it('suppresses the quota line below three weeks of data', () => {
+    renderStep([candidate({ id: 'g1' })], {}, {
+      calibration: { weeksOfData: 2, avgCompletionRate: 0.4, currentQuota: 5, blockSamples: 0 },
+    });
+    expect(screen.queryByText(/of scheduled over/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses the block hint below five samples', () => {
+    renderStep([candidate({ id: 'g1' })], {}, {
+      calibration: {
+        weeksOfData: 6,
+        avgCompletionRate: 0.9,
+        currentQuota: 5,
+        blockSamples: 3,
+        suggestedBlockMinutes: 60,
+      },
+    });
+    expect(screen.queryByText(/Done tasks here usually got/)).not.toBeInTheDocument();
   });
 });
 

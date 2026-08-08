@@ -33,6 +33,9 @@ export interface WeeklyTaskInput {
   title?: string;
   integrationId?: string;
   outcome?: WeeklyTaskOutcomeKind; // defaults to 'scheduled'
+  // Minutes the task's block reserved (grouped blocks split evenly). Recorded as
+  // estimate-vs-actual evidence; only overwrites a stored value when supplied.
+  scheduledMinutes?: number;
 }
 
 // Record tasks against a week. New task ids are added as 'scheduled' (or the
@@ -64,6 +67,9 @@ export async function recordWeeklyTasks(
       if (t.integrationId) next.integrationId = t.integrationId;
       // A task re-classified by a later plan keeps its newest category.
       if (t.category) next.category = t.category;
+      // A re-scheduled task keeps its newest block length; absent leaves the
+      // stored value intact (an outcome-only update never drops it).
+      if (t.scheduledMinutes != null) next.scheduledMinutes = t.scheduledMinutes;
       record.tasks[t.taskId] = next;
       continue;
     }
@@ -75,6 +81,7 @@ export async function recordWeeklyTasks(
       scheduledAt: at,
       outcome: t.outcome ?? 'scheduled',
       ...(t.outcome && t.outcome !== 'scheduled' ? { outcomeAt: at } : {}),
+      ...(t.scheduledMinutes != null ? { scheduledMinutes: t.scheduledMinutes } : {}),
     };
   }
 

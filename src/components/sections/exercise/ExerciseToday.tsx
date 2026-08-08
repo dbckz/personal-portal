@@ -7,6 +7,7 @@ import { Check, ChevronDown, ChevronRight, Loader2, Plus, Trash2, X } from 'luci
 import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { ActionBadge, FailureTag, KindTag } from './action-badge';
+import { RirChips } from './rir-chips';
 
 // The desktop "Today" tab: today's workout as an interactive checklist. Every
 // row carries the guidance (what to aim for and why, from last time) alongside
@@ -25,6 +26,7 @@ export function ExerciseToday() {
     toggleDone,
     commitField,
     commitNote,
+    commitRir,
     addExercise,
     removeRow,
   } = useTodaySession();
@@ -77,6 +79,7 @@ export function ExerciseToday() {
             onToggleDone={() => toggleDone(row)}
             onCommitField={patch => commitField(row, patch)}
             onCommitNote={note => commitNote(row, note)}
+            onCommitRir={rir => commitRir(row, rir)}
             onRemove={() => removeRow(row)}
           />
         ))}
@@ -114,6 +117,7 @@ function RowCard({
   onToggleDone,
   onCommitField,
   onCommitNote,
+  onCommitRir,
   onRemove,
 }: {
   row: TodayRow;
@@ -123,6 +127,7 @@ function RowCard({
   onToggleDone: () => void;
   onCommitField: (patch: FieldPatch) => void;
   onCommitNote: (note: string) => void;
+  onCommitRir: (rir: number | null) => void;
   onRemove: () => void;
 }) {
   const [note, setNote] = useState(row.notes ?? '');
@@ -228,9 +233,11 @@ function RowCard({
               className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm"
             />
           </label>
+          <RirChips value={row.rir} onChange={onCommitRir} />
+
           <p className="mt-1 text-[11px] text-gray-400">
-            This note sets next session&apos;s target, so &ldquo;could have done 2 more&rdquo; is
-            worth writing.
+            The rating (or a note like &ldquo;could have done 2 more&rdquo;) sets next
+            session&apos;s target. A rating wins if you set one.
           </p>
 
           <button

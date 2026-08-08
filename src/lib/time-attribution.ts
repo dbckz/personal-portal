@@ -50,9 +50,25 @@ const RITUAL_CATEGORY_BY_KIND: Record<string, string> = {
   kindleNotes: 'Kindle notes',
   grooming: 'Backlog grooming',
   retro: 'Retrospective',
+  consulting: 'Consulting',
+  sideProjects: 'Side projects',
+  newBookies: 'New bookies',
+  reading: 'Reading',
+  learning: 'Learning',
 };
 
 const RITUAL_CATEGORIES = new Set(Object.values(RITUAL_CATEGORY_BY_KIND));
+
+// The fixed categories the time-tracker can emit regardless of the workflow
+// config: real meetings, meeting prep, the work rituals, and the catch-all.
+// Offered as calendar-category goal suggestions alongside configured and
+// observed ones.
+export const ATTRIBUTION_CATEGORIES: string[] = [
+  MEETINGS_CATEGORY,
+  PREP_CATEGORY,
+  OTHER_CATEGORY,
+  ...RITUAL_CATEGORIES,
+];
 
 // Which segment wins when two counted events overlap. Dave's calendar stacks a
 // meeting on top of a task block when a meeting lands mid-block; those minutes

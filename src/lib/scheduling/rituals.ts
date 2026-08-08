@@ -47,6 +47,16 @@ export const RETRO_TITLE = '🔄 Retrospective';
 // the "For review" inbox fills up between runs, and a twice-weekly sweep keeps
 // it from becoming a backlog of its own.
 export const DELEGATION_REVIEW_TITLE = '🤖 Delegation review';
+// Daily BREAK-type walk (paired with a podcast; the pairing is just flavour).
+// Like lunch/exercise it splits work runs and never counts as worked time.
+export const WALK_TITLE = '🚶 Walk';
+// WEEKLY x1 WORK-type rituals (placed once per week, deduped by title across the
+// whole week, spread across distinct days where free slots allow).
+export const CONSULTING_TITLE = '💼 Consulting';
+export const SIDE_PROJECTS_TITLE = '🛠️ Side projects';
+export const NEW_BOOKIES_TITLE = '🎰 New bookies';
+export const READING_TITLE = '📖 Reading';
+export const LEARNING_TITLE = '🎓 Learning';
 // Explicit break events placed after each ~2h work run (see breaks.ts). Tracked
 // in the ritualBlocks store like the daily rituals so reconcile / reset / replan
 // sweeps cover them.
@@ -59,6 +69,12 @@ export const RITUAL_TITLES: readonly string[] = [
   GROOMING_TITLE,
   RETRO_TITLE,
   DELEGATION_REVIEW_TITLE,
+  WALK_TITLE,
+  CONSULTING_TITLE,
+  SIDE_PROJECTS_TITLE,
+  NEW_BOOKIES_TITLE,
+  READING_TITLE,
+  LEARNING_TITLE,
   BREAK_TITLE,
 ];
 
@@ -72,6 +88,12 @@ export type RitualKind =
   | 'grooming'
   | 'retro'
   | 'delegationReview'
+  | 'walk'
+  | 'consulting'
+  | 'sideProjects'
+  | 'newBookies'
+  | 'reading'
+  | 'learning'
   | 'break';
 
 // Ritual cadence. Daily rituals are placed on (and deduped per) each working day;
@@ -83,7 +105,12 @@ export function ritualCadenceForTitle(title: string): RitualCadence {
   return t === GROOMING_TITLE ||
     t === RETRO_TITLE ||
     t === KINDLE_TITLE ||
-    t === DELEGATION_REVIEW_TITLE
+    t === DELEGATION_REVIEW_TITLE ||
+    t === CONSULTING_TITLE ||
+    t === SIDE_PROJECTS_TITLE ||
+    t === NEW_BOOKIES_TITLE ||
+    t === READING_TITLE ||
+    t === LEARNING_TITLE
     ? 'weekly'
     : 'daily';
 }
@@ -103,7 +130,7 @@ export function isExerciseTitle(title: string): boolean {
 }
 export function isBreakTitle(title: string): boolean {
   const t = title.trim();
-  return t === LUNCH_TITLE || t === EXERCISE_TITLE || t === BREAK_TITLE;
+  return t === LUNCH_TITLE || t === EXERCISE_TITLE || t === WALK_TITLE || t === BREAK_TITLE;
 }
 export function isRitualTitle(title: string): boolean {
   return RITUAL_TITLES.includes(title.trim());
@@ -128,7 +155,7 @@ const RITUAL_BASE_NAMES: ReadonlySet<string> = new Set(RITUAL_TITLES.map(ritualB
 // The WORK rituals (emails, kindle notes, grooming, retrospective) are NOT
 // breaks and deliberately do count.
 const BREAK_BASE_NAMES: ReadonlySet<string> = new Set(
-  [LUNCH_TITLE, EXERCISE_TITLE, BREAK_TITLE].map(ritualBaseName)
+  [LUNCH_TITLE, EXERCISE_TITLE, WALK_TITLE, BREAK_TITLE].map(ritualBaseName)
 );
 
 export function isBreakLikeTitle(title: string): boolean {
@@ -179,11 +206,17 @@ export function ritualKindForTitle(title: string): RitualKind {
   const t = title.trim();
   if (t === EXERCISE_TITLE) return 'exercise';
   if (t === LUNCH_TITLE) return 'lunch';
+  if (t === WALK_TITLE) return 'walk';
   if (t === BREAK_TITLE) return 'break';
   if (t === KINDLE_TITLE) return 'kindleNotes';
   if (t === GROOMING_TITLE) return 'grooming';
   if (t === RETRO_TITLE) return 'retro';
   if (t === DELEGATION_REVIEW_TITLE) return 'delegationReview';
+  if (t === CONSULTING_TITLE) return 'consulting';
+  if (t === SIDE_PROJECTS_TITLE) return 'sideProjects';
+  if (t === NEW_BOOKIES_TITLE) return 'newBookies';
+  if (t === READING_TITLE) return 'reading';
+  if (t === LEARNING_TITLE) return 'learning';
   return 'emails';
 }
 
@@ -200,10 +233,14 @@ export function ritualIntegrationIdForKind(
   const cals = scheduling.ritualCalendars;
   const legacy = scheduling.ritualGoogleIntegrationId;
   if (kind === 'exercise' || kind === 'break') return cals?.exercise;
+  // Walk is a break-type personal ritual: its own calendar, else the exercise
+  // (personal) calendar like the other breaks.
+  if (kind === 'walk') return cals?.walk ?? cals?.exercise;
   if (kind === 'lunch') return cals?.lunch ?? legacy;
   if (kind === 'emails') return cals?.emails ?? legacy;
-  // The WORK-type rituals (kindle / grooming / retro) default to the emails
-  // calendar setting (→ OM), still per-kind configurable.
+  // The WORK-type rituals (kindle / grooming / retro / delegation review /
+  // consulting / side projects / new bookies / reading / learning) default to
+  // the emails calendar setting (→ OM), still per-kind configurable.
   return cals?.[kind] ?? cals?.emails ?? legacy;
 }
 
@@ -223,6 +260,12 @@ const KINDLE_DURATION_MINUTES = 30;
 const GROOMING_DURATION_MINUTES = 60;
 const RETRO_DURATION_MINUTES = 60;
 const DELEGATION_REVIEW_DURATION_MINUTES = 30;
+const WALK_DURATION_MINUTES = 45;
+const CONSULTING_DURATION_MINUTES = 60;
+const SIDE_PROJECTS_DURATION_MINUTES = 90;
+const NEW_BOOKIES_DURATION_MINUTES = 30;
+const READING_DURATION_MINUTES = 60;
+const LEARNING_DURATION_MINUTES = 60;
 // WORK rituals prefer the afternoon (from this hour) before spilling earlier.
 const WORK_RITUAL_AFTERNOON_HOUR = 12;
 
@@ -420,6 +463,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   const nowMs = now.getTime();
   const durationMs = RITUAL_DURATION_MINUTES * MS_PER_MINUTE;
   const exerciseDurationMs = EXERCISE_DURATION_MINUTES * MS_PER_MINUTE;
+  const walkDurationMs = WALK_DURATION_MINUTES * MS_PER_MINUTE;
 
   // Titles present on ANY day this week (for weekly-ritual dedupe: a weekly
   // ritual is skipped when its title already exists — or already happened —
@@ -440,6 +484,45 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
 
   for (const day of workingDays) {
     const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+
+    // --- Walk (break) — mid-morning, ideal 10:30–11:30, widening to 09:30–12:00
+    // (earliest-first, like lunch). Placed first so it sits before lunch; the
+    // busy set it pushes keeps every later ritual off it. ---
+    if (!present.has(WALK_TITLE)) {
+      let startMs = findFreeSlot(
+        msAtDay(day, 10, 30),
+        msAtDay(day, 11, 30),
+        walkDurationMs,
+        busy,
+        nowMs,
+        false
+      );
+      if (startMs === null) {
+        startMs = findFreeSlot(
+          msAtDay(day, 9, 30),
+          msAtDay(day, 12, 0),
+          walkDurationMs,
+          busy,
+          nowMs,
+          false
+        );
+      }
+      if (startMs !== null) {
+        const start = timeStr(startMs);
+        proposals.push({
+          id: `${day.dateStr}-${start}-ritual-walk`,
+          category: 'Walk',
+          kind: 'ritual',
+          title: WALK_TITLE,
+          date: day.dateStr,
+          start,
+          durationMinutes: WALK_DURATION_MINUTES,
+          reason: 'Daily walk (paired with a podcast).',
+        });
+        // Walk is a break: still busy, but splits work runs.
+        busy.push({ start: startMs, end: startMs + walkDurationMs, isBreak: true });
+      }
+    }
 
     // --- Lunch (break) — ideal 11:30–13:00, fallback 11:00–14:00 ---
     if (!present.has(LUNCH_TITLE)) {
@@ -694,6 +777,93 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
       });
       busy.push({ start: startMs, end: startMs + retroDurationMs }); // work
       break;
+    }
+  }
+
+  // --- Weekly WORK singles (consulting / side projects / new bookies / reading /
+  // learning) — each placed ONCE for the week, afternoon preference, deduped by
+  // title across the whole week. Spread across DISTINCT days where free slots
+  // allow (prefer a day none of these has taken yet) rather than piling onto
+  // Monday. ---
+  {
+    const weeklySingles: Array<{
+      title: string;
+      category: string;
+      durationMinutes: number;
+      idSuffix: string;
+      reason: string;
+    }> = [
+      {
+        title: CONSULTING_TITLE,
+        category: 'Consulting',
+        durationMinutes: CONSULTING_DURATION_MINUTES,
+        idSuffix: 'ritual-consulting',
+        reason: 'Weekly consulting (DBC) time.',
+      },
+      {
+        title: SIDE_PROJECTS_TITLE,
+        category: 'Side projects',
+        durationMinutes: SIDE_PROJECTS_DURATION_MINUTES,
+        idSuffix: 'ritual-side-projects',
+        reason: 'Weekly side-projects time.',
+      },
+      {
+        title: NEW_BOOKIES_TITLE,
+        category: 'New bookies',
+        durationMinutes: NEW_BOOKIES_DURATION_MINUTES,
+        idSuffix: 'ritual-new-bookies',
+        reason: 'Weekly new-bookies slot.',
+      },
+      {
+        title: READING_TITLE,
+        category: 'Reading',
+        durationMinutes: READING_DURATION_MINUTES,
+        idSuffix: 'ritual-reading',
+        reason: 'Weekly reading time.',
+      },
+      {
+        title: LEARNING_TITLE,
+        category: 'Learning',
+        durationMinutes: LEARNING_DURATION_MINUTES,
+        idSuffix: 'ritual-learning',
+        reason: 'Weekly learning & development time.',
+      },
+    ];
+    // Days already hosting one of these singles this pass — deprioritised so the
+    // next single lands on a fresh day first.
+    const usedDays = new Set<string>();
+    for (const single of weeklySingles) {
+      if (presentAnyDay.has(single.title)) continue;
+      // Unused days first (chronological), then already-used days (chronological).
+      const dayOrder = [...workingDays].sort((a, b) => {
+        const au = usedDays.has(a.dateStr) ? 1 : 0;
+        const bu = usedDays.has(b.dateStr) ? 1 : 0;
+        return au - bu; // stable sort keeps chronological order within each group
+      });
+      for (const day of dayOrder) {
+        const slot = findSlot(
+          afternoonWorkWindows([day], workingHoursEnd),
+          single.durationMinutes,
+          workRun,
+          busy,
+          nowMs
+        );
+        if (!slot) continue;
+        const start = timeStr(slot.startMs);
+        proposals.push({
+          id: `${slot.dateStr}-${start}-${single.idSuffix}`,
+          category: single.category,
+          kind: 'ritual',
+          title: single.title,
+          date: slot.dateStr,
+          start,
+          durationMinutes: single.durationMinutes,
+          reason: single.reason,
+        });
+        busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+        usedDays.add(slot.dateStr);
+        break;
+      }
     }
   }
 
