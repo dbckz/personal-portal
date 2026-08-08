@@ -277,6 +277,87 @@ describe('useTodaySession', () => {
     expect(restored.action).toBe('increase');
     expect(restored.rationale).toBe('Try heavier on Bench.');
   });
+
+  it('resolves a swapped row with a missing entryId via substitutedFor, not a duplicate', async () => {
+    // A session already holding a swapped entry: renamed to the substitute,
+    // recording what it stood in for, keyed to the original target's slot.
+    const swapped: ExerciseSession = {
+      ...startedSession(),
+      exercises: [
+        { id: 'e1', name: 'Treadmill run', substitutedFor: 'Outdoor run', done: false, distanceKm: 3 },
+      ],
+    };
+    mockApi.getExerciseSessions.mockResolvedValue({ sessions: [swapped] });
+    mockApi.getExerciseTargets.mockResolvedValue({
+      date: DATE,
+      plan: { label: 'Run', components: ['Run'] },
+      targets: [target('Outdoor run', { key: 'outdoor run', kind: 'cardio', weightKg: undefined })],
+    });
+    mockApi.updateExerciseEntry.mockImplementation(async (sid, eid, patch) => {
+      const applied = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+      return {
+        session: {
+          ...swapped,
+          exercises: (swapped.exercises ?? []).map(e => (e.id === eid ? { ...e, ...applied } : e)),
+        },
+      };
+    });
+
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const row = result.current.rows.find(r => r.key === 'outdoor run')!;
+    expect(row.entryId).toBe('e1');
+
+    // Reproduce the production precondition: a write lands on the swapped row
+    // with its entryId gone. It must reuse the existing substituted entry.
+    await act(async () => {
+      await result.current.toggleDone({ ...row, entryId: undefined });
+    });
+
+    expect(mockApi.addExerciseEntry).not.toHaveBeenCalled();
+    expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', { done: true });
+  });
+
+  it('creates the entry on a target-backed row’s first write, then reuses it', async () => {
+    // Session started with no seeded entries, so the first write must create
+    // one and the row must retain its entryId for the next write.
+    const empty: ExerciseSession = { ...startedSession(), exercises: [] };
+    mockApi.startExerciseSession.mockResolvedValue({ session: empty, resumed: false });
+    let created: ExerciseSession = empty;
+    mockApi.addExerciseEntry.mockImplementation(async (_sid, input) => {
+      const entry = { id: 'new1', name: input.name, done: false };
+      created = { ...empty, exercises: [entry] };
+      return { session: created, entry };
+    });
+    mockApi.updateExerciseEntry.mockImplementation(async (sid, eid, patch) => {
+      const applied = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+      return {
+        session: {
+          ...created,
+          exercises: (created.exercises ?? []).map(e => (e.id === eid ? { ...e, ...applied } : e)),
+        },
+      };
+    });
+
+    const { result } = renderHook(() => useTodaySession(DATE));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.toggleDone(result.current.rows.find(r => r.name === 'Bench')!);
+    });
+
+    expect(mockApi.addExerciseEntry).toHaveBeenCalledTimes(1);
+    const bench = result.current.rows.find(r => r.name === 'Bench')!;
+    expect(bench.entryId).toBe('new1');
+
+    // Second write reuses the created entry — no duplicate.
+    await act(async () => {
+      await result.current.commitField(bench, { reps: 10 });
+    });
+    expect(mockApi.addExerciseEntry).toHaveBeenCalledTimes(1);
+    expect(mockApi.updateExerciseEntry).toHaveBeenLastCalledWith('s1', 'new1', { reps: 10 });
+  });
 });
 
 describe('isCardioEntry', () => {

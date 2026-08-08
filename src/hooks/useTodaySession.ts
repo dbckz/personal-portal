@@ -338,7 +338,19 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
       entries.find(e => e.id === row.entryId) ??
       (row.key.startsWith('entry:')
         ? entries.find(e => `entry:${e.id}` === row.key)
-        : entries.find(e => exerciseKey(e.name) === row.key));
+        : // Match the target's slot the same way mergeRows does: by the entry's
+          // own name, or — once swapped — by the original planned name it stands
+          // in for. Without the substitutedFor arm a swapped row (keyed to the
+          // original target, but named after the substitute) misses and a
+          // duplicate entry is created on the next write.
+          entries.find(
+            e =>
+              exerciseKey(e.name) === row.key ||
+              (!!e.substitutedFor && exerciseKey(e.substitutedFor) === row.key)
+          )) ??
+      // Last resort before creating: match by the row's own display name, which
+      // catches an entry-keyed row whose id has since changed.
+      entries.find(e => exerciseKey(e.name) === exerciseKey(row.name));
     if (existing) return existing.id;
 
     const res = await api.addExerciseEntry(session.id, {
@@ -372,9 +384,17 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
         const updated = await patch(sessionRef.current ?? base, entryId);
         sessionRef.current = updated;
         const entry = (updated.exercises ?? []).find(e => e.id === entryId);
+        // Always stamp the resolved entryId onto the row, even if the server
+        // entry can't be found to reconcile: resolveEntryId may have just
+        // created it, and without this the next write would fail to resolve the
+        // row and create a duplicate.
         setRows(rs =>
           rs.map(r =>
-            r.key === row.key ? (entry ? applyEntry(optimisticRow, entry) : optimisticRow) : r
+            r.key === row.key
+              ? entry
+                ? applyEntry(optimisticRow, entry)
+                : { ...optimisticRow, entryId }
+              : r
           )
         );
         onSessionChanged?.();
