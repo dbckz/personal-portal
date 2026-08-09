@@ -28,27 +28,27 @@ from `/mobile`. Those writes save per-action and optimistically, because the
 connection is unreliable and a lost session is unrecoverable. Anything else
 stays read-only unless Dave says otherwise.
 
-## Staging vs production
+## Development and deployment
 
-Dave uses the production app (`portal.localhost`) all day, so development must
-never disturb it. **Do all development in the staging worktree, not here:**
+**Deploys are NOT gated on Dave's approval** (his instruction, 9 Aug 2026 —
+superseding the earlier staged-approval workflow): once a change is implemented
+and the full test suite passes, commit, push, and deploy to production
+immediately without asking.
 
-- **Staging worktree**: `/Users/dave/working_dir/github/dbckz/personal-portal-staging`
+- Dave uses the production app (`portal.localhost`) all day. A **staging
+  worktree** exists as a scratch area for development so the live app isn't
+  disturbed mid-work: `/Users/dave/working_dir/github/dbckz/personal-portal-staging`
   (branch `staging`), served at `portal-staging.localhost` (port 3002) by the
   launchd service `com.davebuckley.portal-staging` running `next dev` via
-  `scripts/start-staging.sh`. It points `PORTAL_DATA_DIR` at
-  `~/.claude/data/portal-staging`, a **copy** of production data — staging
-  writes never touch real data. Refresh the copy with:
-  `rsync -a --delete ~/.claude/data/portal/ ~/.claude/data/portal-staging/`
-- Implement and test on the `staging` branch in that worktree. Never run
-  `npm run build` in the production checkout during development — it replaces
-  `.next` under the live server and breaks the running app.
-- **Only when Dave explicitly says to deploy/build to production**: merge
-  `staging` into `main` (fast-forward preferred), then in the production
-  checkout run:
+  `scripts/start-staging.sh`, with `PORTAL_DATA_DIR` pointing at
+  `~/.claude/data/portal-staging`, a copy of production data. Refresh the copy
+  with: `rsync -a --delete ~/.claude/data/portal/ ~/.claude/data/portal-staging/`
+- Never run `npm run build` in the production checkout except as part of a
+  deploy — it replaces `.next` under the live server and breaks the running
+  app until restarted.
+- To deploy: merge `staging` into `main` (fast-forward preferred), push both
+  branches, then in the production checkout run:
 
 ```bash
 npm run build && launchctl stop com.davebuckley.portal && launchctl start com.davebuckley.portal
 ```
-
-Push to the remote as part of deploying, per the usual commit flow.

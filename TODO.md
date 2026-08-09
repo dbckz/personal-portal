@@ -2,6 +2,12 @@
 
 ## Open
 
+- Exercise plan handover (agreed 9 Aug 2026): the calendar is the source of
+  truth for sessions until the authored plan ends on 3 Sep 2026. From then the
+  PORTAL takes over defining future sessions (from the weekly routine + the
+  progression data) and writes them to the calendar, descriptions included.
+  Build this before 3 Sep.
+
 - Music section: define what it should actually contain beyond goals. It is a
   goals-only shell until those specifics land.
 - Mobile: Goals and Exercise are on the phone view as read-only tabs. The Music
