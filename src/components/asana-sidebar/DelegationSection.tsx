@@ -5,6 +5,7 @@ import { Loader2, Bot, CheckCircle2, XCircle, Copy } from 'lucide-react';
 import { DelegationQueueEntry, DelegationState } from '@/types';
 import { TraceTimeline } from '../TraceTimeline';
 import { LinkifiedText } from './LinkifiedText';
+import { claudeAccountLabel } from '@/lib/claude-account';
 
 const BADGE_STYLES: Record<DelegationState, string> = {
   done: 'bg-emerald-100 text-emerald-700',
@@ -19,6 +20,11 @@ export function DelegationSection({ entry, onDelegate }: { entry?: DelegationQue
   const [copied, setCopied] = useState(false);
   const state = entry?.state;
   const result = entry?.result;
+
+  const accountLabel = claudeAccountLabel(entry?.claudeAccount);
+  // A queued/running entry that never got an account can't run — flag it so the
+  // user re-delegates to pick one (the runner refuses it otherwise).
+  const needsAccount = !!entry && !entry.claudeAccount && (state === 'queued' || state === 'running');
 
   const badge = state
     ? {
@@ -39,6 +45,16 @@ export function DelegationSection({ entry, onDelegate }: { entry?: DelegationQue
       {badge && (
         <div className="flex items-center gap-2">
           <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge.cls}`}>{badge.label}</span>
+          {accountLabel && (
+            <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600" title="Claude account this run uses">
+              {accountLabel}
+            </span>
+          )}
+          {needsAccount && (
+            <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700" title="No Claude account set — re-delegate to choose one">
+              needs account
+            </span>
+          )}
           {state === 'running' && <Loader2 className="w-3.5 h-3.5 text-amber-600 animate-spin" />}
         </div>
       )}

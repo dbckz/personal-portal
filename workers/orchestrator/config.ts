@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { ClaudeAccount } from './types';
 
 // The launchd wrapper and the `orchestrator:run` npm script both invoke this
 // worker with the calendar repo root as the working directory, so cwd is the
@@ -127,3 +128,26 @@ export const config = {
 };
 
 export type OrchestratorConfig = typeof config;
+
+const CLAUDE_ACCOUNTS: readonly ClaudeAccount[] = ['claude-dbc', 'claude-om'];
+
+// Resolve the wrapper binary for a delegated run's chosen Claude account. The
+// machine runs two Claude Code accounts via the ~/bin/claude-dbc and
+// ~/bin/claude-om wrappers (each execs ~/.local/bin/claude with the right
+// CLAUDE_CONFIG_DIR). The default is an ABSOLUTE path — launchd and Next give
+// the worker no useful PATH, and ~/bin is not guaranteed to be on it — but
+// CLAUDE_BIN_DBC / CLAUDE_BIN_OM override it. Throws for a missing or unknown
+// account so the runner fails the task with an actionable error rather than
+// silently falling back to a default binary.
+export function resolveClaudeBin(account: ClaudeAccount | undefined | null): string {
+  if (!account || !CLAUDE_ACCOUNTS.includes(account)) {
+    throw new Error(
+      `No Claude account set for this task (claudeAccount=${account ?? 'unset'}). ` +
+      'Re-delegate and choose an account (DBC or OpenMined) before it can run.',
+    );
+  }
+  const override = account === 'claude-dbc'
+    ? process.env.CLAUDE_BIN_DBC
+    : process.env.CLAUDE_BIN_OM;
+  return override || path.join(homedir(), 'bin', account);
+}

@@ -135,6 +135,24 @@ describe('delegation queue storage', () => {
     expect(entry?.result?.summary).toBe('first run'); // last result stays accessible
   });
 
+  it('round-trips claudeAccount and preserves it across an unrelated write', async () => {
+    await upsertDelegationEntry('acc-1', 'int-1', { brief: 'go', claudeAccount: 'claude-om' });
+    expect((await getDelegationEntry('acc-1'))?.claudeAccount).toBe('claude-om');
+
+    // A later state write must not drop the chosen account.
+    await upsertDelegationEntry('acc-1', 'int-1', { state: 'running' });
+    const entry = await getDelegationEntry('acc-1');
+    expect(entry?.claudeAccount).toBe('claude-om');
+    expect(entry?.state).toBe('running');
+  });
+
+  it('keeps a legacy/skeleton entry account-less (no default guessed)', async () => {
+    // Bulk enqueue / legacy paths create entries with no account.
+    await upsertDelegationEntry('legacy-1', 'int-1', { title: 'Old task', state: 'queued' });
+    const entry = await getDelegationEntry('legacy-1');
+    expect(entry?.claudeAccount).toBeUndefined();
+  });
+
   it('deletes an entry by GID', async () => {
     await upsertDelegationEntry('gid-3', 'int-1', {});
     expect(await deleteDelegationEntry('gid-3')).toBe(true);

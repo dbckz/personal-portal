@@ -5,6 +5,7 @@ import { DelegationQueueEntry, OrchestratorStatus } from '@/types';
 import { api } from '@/lib/api';
 import type { AgentPacingConfig } from '@/lib/workflow-config-storage';
 import { estimateQueueEtas } from '@/lib/delegation-eta';
+import { claudeAccountLabel } from '@/lib/claude-account';
 import type { DelegationStats } from '@/lib/delegation-stats';
 import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle } from 'lucide-react';
 
@@ -73,6 +74,21 @@ function formatEta(eta: Date, now: Date): string {
   if (dayDiff <= 0) return `~${hhmm}`;
   if (dayDiff === 1) return `~tomorrow ${hhmm}`;
   return `~${eta.toLocaleDateString(undefined, { weekday: 'short' })} ${hhmm}`;
+}
+
+// Small trailing tag showing which Claude account a task runs on, or an amber
+// "needs account" marker when a pre-terminal entry never got one (legacy or
+// skeleton enqueue) — those are refused by the runner until re-delegated.
+function AccountTag({ entry }: { entry: DelegationQueueEntry }) {
+  const label = claudeAccountLabel(entry.claudeAccount);
+  if (label) {
+    return <span className="ml-1.5 text-xs text-gray-400" title="Claude account this run uses">{label}</span>;
+  }
+  return (
+    <span className="ml-1.5 text-xs text-amber-600" title="No Claude account set — re-delegate to choose one">
+      needs account
+    </span>
+  );
 }
 
 export function DelegationWidget({
@@ -232,7 +248,7 @@ export function DelegationWidget({
                     onClick={() => onTaskClick?.(e.asanaTaskGid)}
                     className={`text-sm text-gray-800 px-2 py-1 rounded bg-amber-50 ${onTaskClick ? 'cursor-pointer hover:bg-amber-100' : ''}`}
                   >
-                    <span className="truncate block">{e.title || 'Task'}</span>
+                    <span className="truncate block">{e.title || 'Task'}<AccountTag entry={e} /></span>
                     {e.startedAt && (
                       <span className="text-xs text-amber-700/70 flex items-center gap-1 mt-0.5">
                         <Clock className="w-3 h-3" /> started {relativeTime(e.startedAt)}
@@ -262,6 +278,7 @@ export function DelegationWidget({
                       <span className="truncate block">
                         {e.title || 'Task'}
                         {e.mode === 'now' && <span className="ml-1.5 text-xs text-indigo-500">run now</span>}
+                        <AccountTag entry={e} />
                       </span>
                       {eta && (
                         <span

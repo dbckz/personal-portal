@@ -52,6 +52,8 @@ export interface ContainerReport {
 // Mirrors src/types DelegationQueueEntry (the worker never imports app code).
 export type DelegationMode = 'now' | 'background';
 export type DelegationState = 'queued' | 'running' | 'done' | 'failed';
+// Wrapper binary name for the chosen Claude account (see config.resolveClaudeBin).
+export type ClaudeAccount = 'claude-dbc' | 'claude-om';
 
 export interface DelegationRunResult {
   status: ReportStatus;
@@ -72,6 +74,7 @@ export interface DelegationQueueEntry {
   mode: DelegationMode;
   state: DelegationState;
   priority: number;
+  claudeAccount?: ClaudeAccount; // account the run executes on; no default
   enqueuedAt: string;
   startedAt?: string;
   result?: DelegationRunResult;

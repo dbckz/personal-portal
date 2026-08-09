@@ -33,6 +33,7 @@ const ENTRY: DelegationQueueEntry = {
   mode: 'background',
   state: 'queued',
   priority: 0,
+  claudeAccount: 'claude-dbc',
   enqueuedAt: '2026-07-13T00:00:00.000Z',
   updatedAt: '2026-07-13T00:00:00.000Z',
 };
@@ -138,6 +139,35 @@ describe('drainOnce', () => {
 
     expect(result.finalStatus).toBe('failed');
     expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'failed', expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('runs the account-specific binary resolved from claudeAccount', async () => {
+    mockedPlanner.claimNextEntry.mockResolvedValue({ ...ENTRY, claudeAccount: 'claude-om', state: 'running' });
+    mockedClaude.runClaudeTask.mockResolvedValue(GOOD_RUN);
+
+    await drainOnce();
+
+    expect(mockedClaude.runClaudeTask).toHaveBeenCalledWith(
+      expect.objectContaining({ claudeBin: expect.stringMatching(/claude-om$/) }),
+    );
+  });
+
+  it('refuses (fails) an entry with no claudeAccount, without spawning the CLI', async () => {
+    const legacy = { ...ENTRY, state: 'running' as const };
+    delete legacy.claudeAccount;
+    mockedPlanner.claimNextEntry.mockResolvedValue(legacy);
+
+    const result = await drainOnce();
+
+    expect(result.finalStatus).toBe('failed');
+    expect(mockedClaude.runClaudeTask).not.toHaveBeenCalled();
+    expect(mockedPlanner.reportResult).toHaveBeenCalledWith(
+      expect.any(String),
+      '100',
+      'i1',
+      'failed',
+      expect.objectContaining({ status: 'failed', summary: expect.stringMatching(/No Claude account/i) }),
+    );
   });
 });
 

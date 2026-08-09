@@ -152,6 +152,12 @@ export interface OrchestratorStatus {
 export type DelegationMode = 'now' | 'background';
 export type DelegationState = 'queued' | 'running' | 'done' | 'failed';
 
+// Which of the machine's two Claude Code accounts a delegated run executes on.
+// The value is the wrapper binary name (see ~/bin/claude-dbc, ~/bin/claude-om);
+// the runner resolves it to a path. There is no default — the user must pick
+// one at delegation time, and the runner refuses to run an entry without it.
+export type ClaudeAccount = 'claude-dbc' | 'claude-om';
+
 export interface DelegationRunResult {
   status: 'successful' | 'failed';
   summary: string;
@@ -171,6 +177,11 @@ export interface DelegationQueueEntry {
   mode: DelegationMode;
   state: DelegationState;
   priority: number;          // lower = sooner; default 0
+  // Which Claude account the run executes on. Chosen at delegation time (no
+  // default). Optional on the type only so legacy entries and skeleton bulk
+  // enqueues remain representable — those are surfaced as "needs account" in
+  // the UI and refused by the runner rather than guessed.
+  claudeAccount?: ClaudeAccount;
   enqueuedAt: string;
   startedAt?: string;
   result?: DelegationRunResult;

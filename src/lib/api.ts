@@ -1,7 +1,7 @@
 // API utilities with retry logic and proper typing
 
 import { EventAttributionRule } from '@/types';
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
@@ -16,6 +16,7 @@ import type {
   ExerciseAnalysis,
   ExerciseEntry,
   ExerciseSession,
+  WeeklyRoutineDay,
   Goal,
   GoalCheckIn,
   GoalCheckInStatus,
@@ -768,12 +769,13 @@ export const api = {
     asanaTaskGid: string,
     integrationId: string,
     brief: string,
-    title: string
+    title: string,
+    claudeAccount: ClaudeAccount
   ): Promise<{ started: boolean }> {
     return fetchWithRetry<{ started: boolean }>('/api/orchestrator/run-now', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asanaTaskGid, integrationId, brief, title }),
+      body: JSON.stringify({ asanaTaskGid, integrationId, brief, title, claudeAccount }),
     });
   },
 
@@ -1787,6 +1789,23 @@ export const api = {
     return fetchWithRetry<{ success: boolean }>(
       `/api/exercise/${id}`,
       { method: 'DELETE' },
+      { maxRetries: 0 }
+    );
+  },
+
+  // The standing weekly routine — the repeating shape of the week, Mon→Sun.
+  async getWeeklyRoutine(): Promise<{ routine: WeeklyRoutineDay[] }> {
+    return fetchWithRetry<{ routine: WeeklyRoutineDay[] }>('/api/exercise/routine');
+  },
+
+  async saveWeeklyRoutine(routine: WeeklyRoutineDay[]): Promise<{ routine: WeeklyRoutineDay[] }> {
+    return fetchWithRetry<{ routine: WeeklyRoutineDay[] }>(
+      '/api/exercise/routine',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ routine }),
+      },
       { maxRetries: 0 }
     );
   },

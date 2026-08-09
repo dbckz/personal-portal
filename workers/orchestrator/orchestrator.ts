@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { config } from './config';
+import { config, resolveClaudeBin } from './config';
 import {
   fetchTaskById,
   fetchTaskStories,
@@ -76,11 +76,16 @@ export async function runTask(entry: DelegationQueueEntry): Promise<RunResult> {
   let finalStatus: 'successful' | 'failed' = 'successful';
 
   try {
+    // Resolve the account-specific binary FIRST. A missing/unknown account
+    // throws here (caught below) so the task fails with an actionable message
+    // instead of falling back to any Claude binary.
+    const claudeBin = resolveClaudeBin(entry.claudeAccount);
     const run = await runClaudeTask({
       prompt: buildBriefPrompt({ task, stories, brief: entry.brief }),
       timeoutSeconds: config.claudeTimeoutSeconds,
       allowedTools: config.claudeAllowedTools,
       traceFile,
+      claudeBin,
       mcpServers: config.mcpServers,
       mcpConfigPath: config.mcpConfigPath,
     });
