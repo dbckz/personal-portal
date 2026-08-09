@@ -177,3 +177,129 @@ describe('PlanWeekModal', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 });
+
+describe('PlanWeekModal — prep step optimistic toggling', () => {
+  const WEEK = '2026-07-20';
+
+  // One placed suggestion (has a proposed block) and one non-prep meeting the
+  // user can toggle ON.
+  const prepResponse = () => ({
+    meetings: [
+      {
+        key: 'k1',
+        eventId: 'e1',
+        title: 'Board sync',
+        date: '2026-07-22',
+        start: '14:00',
+        needsPrep: true,
+        decidedBy: 'ai',
+        reason: 'external attendees',
+        block: { date: '2026-07-21', start: '10:00', durationMinutes: 15 },
+      },
+      {
+        key: 'k2',
+        eventId: 'e2',
+        title: 'Standup',
+        date: '2026-07-21',
+        start: '09:00',
+        needsPrep: false,
+        decidedBy: 'ai',
+        reason: '',
+      },
+    ],
+    unplaced: [],
+    workingDays: ['2026-07-20', '2026-07-21', '2026-07-22'],
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.getPrepCandidates as jest.Mock).mockResolvedValue(prepResponse());
+    (api.setPrepDecision as jest.Mock).mockResolvedValue({ ok: true });
+    (api.getWeekCandidates as jest.Mock).mockResolvedValue({ categories: [] });
+  });
+
+  // Skip the priorities step (no reminders/type steps in this setup) to land on
+  // the prep step, then wait for its candidates to render.
+  async function reachPrepStep() {
+    render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    });
+    await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
+    await screen.findByText('Board sync');
+  }
+
+  it('unticks a suggestion locally and does not refetch candidates', async () => {
+    await reachPrepStep();
+    const callsAfterLoad = (api.getPrepCandidates as jest.Mock).mock.calls.length;
+
+    // Only the suggested (checked) checkbox is on screen; others are collapsed.
+    const tick = screen.getByRole('checkbox');
+    expect(tick).toBeChecked();
+    await act(async () => {
+      fireEvent.click(tick);
+    });
+
+    // Persist fires with the user's verdict; NO candidates refetch on toggle.
+    expect(api.setPrepDecision).toHaveBeenCalledWith('Board sync', false);
+    expect((api.getPrepCandidates as jest.Mock).mock.calls.length).toBe(callsAfterLoad);
+
+    // The meeting has left the Suggested list optimistically.
+    await waitFor(() =>
+      expect(screen.getByText(/No meetings this week look like they need prep/i)).toBeInTheDocument()
+    );
+  });
+
+  it('shows a pending slot for a meeting toggled on, without a refetch', async () => {
+    await reachPrepStep();
+    const callsAfterLoad = (api.getPrepCandidates as jest.Mock).mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Other meetings/i }));
+    });
+    const unchecked = screen
+      .getAllByRole('checkbox')
+      .find(c => !(c as HTMLInputElement).checked)!;
+    await act(async () => {
+      fireEvent.click(unchecked);
+    });
+
+    expect(api.setPrepDecision).toHaveBeenCalledWith('Standup', true);
+    expect(await screen.findByText('Slot proposed at next step')).toBeInTheDocument();
+    expect((api.getPrepCandidates as jest.Mock).mock.calls.length).toBe(callsAfterLoad);
+  });
+
+  it('rolls back the flip and surfaces an error when the persist fails', async () => {
+    (api.setPrepDecision as jest.Mock).mockRejectedValue(new Error('persist boom'));
+    await reachPrepStep();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Other meetings/i }));
+    });
+    const unchecked = screen
+      .getAllByRole('checkbox')
+      .find(c => !(c as HTMLInputElement).checked)!;
+    await act(async () => {
+      fireEvent.click(unchecked);
+    });
+
+    // The optimistic pending slot is rolled back once the persist rejects.
+    await waitFor(() =>
+      expect(screen.queryByText('Slot proposed at next step')).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('persist boom')).toBeInTheDocument();
+  });
+
+  it('re-proposes prep slots when Next is pressed off the step', async () => {
+    await reachPrepStep();
+    const callsAfterLoad = (api.getPrepCandidates as jest.Mock).mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+
+    await waitFor(() =>
+      expect((api.getPrepCandidates as jest.Mock).mock.calls.length).toBe(callsAfterLoad + 1)
+    );
+  });
+});

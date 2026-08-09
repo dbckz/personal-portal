@@ -9,7 +9,6 @@ import { RowSelect, PREP_LENGTH_OPTIONS, timeRange } from './helpers';
 
 interface PrepStepProps {
   prepData: PrepCandidatesResponse | null;
-  prepBusy: boolean;
   isLoading: boolean;
   showOtherMeetings: boolean;
   setShowOtherMeetings: Dispatch<SetStateAction<boolean>>;
@@ -22,7 +21,6 @@ interface PrepStepProps {
 
 export function PrepStep({
   prepData,
-  prepBusy,
   isLoading,
   showOtherMeetings,
   setShowOtherMeetings,
@@ -37,7 +35,14 @@ export function PrepStep({
       <p className="text-sm text-gray-400 italic py-8 text-center">No meeting data available.</p>
     );
   }
-  const suggested = prepData.meetings.filter(m => m.needsPrep && m.block);
+  // Suggested = every needs-prep meeting EXCEPT ones the server couldn't place
+  // (those show in the amber box below, keyed by `key`). A meeting just toggled ON
+  // has no proposed `block` yet and isn't unplaced, so it lands here as a pending
+  // slot until Next re-proposes; a placed meeting carries its block. Matching the
+  // server's needs-prep-minus-unplaced set keeps the optimistic toggle from either
+  // dropping a row (block gap) or double-listing a genuinely unplaceable one.
+  const unplacedKeys = new Set(prepData.unplaced.map(u => u.key));
+  const suggested = prepData.meetings.filter(m => m.needsPrep && !unplacedKeys.has(m.key));
   const others = prepData.meetings.filter(m => !m.needsPrep);
   const workingDays = prepData.workingDays ?? [];
   const nextWeekWorkingDays = prepData.nextWeekWorkingDays ?? [];
@@ -68,7 +73,7 @@ export function PrepStep({
   };
 
   return (
-    <div className={`space-y-5 ${prepBusy ? 'opacity-60 pointer-events-none' : ''}`}>
+    <div className="space-y-5">
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
           Suggested prep
@@ -80,7 +85,7 @@ export function PrepStep({
         ) : (
           <ul className="space-y-2">
             {suggested.map(m => {
-              const b = m.block!;
+              const b = m.block;
               return (
                 <li
                   key={m.eventId}
@@ -101,26 +106,31 @@ export function PrepStep({
                         </span>
                       )}
                     </p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      <span className="font-medium text-slate-600">
-                        {format(parseISO(b.date), 'EEE')} {timeRange(b.start, b.durationMinutes)}
-                      </span>{' '}
-                      · {m.reason}
-                    </p>
+                    {b ? (
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        <span className="font-medium text-slate-600">
+                          {format(parseISO(b.date), 'EEE')} {timeRange(b.start, b.durationMinutes)}
+                        </span>{' '}
+                        · {m.reason}
+                      </p>
+                    ) : (
+                      // Just toggled ON — the server proposes its slot on Next.
+                      <p className="text-xs text-gray-400 italic mt-0.5">Slot proposed at next step</p>
+                    )}
                   </div>
                   <RowSelect
                     value={prepDurations[m.eventId] ?? 15}
                     options={PREP_LENGTH_OPTIONS}
                     onChange={v => changePrepDuration(m.eventId, Number(v))}
-                    disabled={prepBusy || isLoading}
+                    disabled={isLoading}
                     ariaLabel={`Prep length for ${m.title}`}
                     className="mt-0.5"
                   />
                   <RowSelect
-                    value={prepDays[m.eventId] ?? b.date}
+                    value={prepDays[m.eventId] ?? b?.date ?? m.date}
                     options={dayOptionsFor(m)}
                     onChange={v => changePrepDay(m.eventId, v)}
-                    disabled={prepBusy || isLoading}
+                    disabled={isLoading}
                     ariaLabel={`Prep day for ${m.title}`}
                     className="mt-0.5"
                   />

@@ -187,7 +187,6 @@ export function PlanWeekModal({
 
   // Step 2 — prep
   const [prepData, setPrepData] = useState<PrepCandidatesResponse | null>(null);
-  const [prepBusy, setPrepBusy] = useState(false);
   const [showOtherMeetings, setShowOtherMeetings] = useState(false);
   const [prepEngaged, setPrepEngaged] = useState(false);
   // Per-meeting prep-length overrides, keyed by eventId. Only explicit picks are
@@ -284,7 +283,6 @@ export function PlanWeekModal({
       setReminderList([]);
     }
     setPrepData(null);
-    setPrepBusy(false);
     setShowOtherMeetings(false);
     setPrepEngaged(false);
     setPrepDurations({});
@@ -826,22 +824,27 @@ export function PlanWeekModal({
 
   // --- Step 2 actions ---
 
-  const setPrepDecision = useCallback(
-    async (title: string, needsPrep: boolean) => {
-      setPrepBusy(true);
-      setError(null);
-      try {
-        await api.setPrepDecision(title, needsPrep);
-        const data = await api.getPrepCandidates(weekStart, prepDurations, prepDays);
-        setPrepData(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to update prep decision');
-      } finally {
-        setPrepBusy(false);
-      }
-    },
-    [prepDurations, prepDays, weekStart]
-  );
+  // Toggle a meeting's prep decision optimistically: flip needsPrep LOCALLY so the
+  // tick is instant, and persist the verdict in the background. No candidates
+  // refetch here — the authoritative slot is recomputed once, for every needs-prep
+  // meeting, when the user clicks Next off the step (see advancePrep). A meeting
+  // toggled ON has no proposed `block` until then; PrepStep renders it as a pending
+  // slot. Persisted by normalized title key server-side, so every row sharing the
+  // title flips together to match. On failure, roll the flip back and surface it.
+  const setPrepDecision = useCallback((title: string, needsPrep: boolean) => {
+    setError(null);
+    const flip = (want: boolean) =>
+      setPrepData(prev =>
+        prev
+          ? { ...prev, meetings: prev.meetings.map(m => (m.title === title ? { ...m, needsPrep: want } : m)) }
+          : prev
+      );
+    flip(needsPrep);
+    api.setPrepDecision(title, needsPrep).catch(err => {
+      flip(!needsPrep);
+      setError(err instanceof Error ? err.message : 'Failed to update prep decision');
+    });
+  }, []);
 
   // --- Step 3 actions ---
 
@@ -1335,7 +1338,6 @@ export function PlanWeekModal({
               {step === 'prep' && (
                 <PrepStep
                   prepData={prepData}
-                  prepBusy={prepBusy}
                   isLoading={isLoading}
                   showOtherMeetings={showOtherMeetings}
                   setShowOtherMeetings={setShowOtherMeetings}
@@ -1426,7 +1428,6 @@ export function PlanWeekModal({
                   onClick={handleNext}
                   disabled={
                     isLoading ||
-                    prepBusy ||
                     (step === 'type' && (typeLoading || isApplyingTypes)) ||
                     (step === 'reminders' && remindersLoading) ||
                     (step === 'priorities' && !prioritiesReady) ||
