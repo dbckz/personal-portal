@@ -213,6 +213,10 @@ describe('isHoldName', () => {
     expect(isHoldName('Bench press')).toBe(false);
     expect(isHoldName('Treadmill run')).toBe(false);
     expect(isHoldName(undefined)).toBe(false);
+    // Rep-based movements FROM a hold position are reps, not holds.
+    expect(isHoldName('High plank shoulder taps')).toBe(false);
+    expect(isHoldName('Plank jacks')).toBe(false);
+    expect(isHoldName('Mountain climbers')).toBe(false);
   });
 });
 

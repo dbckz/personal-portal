@@ -96,13 +96,18 @@ export function isCardioName(name: string | undefined): boolean {
 // even when no seconds have been logged yet.
 const HOLD_NAME_WORDS = /\b(plank|hang|wall\s?sit|l[-\s]?sit|hollow hold|hold)\b/i;
 
+// Rep-based movements performed FROM a hold position — "High plank shoulder
+// taps", "plank jacks", "mountain climbers" — are counted in reps, not seconds,
+// so a hold word in the name must not claim them.
+const HOLD_EXCLUSION_WORDS = /\b(taps?|jacks?|climbers?|walk[-\s]?outs?|up[-\s]?downs?)\b/i;
+
 // True when an exercise NAME reads as a timed hold (plank, hang, wall sit).
 // Deliberately narrow: "Dead bug", "Bird dog" and other slow bodyweight work
 // are NOT holds — they are rep-based, so they must not be swept in here.
 export function isHoldName(name: string | undefined): boolean {
   const text = (name ?? '').trim();
   if (!text) return false;
-  return HOLD_NAME_WORDS.test(text);
+  return HOLD_NAME_WORDS.test(text) && !HOLD_EXCLUSION_WORDS.test(text);
 }
 
 // Words in an exercise NAME that mark it as UNILATERAL — worked one side at a
