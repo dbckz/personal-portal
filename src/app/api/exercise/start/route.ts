@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { format } from 'date-fns';
 
-import { buildProgressions } from '@/lib/exercise-progression';
-import { buildSessionTargets, describeVolumeLoad, type ExerciseTarget } from '@/lib/exercise-targets';
+import { describeVolumeLoad, type ExerciseTarget } from '@/lib/exercise-targets';
 import { createSession, getAllSessions } from '@/lib/storage/exercise';
+import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 
 // POST /api/exercise/start { date? }
 //
 // The one button you press on arriving at the gym: opens today's session,
 // pre-filled with what to aim for on each exercise.
+//
+// The seeded entries come from resolveSessionTargets — the SAME resolver the
+// checklist's /api/exercise/targets route uses — so the pre-filled "done" numbers
+// always match what the screen recommends. It uses the cached AI programme when
+// one exists, else the deterministic targets, and never triggers a fresh
+// generation: starting a session at the gym must stay fast and offline-tolerant.
 //
 // Idempotent — pressing it again returns the session already in progress rather
 // than starting a second one, because the phone will get closed and reopened
@@ -22,13 +28,7 @@ export async function POST(request: NextRequest) {
     const inProgress = sessions.find(s => s.date === date && s.completed && s.source === 'manual');
     if (inProgress) return NextResponse.json({ session: inProgress, resumed: true });
 
-    const plan = sessions.find(s => s.date === date && s.planned);
-    // Exclude today so the seeded entries aim at progressing from the PREVIOUS
-    // workout, not from a session logged earlier today.
-    const targets = buildSessionTargets(
-      buildProgressions(sessions, { before: date }),
-      plan?.components ?? []
-    );
+    const { plan, targets } = await resolveSessionTargets(date, sessions);
 
     const session = await createSession({
       date,
