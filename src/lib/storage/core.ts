@@ -3,6 +3,7 @@
 // external contract — a UserData object with all fields defaulted — is unchanged.
 
 import { AsanaFilterState } from '@/types';
+import type { WeeklyRoutineDay } from '@/types/life';
 import { readAllDomains, writeAllDomains } from './db';
 import type {
   AdHocTask,
@@ -160,6 +161,9 @@ export interface UserData {
   // only covers what has finished SINCE then) and the bare calendar-event titles
   // the user has dismissed as "not a task" (so they never resurface in review).
   dailyReviewState?: DailyReviewState;
+  // Dave's standing weekly training routine — the repeating shape of the week the
+  // plan is built from. Seeded and read/written through lib/storage/weekly-routine.
+  weeklyRoutine?: WeeklyRoutineDay[];
 }
 
 export interface DailyReviewState {
@@ -229,6 +233,7 @@ const DEFAULT_USER_DATA: UserData = {
   eventAttributionRules: [],
   timeSyncState: {},
   dailyReviewState: {},
+  weeklyRoutine: [],
 };
 
 export async function getUserData(): Promise<UserData> {
@@ -299,6 +304,7 @@ export async function getUserData(): Promise<UserData> {
         : {}),
       timeSyncState: parsed.timeSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
+      weeklyRoutine: parsed.weeklyRoutine || [],
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into

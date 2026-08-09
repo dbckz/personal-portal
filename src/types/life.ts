@@ -295,6 +295,23 @@ export interface ExerciseSession {
   updatedAt: string;
 }
 
+// One weekday of Dave's standing training routine — the repeating shape of the
+// week, not a dated session. `dayOfWeek` follows JS `Date.getDay()`: 0 = Sunday,
+// 1 = Monday … 6 = Saturday, so a future generator can build a dated session
+// straight from a calendar day. `anchors` are the lifts to drive up week to week
+// (listed and badged first); `staples` are the fixed accessory/core work that
+// recurs but isn't progressed as hard. A `rest` day carries neither. Exercise
+// names are stored verbatim so they match the calendar prescriptions and, later,
+// the logged history.
+export interface WeeklyRoutineDay {
+  dayOfWeek: number; // 0 = Sunday … 6 = Saturday (JS Date.getDay())
+  title: string;
+  note?: string;
+  anchors: string[];
+  staples?: string[];
+  rest?: boolean;
+}
+
 // A session as read out of the training-log spreadsheet, before it is given ids
 // and written to storage.
 export interface SheetSession {

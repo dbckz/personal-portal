@@ -51,6 +51,7 @@ export const LIFE_SECTIONS: LifeSection[] = [
     holdsGoals: true,
     subTabs: [
       { id: 'today', label: 'Today', icon: 'Calendar' },
+      { id: 'routine', label: 'Routine', icon: 'CalendarRange' },
       { id: 'plan', label: 'Plan', icon: 'CalendarCheck' },
       { id: 'history', label: 'History', icon: 'History' },
       { id: 'progress', label: 'Progress', icon: 'TrendingUp' },
