@@ -65,6 +65,13 @@ export interface CreateSessionInput {
   googleCalendarId?: string;
   components?: string[];
   targetDistanceKm?: number;
+  // A planned session's calendar-event description and the prescription parsed
+  // from it. `planDescription` being a string (even '') marks the caller as one
+  // that manages the prescription, so a re-sync can clear it when the event's
+  // description is removed; left undefined, the prescription fields are untouched.
+  planDescription?: string;
+  prescription?: ExerciseSession['prescription'];
+  prescriptionNote?: string;
   source?: ExerciseSource;
   freeformText?: string;
   importKey?: string;
@@ -106,6 +113,9 @@ export async function createSession(
     ...(input.googleCalendarId ? { googleCalendarId: input.googleCalendarId } : {}),
     ...(input.components?.length ? { components: input.components } : {}),
     ...(input.targetDistanceKm ? { targetDistanceKm: input.targetDistanceKm } : {}),
+    ...(input.planDescription ? { planDescription: input.planDescription } : {}),
+    ...(input.prescription?.length ? { prescription: input.prescription } : {}),
+    ...(input.prescriptionNote ? { prescriptionNote: input.prescriptionNote } : {}),
     source: input.source ?? 'manual',
     ...(input.freeformText?.trim() ? { freeformText: input.freeformText.trim() } : {}),
     ...(input.importKey ? { importKey: input.importKey } : {}),
@@ -192,8 +202,28 @@ export async function upsertSessionByImportKey(
     updatedAt: now,
   };
 
+  // Prescription reconciles as a set for callers that manage it (the calendar
+  // sync always passes planDescription, even ''): a description writes the parsed
+  // prescription, one removed at the Google end clears it. Callers that don't
+  // touch prescriptions (the sheet importer) leave planDescription undefined and
+  // the existing fields stand.
+  if (input.planDescription !== undefined) {
+    reconcilePrescription(next, input);
+  }
+
   await writeSessions(sessions.map(s => (s.id === existing.id ? next : s)));
   return { session: next, created: false };
+}
+
+function reconcilePrescription(session: ExerciseSession, input: CreateSessionInput): void {
+  if (input.planDescription) session.planDescription = input.planDescription;
+  else delete session.planDescription;
+
+  if (input.prescription?.length) session.prescription = input.prescription;
+  else delete session.prescription;
+
+  if (input.prescriptionNote) session.prescriptionNote = input.prescriptionNote;
+  else delete session.prescriptionNote;
 }
 
 // Sessions the portal created on the calendar that are no longer in the plan —

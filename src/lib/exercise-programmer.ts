@@ -26,6 +26,11 @@ import {
   type ExerciseKind,
   type ExerciseTarget,
 } from './exercise-targets';
+import {
+  hasPrescribedExercises,
+  type PrescribedExercise,
+  type PrescribedSection,
+} from './exercise-prescription';
 
 // What to aim for on one exercise. Any of the measures may be present: a press
 // has sets/reps/weight, a plank sets/holdSeconds, a run duration/distance;
@@ -55,6 +60,9 @@ export interface ProgrammeRow {
 export interface ProgrammerPlan {
   label?: string;
   components: string[];
+  // When the day carries a written prescription, the exercises, order and
+  // rep/hold targets are FIXED: the model only chooses loads. Absent otherwise.
+  prescription?: PrescribedSection[];
 }
 
 // One exercise's history as the model sees it: how often it has appeared (the
@@ -99,20 +107,56 @@ export function buildProgrammerInput(
   totalSessions: number,
   goals: ProgrammerGoal[] = []
 ): ProgrammerInput {
-  // A one-group-plus-core day (e.g. pull + core) can carry ~7 pull staples plus
-  // ~4 core, right at the old cap of 12. Now that filtering is clean (no
-  // cross-group pollution crowding the list), 16 gives the model the full
-  // relevant vocabulary without pulling in unrelated work.
-  const relevant = selectPlanProgressions(progressions, plan.components, 16);
-  const exercises: ProgrammerExercise[] = relevant.map(p => ({
+  // A prescription fixes the exercise list and order: the model sees exactly
+  // those exercises (each with its history), and nothing else, so it can only
+  // choose loads. Otherwise the plan's implied exercises are selected from
+  // history. A one-group-plus-core day can carry ~7 pull staples plus ~4 core,
+  // right at the old cap of 12; 16 gives the model the full relevant vocabulary.
+  const exercises = hasPrescribedExercises(plan.prescription)
+    ? prescribedProgrammerExercises(plan.prescription!, progressions, totalSessions)
+    : selectPlanProgressions(progressions, plan.components, 16).map(p =>
+        toProgrammerExercise(p, totalSessions)
+      );
+  return { date, plan, exercises, ...(goals.length > 0 ? { goals } : {}) };
+}
+
+function toProgrammerExercise(p: ExerciseProgression, totalSessions: number): ProgrammerExercise {
+  return {
     name: p.name,
     key: p.key,
     frequency: p.sessions,
     totalSessions,
     recent: p.points.slice(-3),
     lastSummary: p.latest ? describeLast(p.latest) : 'no history',
-  }));
-  return { date, plan, exercises, ...(goals.length > 0 ? { goals } : {}) };
+  };
+}
+
+// The prescribed exercises, in written order and de-duplicated by key, each
+// carrying whatever history matches its name. An exercise with no history is
+// still included (frequency 0) so the model programs a load for it too.
+function prescribedProgrammerExercises(
+  sections: PrescribedSection[],
+  progressions: ExerciseProgression[],
+  totalSessions: number
+): ProgrammerExercise[] {
+  const byKey = new Map(progressions.map(p => [p.key, p]));
+  const out: ProgrammerExercise[] = [];
+  const seen = new Set<string>();
+  for (const section of sections) {
+    for (const ex of section.exercises) {
+      if (!ex.name.trim()) continue;
+      const key = exerciseKey(ex.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const match = byKey.get(key);
+      out.push(
+        match
+          ? toProgrammerExercise(match, totalSessions)
+          : { name: ex.name, key, frequency: 0, totalSessions, recent: [], lastSummary: 'no history' }
+      );
+    }
+  }
+  return out;
 }
 
 // A stable fingerprint of everything the model reasons over. When it is
@@ -134,8 +178,24 @@ export function programmeHash(input: ProgrammerInput): string {
     goals: (input.goals ?? [])
       .map(g => `${g.title}|${g.target ?? ''}|${g.nextMilestone ?? ''}|${g.pace ?? ''}`)
       .sort(),
+    // A changed prescription (edited on the calendar) must regenerate too.
+    prescription: prescriptionFingerprint(input.plan.prescription),
   });
   return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+}
+
+// The prescription reduced to a stable string: section titles and each
+// exercise's fixed scheme, in order. Empty when there is no prescription.
+function prescriptionFingerprint(sections: PrescribedSection[] | undefined): string {
+  if (!hasPrescribedExercises(sections)) return '';
+  return sections!
+    .map(
+      s =>
+        `${s.title}:${s.exercises
+          .map(e => `${e.name}|${e.sets ?? ''}|${e.repsMin ?? ''}-${e.repsMax ?? ''}|${e.holdSecondsMin ?? ''}-${e.holdSecondsMax ?? ''}|${e.perSide ? 'ps' : ''}`)
+          .join(',')}`
+    )
+    .join(';');
 }
 
 function pointFingerprint(p: ProgressionPoint): string {
@@ -201,8 +261,56 @@ const GOALS_HEADER = `Active goals for this person's training. Where an exercise
 
 `;
 
+// The scheme clause for a prescribed exercise ("3 x 8–12", "3 x 30–45s each
+// side"), built from the fixed targets so the model sees exactly what to load.
+function prescribedScheme(ex: PrescribedExercise): string {
+  const perSide = ex.perSide ? ' each side' : '';
+  const range = (min?: number, max?: number, unit = ''): string =>
+    min === undefined ? '' : min === max ? `${min}${unit}` : `${min}–${max}${unit}`;
+  if (ex.holdSecondsMin !== undefined) {
+    return `${ex.sets ?? ''} x ${range(ex.holdSecondsMin, ex.holdSecondsMax, 's')}${perSide}`.trim();
+  }
+  if (ex.repsMin !== undefined) {
+    return `${ex.sets ?? ''} x ${range(ex.repsMin, ex.repsMax)}${perSide}`.trim();
+  }
+  return ex.sets !== undefined ? `${ex.sets} sets` : 'as written';
+}
+
+const PRESCRIBED_HEADER = `You are choosing the working loads for a session whose exercises, order and rep/hold targets are ALREADY FIXED by the person's own written plan. Do NOT add, remove, reorder or substitute any exercise, and do NOT change the prescribed sets, reps or hold seconds. For each exercise below — in the given order — use its recent history and effort notes to pick the weight to use (or, for bodyweight, hold and cardio work, leave the load out), and write one sentence of rationale citing what was done last time.
+
+Return ONLY a JSON array, one object per exercise below, the SAME names in the SAME order, no prose, no code fences:
+[{"name":"<exact name>","target":{"weightKg":N},"rationale":"<one sentence citing last time>"}]
+
+Include "weightKg" only for a loaded lift; omit it for bodyweight, hold or cardio work. Do not restate sets/reps — those are fixed.
+
+`;
+
+// The prescription-constrained prompt: the fixed list with schemes and history,
+// and instructions to fill loads only.
+function buildPrescribedPrompt(input: ProgrammerInput): string {
+  const planLabel = input.plan.label || input.plan.components.join(' + ') || 'session';
+  const byKey = new Map(input.exercises.map(e => [e.key, e]));
+  const blocks: string[] = [];
+  for (const section of input.plan.prescription ?? []) {
+    const lines = section.exercises
+      .filter(ex => ex.name.trim())
+      .map(ex => {
+        const known = byKey.get(exerciseKey(ex.name));
+        const history = known?.recent.length
+          ? known.recent.map(p => `    - ${pointLine(p)}`).join('\n')
+          : '    - no history yet';
+        return `- ${ex.name} — prescribed ${prescribedScheme(ex)}\n${history}`;
+      });
+    if (lines.length) blocks.push(`${section.title}:\n${lines.join('\n')}`);
+  }
+  return `${PRESCRIBED_HEADER}Session: ${planLabel}
+
+${blocks.join('\n\n')}`;
+}
+
 // Build the full prompt from the gathered input.
 export function buildProgrammerPrompt(input: ProgrammerInput): string {
+  if (hasPrescribedExercises(input.plan.prescription)) return buildPrescribedPrompt(input);
   const planLabel = input.plan.label || input.plan.components.join(' + ') || 'session';
   const components = input.plan.components.length
     ? `Components: ${input.plan.components.join(', ')}`

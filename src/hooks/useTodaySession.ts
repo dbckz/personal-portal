@@ -55,6 +55,11 @@ export interface TodayRow {
   // finisher. Absent on deterministic non-cardio rows and added-on-the-spot ones.
   kind?: ExerciseKind;
   toFailure?: boolean;
+  // Prescription provenance: the section the exercise was written under, and
+  // whether it is an anchor lift. Drive the sectioned checklist. Absent on rows
+  // that didn't come from a prescription.
+  section?: string;
+  isAnchor?: boolean;
   rationale?: string;
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — last time with numbers, shown on the row.
@@ -128,6 +133,8 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     action: t.action,
     kind: t.kind,
     toFailure: t.toFailure,
+    section: t.section,
+    isAnchor: t.isAnchor,
     rationale: t.rationale,
     last: t.last,
     lastSummary: t.lastSummary,

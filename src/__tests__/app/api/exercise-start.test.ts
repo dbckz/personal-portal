@@ -16,6 +16,7 @@
 import type { ExerciseSession } from '@/types/life';
 import type { ProgrammeRow } from '@/lib/exercise-programmer';
 import { exerciseKey } from '@/lib/exercise-progression';
+import { parsePrescription } from '@/lib/exercise-prescription';
 
 jest.mock('@/lib/storage/exercise', () => ({
   getAllSessions: jest.fn(),
@@ -162,5 +163,62 @@ describe('POST /api/exercise/start — seeding the session', () => {
     mockGetCached.mockReturnValue(null);
     await start();
     expect(mockGenerate).not.toHaveBeenCalled();
+  });
+});
+
+// A planned session whose calendar event prescribed rep and hold RANGES. Seeding
+// must pre-fill the LOWER bound of each range as the "done" number while the
+// target text shows the whole range.
+function plannedPrescription(): ExerciseSession {
+  const { sections } = parsePrescription(
+    `Anchors:\n- Seated cable row: 3 x 8–12\n\nCore:\n- Side plank: 3 x 30–45 sec each side\n\nAccessories:\n- Cable shrugs: 2 x 15`
+  );
+  return {
+    id: 'plan',
+    date: '2026-08-06',
+    type: 'strength',
+    planned: true,
+    completed: false,
+    source: 'calendar',
+    label: 'Pull + core',
+    components: ['Pull', 'core'],
+    prescription: sections,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+  };
+}
+
+describe('POST /api/exercise/start — seeding a prescribed session with ranges', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetAll.mockResolvedValue([previousSession(), plannedPrescription()]);
+    mockCreate.mockImplementation(async (s: Record<string, unknown>) => ({ id: 's1', ...s }));
+    mockGetCached.mockReturnValue(null);
+  });
+
+  it('seeds the lower bound of a rep range and shows the range in the target text', async () => {
+    const entries = await start();
+    // Exactly the prescribed exercises, in order.
+    expect(entries.map(e => e.name)).toEqual(['Seated cable row', 'Side plank', 'Cable shrugs']);
+    const row = entries.find(e => e.name === 'Seated cable row')!;
+    expect(row.reps).toBe(8); // lower bound seeded
+    expect(row.sets).toBe(3);
+    expect(row.targetText).toMatch(/3 × 8–12/);
+  });
+
+  it('seeds the lower bound of a hold range and carries each side', async () => {
+    const entries = await start();
+    const plank = entries.find(e => e.name === 'Side plank')!;
+    expect(plank.holdSeconds).toBe(30);
+    expect(plank.perSide).toBe(true);
+    expect(plank.reps).toBeUndefined();
+    expect(plank.targetText).toMatch(/3 × 30–45s each side/);
+  });
+
+  it('seeds a single-value scheme as a plain count', async () => {
+    const entries = await start();
+    const shrugs = entries.find(e => e.name === 'Cable shrugs')!;
+    expect(shrugs.reps).toBe(15);
+    expect(shrugs.targetText).toBe('2 × 15');
   });
 });

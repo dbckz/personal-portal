@@ -16,8 +16,9 @@
 
 import { format, parseISO } from 'date-fns';
 
-import type { ExerciseProgression, ProgressionPoint } from './exercise-progression';
+import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from './exercise-progression';
 import { isCardioName, isHoldName, isUnilateralName } from './exercise-parse';
+import type { PrescribedExercise, PrescribedSection } from './exercise-prescription';
 
 // How an exercise sits in the programme:
 //   core     — kept identical session to session so it can be driven up
@@ -126,6 +127,14 @@ export interface ExerciseTarget {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  // Prescribed rep/hold RANGES ("3 × 8–12"). When set, the target reads as a
+  // range and seeds the lower bound; the recommender does double progression
+  // against the top. `reps`/`holdSeconds` still carry the concrete lower bound
+  // so seeding and the deterministic path stay unchanged.
+  repsMin?: number;
+  repsMax?: number;
+  holdSecondsMin?: number;
+  holdSecondsMax?: number;
   // "each side" — the volume is per side, not a total. Set for unilateral work
   // so the aim and the log both read "3 × 8 each side".
   perSide?: boolean;
@@ -135,6 +144,11 @@ export interface ExerciseTarget {
   // one to take to failure. The UI shows both as subtle row tags.
   kind?: ExerciseKind;
   toFailure?: boolean;
+  // Prescription provenance: the section the exercise was written under
+  // ("Anchors", "Core"), and whether it is an anchor lift. Drives the sectioned
+  // checklist and the "Anchor" badge. Absent on non-prescribed targets.
+  section?: string;
+  isAnchor?: boolean;
   // Last time out, for context.
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — what was actually done last time, with numbers, so
@@ -165,13 +179,27 @@ export function describeVolumeLoad(t: {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  repsMin?: number;
+  repsMax?: number;
+  holdSecondsMin?: number;
+  holdSecondsMax?: number;
   perSide?: boolean;
   weightKg?: number;
   durationMinutes?: number;
   distanceKm?: number;
 }): string {
+  // A prescribed range reads as a range ("3 × 8–12", "3 × 30–45s"); a single
+  // value falls through to the plain reps/hold rendering below.
+  const repRange = t.repsMin !== undefined && t.repsMax !== undefined && t.repsMin !== t.repsMax;
+  const holdRange =
+    t.holdSecondsMin !== undefined &&
+    t.holdSecondsMax !== undefined &&
+    t.holdSecondsMin !== t.holdSecondsMax;
+
   let volume = '';
-  if (t.sets && t.reps) volume = `${t.sets} × ${t.reps}`;
+  if (t.sets && repRange) volume = `${t.sets} × ${t.repsMin}–${t.repsMax}`;
+  else if (t.sets && holdRange) volume = `${t.sets} × ${t.holdSecondsMin}–${t.holdSecondsMax}s`;
+  else if (t.sets && t.reps) volume = `${t.sets} × ${t.reps}`;
   else if (t.sets && t.holdSeconds) volume = `${t.sets} × ${t.holdSeconds}s`;
   // A single hold with no set count — a lone "90s plank", as it often arrives.
   else if (t.holdSeconds) volume = `${t.holdSeconds}s`;
@@ -397,6 +425,196 @@ export function buildSessionTargets(
   limit = 8
 ): ExerciseTarget[] {
   return orderTargets(selectPlanProgressions(progressions, components, limit).map(buildTarget));
+}
+
+// ---------------------------------------------------------------------------
+// Prescription-driven targets
+// ---------------------------------------------------------------------------
+//
+// When the day's plan carries a prescription (parsed from the calendar event's
+// description), the target list is EXACTLY the prescribed exercises, in the
+// prescribed order — no history-based selection. The scheme (sets, rep/hold
+// range, each-side) comes from the prescription; only the load and the
+// progression suggestion are read from history, through the same double-
+// progression machinery the free targets use. An exercise with no matching
+// history becomes a no-history target rather than being dropped.
+
+// The prescribed exercises flattened into targets, section and order preserved.
+export function buildPrescribedTargets(
+  sections: PrescribedSection[],
+  progressions: ExerciseProgression[]
+): ExerciseTarget[] {
+  const byKey = new Map(progressions.map(p => [p.key, p]));
+  const out: ExerciseTarget[] = [];
+  for (const section of sections) {
+    for (const ex of section.exercises) {
+      out.push(buildPrescribedTarget(ex, section, byKey.get(exerciseKey(ex.name))));
+    }
+  }
+  return out;
+}
+
+// One prescribed exercise → a target: its written scheme, plus a load and
+// rationale worked out from history where there is any.
+export function buildPrescribedTarget(
+  ex: PrescribedExercise,
+  section: PrescribedSection,
+  progression: ExerciseProgression | undefined
+): ExerciseTarget {
+  const name = ex.name;
+  const key = exerciseKey(name);
+  const perSide = ex.perSide || isUnilateralName(name);
+  const isHold = ex.holdSecondsMin !== undefined || isHoldName(name);
+  const isCardio = !isHold && isCardioName(name);
+  const anchor = !!ex.isAnchor;
+  const kind: ExerciseKind | undefined = anchor
+    ? 'core'
+    : isCardio
+      ? 'cardio'
+      : isHold
+        ? 'hold'
+        : undefined;
+
+  // The written scheme. Rep/hold ranges carry both the bounds (for the range
+  // display) and the lower bound as the concrete number to seed and log against.
+  const scheme: Partial<ExerciseTarget> = {
+    ...(ex.sets !== undefined ? { sets: ex.sets } : {}),
+    ...(perSide ? { perSide: true } : {}),
+    ...(ex.repsMin !== undefined
+      ? { reps: ex.repsMin, repsMin: ex.repsMin, ...(ex.repsMax !== undefined ? { repsMax: ex.repsMax } : {}) }
+      : {}),
+    ...(ex.holdSecondsMin !== undefined
+      ? {
+          holdSeconds: ex.holdSecondsMin,
+          holdSecondsMin: ex.holdSecondsMin,
+          ...(ex.holdSecondsMax !== undefined ? { holdSecondsMax: ex.holdSecondsMax } : {}),
+        }
+      : {}),
+  };
+
+  const base: ExerciseTarget = {
+    name,
+    key,
+    section: section.title,
+    ...(anchor ? { isAnchor: true } : {}),
+    ...(kind ? { kind } : {}),
+    ...scheme,
+    rationale: '',
+  };
+
+  const last = progression?.latest;
+  if (!last) {
+    return {
+      ...base,
+      action: 'no-history',
+      rationale: ex.note
+        ? `${capitalise(ex.note)} — no history yet, log today as the baseline.`
+        : 'No history for this exercise yet — log today as the baseline.',
+    };
+  }
+
+  const context: ExerciseTarget = { ...base, last, lastSummary: describeLast(last) };
+  const effort: EffortReading = last.rir !== undefined ? { rir: last.rir } : readEffort(last.notes);
+
+  if (isCardio) {
+    const detail = describeVolumeLoad({
+      durationMinutes: last.durationMinutes,
+      distanceKm: last.distanceKm,
+    });
+    return {
+      ...context,
+      action: 'hold',
+      ...(last.durationMinutes !== undefined ? { durationMinutes: last.durationMinutes } : {}),
+      ...(last.distanceKm !== undefined ? { distanceKm: last.distanceKm } : {}),
+      rationale: detail ? `Last time was ${detail} — match or beat it.` : 'Record time and distance today.',
+    };
+  }
+
+  if (isHold) {
+    return { ...context, ...resolveHoldProgression(last, effort, ex.holdSecondsMax) };
+  }
+
+  if (last.weightKg === undefined) {
+    return { ...context, ...resolveBodyweightProgression(last, effort, ex.repsMax) };
+  }
+
+  return { ...context, ...resolveLoadedProgression(last, effort, ex.repsMax) };
+}
+
+// The load half of a prescribed loaded lift: double progression against the top
+// of the prescribed rep range. Reuses the free path's effort read and increment.
+function resolveLoadedProgression(
+  last: ProgressionPoint,
+  effort: EffortReading,
+  repsMax: number | undefined
+): Partial<ExerciseTarget> {
+  const weightKg = last.weightKg!;
+  if (effort.explicit === 'down') {
+    const reduced = roundLoad(weightKg * 0.9);
+    return { action: 'reduce', weightKg: reduced, rationale: `You noted it was too heavy — drop to about ${reduced}kg.` };
+  }
+  if (effort.failed) {
+    return { action: 'hold', weightKg, rationale: `Last time was a struggle — repeat ${weightKg}kg until every set is complete.` };
+  }
+
+  const atTop = repsMax !== undefined && last.reps !== undefined && last.reps >= repsMax;
+  const rir = effort.explicit === 'up' ? Math.max(effort.rir ?? 0, 4) : (effort.rir ?? 0);
+  const step = atTop ? increment(weightKg, rir) : 0;
+  if (step > 0) {
+    const next = roundLoad(weightKg + step);
+    return {
+      action: 'increase',
+      weightKg: next,
+      rationale: `Hit the top of the range at ${weightKg}kg with ${rir} in reserve — go to ${next}kg and build the reps back up.`,
+    };
+  }
+
+  // Below the top of the range (or no room to add weight): stay at the weight
+  // and drive the reps up toward the top before loading more.
+  if (repsMax !== undefined && last.reps !== undefined && last.reps < repsMax) {
+    return {
+      action: 'add-reps',
+      weightKg,
+      rationale: `Stay at ${weightKg}kg and work the reps up toward ${repsMax} before adding weight.`,
+    };
+  }
+  return { action: 'hold', weightKg, rationale: `Repeat ${weightKg}kg — consolidate before the next jump.` };
+}
+
+// The bodyweight-rep counterpart: no weight to add, so progression is reps
+// toward the top of the range.
+function resolveBodyweightProgression(
+  last: ProgressionPoint,
+  effort: EffortReading,
+  repsMax: number | undefined
+): Partial<ExerciseTarget> {
+  if (effort.failed) {
+    return { action: 'hold', rationale: `Last time was a struggle — repeat ${describeVolume(last)} before adding reps.` };
+  }
+  if (repsMax !== undefined && (last.reps === undefined || last.reps < repsMax)) {
+    return { action: 'add-reps', rationale: `Work the reps up toward ${repsMax} a set.` };
+  }
+  return { action: 'hold', rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
+}
+
+// The timed-hold counterpart: progression is seconds held toward the top of the
+// prescribed hold range.
+function resolveHoldProgression(
+  last: ProgressionPoint,
+  effort: EffortReading,
+  holdSecondsMax: number | undefined
+): Partial<ExerciseTarget> {
+  if (effort.failed) {
+    return { action: 'hold', rationale: `Last time was a struggle — repeat ${describeVolume(last)} before adding time.` };
+  }
+  if (holdSecondsMax !== undefined && (last.holdSeconds === undefined || last.holdSeconds < holdSecondsMax)) {
+    return { action: 'add-time', rationale: `Hold toward ${holdSecondsMax}s a set.` };
+  }
+  return { action: 'hold', rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
+}
+
+function capitalise(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // The exercises a session's plan implies, most-relevant first and capped. Shared

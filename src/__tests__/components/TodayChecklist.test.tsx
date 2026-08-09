@@ -104,6 +104,20 @@ describe('TodayChecklist cardio-aware form', () => {
     expect(screen.getByText('Seconds in reserve')).toBeInTheDocument();
   });
 
+  it('renders prescription section headings and the Anchor badge, in order', () => {
+    stubSession([
+      row({ key: 'a1', name: 'Seated cable row', section: 'Anchors', isAnchor: true, kind: 'core', sets: 3, reps: 8 }),
+      row({ key: 'c1', name: 'Side plank', section: 'Core', kind: 'hold', sets: 3, holdSeconds: 30 }),
+    ]);
+    render(<TodayChecklist />);
+
+    expect(screen.getByRole('heading', { name: 'Anchors' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Core' })).toBeInTheDocument();
+    // The anchor lift wears the "Anchor" badge, not "Staple".
+    expect(screen.getByText('Anchor')).toBeInTheDocument();
+    expect(screen.queryByText('Staple')).not.toBeInTheDocument();
+  });
+
   it('offers a time field in the swap form once the replacement name is cardio', () => {
     const commitSwap = jest.fn();
     stubSession([row({ key: 'r4', name: 'Bench press', sets: 3, reps: 8, weightKg: 40 })], {

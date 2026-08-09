@@ -39,11 +39,14 @@ const KIND_STYLE: Record<ExerciseKind, { label: string; className: string }> = {
   hold: { label: 'Hold', className: 'text-teal-700 bg-teal-50' },
 };
 
-export function KindTag({ kind }: { kind: ExerciseKind }) {
+// A prescribed anchor lift wears the same indigo 'core' styling but reads
+// "Anchor" — the word the plan uses for the lifts to drive up week to week.
+export function KindTag({ kind, isAnchor }: { kind: ExerciseKind; isAnchor?: boolean }) {
   const style = KIND_STYLE[kind];
+  const label = isAnchor && kind === 'core' ? 'Anchor' : style.label;
   return (
     <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${style.className}`}>
-      {style.label}
+      {label}
     </span>
   );
 }

@@ -12,6 +12,7 @@ import {
 } from '@/hooks/useTodaySession';
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
+import { groupRowsIntoSections } from '@/lib/exercise-sections';
 import { ActionBadge, FailureTag, KindTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
 
@@ -77,23 +78,30 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
         <p className="text-sm text-gray-500">No planned exercises for today. Add what you do below.</p>
       )}
 
-      <div className="space-y-2">
-        {rows.map(row => (
-          <RowCard
-            key={row.key}
-            row={row}
-            busy={busyKey === row.key}
-            open={openKey === row.key}
-            knownNames={knownNames}
-            onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
-            onToggleDone={() => toggleDone(row)}
-            onCommitField={patch => commitField(row, patch)}
-            onCommitNote={note => commitNote(row, note)}
-            onCommitRir={rir => commitRir(row, rir)}
-            onCommitSwap={replacement => commitSwap(row, replacement)}
-            onRestoreSwap={() => restoreSwap(row)}
-            onRemove={() => removeRow(row)}
-          />
+      <div className="space-y-4">
+        {groupRowsIntoSections(rows).map(section => (
+          <div key={section.title} className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              {section.title}
+            </h3>
+            {section.rows.map(row => (
+              <RowCard
+                key={row.key}
+                row={row}
+                busy={busyKey === row.key}
+                open={openKey === row.key}
+                knownNames={knownNames}
+                onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
+                onToggleDone={() => toggleDone(row)}
+                onCommitField={patch => commitField(row, patch)}
+                onCommitNote={note => commitNote(row, note)}
+                onCommitRir={rir => commitRir(row, rir)}
+                onCommitSwap={replacement => commitSwap(row, replacement)}
+                onRestoreSwap={() => restoreSwap(row)}
+                onRemove={() => removeRow(row)}
+              />
+            ))}
+          </div>
         ))}
       </div>
 
@@ -197,7 +205,7 @@ function RowCard({
             >
               {row.name}
             </p>
-            {row.kind && <KindTag kind={row.kind} />}
+            {row.kind && <KindTag kind={row.kind} isAnchor={row.isAnchor} />}
             {row.toFailure && <FailureTag />}
             {row.action && <ActionBadge action={row.action} />}
           </div>

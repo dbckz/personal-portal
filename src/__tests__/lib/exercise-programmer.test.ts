@@ -17,6 +17,7 @@ import {
 } from '@/lib/exercise-programmer';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from '@/lib/exercise-progression';
 import { getCachedProgramme, saveCachedProgramme } from '@/lib/storage/exercise-programmes';
+import { parsePrescription } from '@/lib/exercise-prescription';
 import { __resetDbForTests } from '@/lib/storage/db';
 
 function progression(
@@ -252,6 +253,61 @@ describe('active goals in the programme', () => {
     const before = programmeHash(input());
     const withGoals = buildProgrammerInput(pushProgressions(), { label: 'Push', components: [] }, '2026-08-06', 6, goals);
     expect(programmeHash(withGoals)).not.toBe(before);
+  });
+});
+
+describe('a prescription constrains the programmer', () => {
+  const { sections } = parsePrescription(
+    'Anchors:\n- Converging chest press machine: 3 x 8–12\n- Cable shrugs: 2 x 15'
+  );
+
+  it('feeds the model exactly the prescribed exercises, in order, history or not', () => {
+    const built = buildProgrammerInput(
+      pushProgressions(),
+      { label: 'Pull', components: ['Pull'], prescription: sections },
+      '2026-08-06',
+      6
+    );
+    // Only the two prescribed exercises — the treadmill run and tricep pushdown
+    // from history are NOT offered.
+    expect(built.exercises.map(e => e.name)).toEqual(['Converging chest press machine', 'Cable shrugs']);
+    // The prescribed lift with no history is still included so the model loads it.
+    const shrugs = built.exercises.find(e => e.key === exerciseKey('Cable shrugs'))!;
+    expect(shrugs.frequency).toBe(0);
+    expect(shrugs.lastSummary).toBe('no history');
+  });
+
+  it('writes a loads-only prompt that fixes the list, order and scheme', () => {
+    const built = buildProgrammerInput(
+      pushProgressions(),
+      { label: 'Pull', components: ['Pull'], prescription: sections },
+      '2026-08-06',
+      6
+    );
+    const prompt = buildProgrammerPrompt(built);
+    expect(prompt).toMatch(/ALREADY FIXED/);
+    expect(prompt).toMatch(/Do NOT add, remove, reorder or substitute/i);
+    expect(prompt).toContain('prescribed 3 x 8–12');
+    expect(prompt).toContain('Anchors:');
+  });
+
+  it('folds the prescription into the hash so an edited plan regenerates', () => {
+    const base = buildProgrammerInput(
+      pushProgressions(),
+      { label: 'Pull', components: ['Pull'], prescription: sections },
+      '2026-08-06',
+      6
+    );
+    const edited = parsePrescription(
+      'Anchors:\n- Converging chest press machine: 3 x 6–10\n- Cable shrugs: 2 x 15'
+    ).sections;
+    const moved = buildProgrammerInput(
+      pushProgressions(),
+      { label: 'Pull', components: ['Pull'], prescription: edited },
+      '2026-08-06',
+      6
+    );
+    expect(programmeHash(moved)).not.toBe(programmeHash(base));
   });
 });
 

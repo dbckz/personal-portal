@@ -22,6 +22,7 @@ import {
   updateCalendarEvent,
 } from './google-calendar';
 import { parsePlannedTitle, parseTimedExerciseTitle } from './exercise-parse';
+import { hasPrescribedExercises, parsePrescription } from './exercise-prescription';
 import { getEnabledGoogleIntegrations } from './integration-storage';
 import {
   attachCalendarEvent,
@@ -215,12 +216,20 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
     const importKey = `${IMPORT_PREFIX}${event.id}`;
     seen.add(importKey);
 
+    // The event's description carries the full prescription (what to do, with
+    // rep/hold ranges). Always pass the raw text — even '' — so a re-sync writes
+    // an added prescription and clears one deleted at the Google end.
+    const prescription = parsePrescription(event.description);
+
     const result = await upsertSessionByImportKey(importKey, {
       date: event.startDate!,
       type: parsed.type,
       label: parsed.title,
       components: parsed.components,
       ...(parsed.targetDistanceKm ? { targetDistanceKm: parsed.targetDistanceKm } : {}),
+      planDescription: event.description ?? '',
+      ...(hasPrescribedExercises(prescription.sections) ? { prescription: prescription.sections } : {}),
+      ...(prescription.sessionNote ? { prescriptionNote: prescription.sessionNote } : {}),
       planned: true,
       completed: false,
       googleEventId: event.id,

@@ -185,6 +185,8 @@ export interface Scorecard {
 // Exercise
 // ---------------------------------------------------------------------------
 
+import type { PrescribedSection } from '@/lib/exercise-prescription';
+
 export type ExerciseIntensity = 'easy' | 'moderate' | 'hard';
 
 // One exercise performed inside a session — the granularity the training log is
@@ -268,6 +270,15 @@ export interface ExerciseSession {
   // The plan's parts, as written on the calendar: ['Push (shoulders)', 'Run'].
   components?: string[];
   targetDistanceKm?: number;
+  // A planned session's calendar event can carry a full PRESCRIPTION in its
+  // description — sectioned lists of exactly what to do, with rep/hold ranges.
+  // `planDescription` is the raw text (so a re-sync can tell whether it changed);
+  // `prescription` is the parsed sections; `prescriptionNote` is the leading
+  // free-text line. All absent on a plan whose event has no description, which
+  // behaves exactly as before.
+  planDescription?: string;
+  prescription?: PrescribedSection[];
+  prescriptionNote?: string;
   source?: ExerciseSource;
   // For a session logged freehand: exactly what was written, kept verbatim
   // alongside whatever the parse made of it. The parse is a convenience; this

@@ -20,11 +20,17 @@
 // mirroring exactly what the checklist would have been showing.
 
 import { buildProgressions } from '@/lib/exercise-progression';
-import { buildSessionTargets, type ExerciseTarget } from '@/lib/exercise-targets';
+import {
+  buildPrescribedTargets,
+  buildSessionTargets,
+  type ExerciseTarget,
+} from '@/lib/exercise-targets';
+import { hasPrescribedExercises } from '@/lib/exercise-prescription';
 import {
   buildProgrammerInput,
   programmeHash,
   programmeRowToTarget,
+  type ProgrammeRow,
   type ProgrammerGoal,
   type ProgrammerInput,
 } from '@/lib/exercise-programmer';
@@ -69,9 +75,12 @@ export async function resolveSessionTargets(
   // hash, so both routes must resolve them to look up the same cache entry.
   const goals = await buildProgrammerGoals(date);
 
+  const prescription = plan?.prescription;
+  const prescribed = hasPrescribedExercises(prescription);
+
   const input = buildProgrammerInput(
     progressions,
-    { label: plan?.label, components },
+    { label: plan?.label, components, ...(prescribed ? { prescription } : {}) },
     date,
     totalSessions,
     goals
@@ -79,12 +88,40 @@ export async function resolveSessionTargets(
   const hash = programmeHash(input);
   const cached = getCachedProgramme(date, hash);
 
+  // A prescription fixes the exercise list, order and scheme: the deterministic
+  // targets ARE the prescribed exercises, and a cached AI programme only refines
+  // their loads and rationales (never their membership or order).
+  if (prescribed) {
+    const deterministic = buildPrescribedTargets(prescription!, progressions);
+    const targets = cached ? overlayProgramme(deterministic, cached) : deterministic;
+    return { plan, components, targets, source: cached ? 'ai' : 'fallback', input, hash };
+  }
+
   if (cached) {
     return { plan, components, targets: cached.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 
   const targets = buildSessionTargets(progressions, components);
   return { plan, components, targets, source: 'fallback', input, hash };
+}
+
+// Lay a cached AI programme over the deterministic prescribed targets: for each
+// prescribed exercise (order and scheme fixed), take the model's chosen load and
+// rationale when it programmed that exercise, else keep the deterministic one.
+// AI rows naming anything not prescribed are ignored, and any prescribed
+// exercise the model skipped keeps its deterministic target — so the list is
+// always exactly the prescription.
+function overlayProgramme(prescribed: ExerciseTarget[], rows: ProgrammeRow[]): ExerciseTarget[] {
+  const byKey = new Map(rows.map(r => [r.key, r]));
+  return prescribed.map(target => {
+    const row = byKey.get(target.key);
+    if (!row) return target;
+    return {
+      ...target,
+      ...(row.target.weightKg !== undefined ? { weightKg: row.target.weightKg } : {}),
+      ...(row.rationale ? { rationale: row.rationale } : {}),
+    };
+  });
 }
 
 // The active Exercise-section goals, each resolved to its current pace and next
