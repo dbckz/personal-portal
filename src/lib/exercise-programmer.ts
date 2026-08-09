@@ -99,7 +99,11 @@ export function buildProgrammerInput(
   totalSessions: number,
   goals: ProgrammerGoal[] = []
 ): ProgrammerInput {
-  const relevant = selectPlanProgressions(progressions, plan.components, 12);
+  // A one-group-plus-core day (e.g. pull + core) can carry ~7 pull staples plus
+  // ~4 core, right at the old cap of 12. Now that filtering is clean (no
+  // cross-group pollution crowding the list), 16 gives the model the full
+  // relevant vocabulary without pulling in unrelated work.
+  const relevant = selectPlanProgressions(progressions, plan.components, 16);
   const exercises: ProgrammerExercise[] = relevant.map(p => ({
     name: p.name,
     key: p.key,

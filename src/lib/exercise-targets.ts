@@ -419,33 +419,64 @@ function orderTargets(targets: ExerciseTarget[]): ExerciseTarget[] {
   return [...targets.filter(isCardio), ...targets.filter(t => !isCardio(t))];
 }
 
-// Which muscle groups a plan component implies, and the words that identify an
-// exercise as belonging to one. Deliberately coarse — the aim is to keep leg day
-// off a push day, not to classify perfectly.
-const GROUPS: Record<string, RegExp> = {
-  push: /\b(press|push|fly|flye|dip|tricep|pushdown|lateral raise|crossover|shoulder|chest|pec)\b/i,
-  pull: /\b(row|pulldown|pullup|pull-up|chin|curl|shrug|rear delt|pec deck|lat|y raise|dead hang)\b/i,
-  legs: /\b(squat|leg|lunge|glute|calf|hamstring|quad|deadlift)\b/i,
-  core: /\b(plank|dead bug|core|ab|knee raise|paloff|shoulder tap)\b/i,
-  run: /\b(run|treadmill|parkrun|jog)\b/i,
-};
+// A muscle group a plan day can call for.
+type Group = 'run' | 'core' | 'legs' | 'pull' | 'push';
+
+// The words in an exercise NAME that classify it into a group. Ordered
+// most-specific first: an exercise is assigned to the FIRST group whose words it
+// matches, so "Leg press" lands in legs (not push's \bpress\b), "Reverse pec
+// deck" in pull (not push's \bpec\b), and "High plank shoulder taps" in core
+// (not push's \bshoulder\b). push is the catch-all and must come last.
+const CLASSIFY: Array<[Group, RegExp]> = [
+  ['run', /\b(run|treadmill|parkrun|jog|cardio)\b/i],
+  ['core', /\b(plank|dead ?bug|core|abs?|knee raise|pallof|paloff|shoulder taps?|sit-?ups?|crunch|hollow|hanging leg)\b/i],
+  ['legs', /\b(squat|legs?|lunge|glute|calf|calves|hamstring|quad|deadlift|hip thrust|step-?up|leg press|leg extension|leg curl)\b/i],
+  ['pull', /\b(row|pulldown|pull-?ups?|pullups?|chin|curl|shrug|rear delt|pec deck|lats?|face pull|y raise|dead hang)\b/i],
+  ['push', /\b(press|push|fly|flye|dip|tricep|pushdown|lateral raise|crossover|shoulders?|chest|pec)\b/i],
+];
+
+// The words in a plan COMPONENT that activate a group. Unambiguous by design:
+// "arms" is dropped from both push and pull because "Pull (back & arms)" and
+// "Push (chest & arms)" both contain it, so it can't disambiguate a day.
+// Evaluated per component (not on the joined text) so one component's words
+// can't leak into another's activation.
+const ACTIVATE: Array<[Group, RegExp]> = [
+  ['pull', /\b(pull|back|rows?|lats?)\b/i],
+  ['push', /\b(push|chest|shoulders?|press)\b/i],
+  ['legs', /\b(legs?|lower body)\b/i],
+  ['core', /\b(core|abs?)\b/i],
+  ['run', /\b(run|parkrun|track|cardio)\b/i],
+];
+
+// The single group an exercise name belongs to, by CLASSIFY precedence, or null
+// when nothing matches (an unfamiliar name — kept only via the empty-set
+// fallback, never force-fitted into a group).
+export function classifyExercise(name: string): Group | null {
+  for (const [group, re] of CLASSIFY) {
+    if (re.test(name)) return group;
+  }
+  return null;
+}
 
 function filterToPlan(
   progressions: ExerciseProgression[],
   components: string[]
 ): ExerciseProgression[] {
-  const text = components.join(' ').toLowerCase();
-  const wanted = Object.keys(GROUPS).filter(group => {
-    if (group === 'push') return /\bpush|chest|shoulders?|arms\b/.test(text);
-    if (group === 'pull') return /\bpull|back|arms\b/.test(text);
-    if (group === 'legs') return /\blegs?\b/.test(text);
-    if (group === 'core') return /\bcore|abs?\b/.test(text);
-    return /\brun|parkrun|track\b/.test(text);
+  const wanted = new Set<Group>();
+  for (const component of components) {
+    for (const [group, re] of ACTIVATE) {
+      if (re.test(component)) wanted.add(group);
+    }
+  }
+
+  if (wanted.size === 0) return progressions;
+
+  // An exercise is kept only when its OWN group is one the plan wants — so a
+  // "Leg press" on a pull day is excluded, not swept in on a shared word.
+  const matches = progressions.filter(p => {
+    const group = classifyExercise(p.name);
+    return group !== null && wanted.has(group);
   });
-
-  if (wanted.length === 0) return progressions;
-
-  const matches = progressions.filter(p => wanted.some(group => GROUPS[group].test(p.name)));
   // Never return an empty list because the plan used unfamiliar words — falling
   // back to the full list is more useful than showing nothing.
   return matches.length > 0 ? matches : progressions;

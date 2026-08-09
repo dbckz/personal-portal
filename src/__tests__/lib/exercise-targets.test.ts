@@ -7,10 +7,13 @@
  */
 import {
   buildTarget,
+  buildSessionTargets,
+  classifyExercise,
   describeLast,
   describeVolumeLoad,
   formatEntryDuration,
   readEffort,
+  selectPlanProgressions,
 } from '@/lib/exercise-targets';
 import type { ExerciseProgression, ProgressionPoint } from '@/lib/exercise-progression';
 
@@ -304,5 +307,109 @@ describe('describeLast', () => {
       '2 Aug · 3 × 10 · 39kg'
     );
     expect(describeLast({ date: '2026-08-02', durationMinutes: 15 })).toBe('2 Aug · 15 min');
+  });
+});
+
+describe('classifyExercise', () => {
+  it('assigns each name to exactly one group by precedence', () => {
+    // The cases that regressed in production: a shared word must not pull an
+    // exercise into the wrong group.
+    expect(classifyExercise('Leg press')).toBe('legs'); // not push (\bpress\b)
+    expect(classifyExercise('Reverse pec deck machine')).toBe('pull'); // not push (\bpec\b)
+    expect(classifyExercise('Converging shoulder press')).toBe('push');
+    expect(classifyExercise('High plank shoulder taps')).toBe('core'); // not push (\bshoulder\b)
+    expect(classifyExercise('Treadmill run')).toBe('run');
+    expect(classifyExercise('Paloff press')).toBe('core'); // not push (\bpress\b)
+    expect(classifyExercise('Pallof press')).toBe('core');
+  });
+
+  it("classifies Dave's real pull staples as pull", () => {
+    for (const name of [
+      'Lat pulldown',
+      'Cable row',
+      'Seated row',
+      'Cable bicep curl',
+      'DB bicep curl',
+      'Face pull',
+      'Rear delt machine',
+      'Neutral-grip pull-up',
+    ]) {
+      expect(classifyExercise(name)).toBe('pull');
+    }
+  });
+
+  it('returns null for a name that matches no group', () => {
+    expect(classifyExercise('Farmer carry')).toBeNull();
+  });
+});
+
+describe('selectPlanProgressions', () => {
+  function prog(name: string): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', sets: 3, reps: 8, weightKg: 20 };
+    return { name, key: name.toLowerCase(), sessions: 1, points: [point], first: point, latest: point };
+  }
+
+  it('returns only pull and core work for a pull + core day', () => {
+    const progressions = [
+      prog('Lat pulldown'),
+      prog('Cable row'),
+      prog('Cable bicep curl'),
+      prog('Pallof press'),
+      prog('High plank shoulder taps'),
+      // Contaminants that a shared-word filter used to sweep in.
+      prog('Leg press'),
+      prog('Converging chest press'),
+      prog('Converging shoulder press'),
+      prog('DB lateral raise'),
+    ];
+    const selected = selectPlanProgressions(progressions, ['Pull (back & arms)', 'core']);
+    const names = selected.map(p => p.name);
+    expect(names).toEqual([
+      'Lat pulldown',
+      'Cable row',
+      'Cable bicep curl',
+      'Pallof press',
+      'High plank shoulder taps',
+    ]);
+    expect(names).not.toContain('Leg press');
+    expect(names).not.toContain('Converging chest press');
+  });
+
+  it('does not activate push on a "Pull (back & arms)" day', () => {
+    // 'arms' must not switch push on — the regression that put pushes on a pull
+    // day.
+    const selected = selectPlanProgressions(
+      [prog('Converging chest press'), prog('Lat pulldown')],
+      ['Pull (back & arms)']
+    );
+    expect(selected.map(p => p.name)).toEqual(['Lat pulldown']);
+  });
+
+  it('keeps pushes on a push day', () => {
+    const selected = selectPlanProgressions(
+      [prog('Converging chest press'), prog('Lat pulldown')],
+      ['Push (chest & arms)']
+    );
+    expect(selected.map(p => p.name)).toEqual(['Converging chest press']);
+  });
+
+  it('falls back to the full list when the plan words are unfamiliar', () => {
+    const progressions = [prog('Lat pulldown'), prog('Leg press')];
+    expect(selectPlanProgressions(progressions, ['Mobility flow'])).toEqual(progressions);
+  });
+});
+
+describe('buildSessionTargets', () => {
+  function prog(name: string): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', sets: 3, reps: 8, weightKg: 20 };
+    return { name, key: name.toLowerCase(), sessions: 1, points: [point], first: point, latest: point };
+  }
+
+  it('builds targets only for the plan-relevant exercises', () => {
+    const targets = buildSessionTargets(
+      [prog('Lat pulldown'), prog('Leg press'), prog('Pallof press')],
+      ['Pull (back & arms)', 'core']
+    );
+    expect(targets.map(t => t.name)).toEqual(['Lat pulldown', 'Pallof press']);
   });
 });
