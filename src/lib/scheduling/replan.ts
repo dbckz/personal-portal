@@ -565,6 +565,10 @@ export function planReplan(input: ReplanInput): ReplanResult {
       end: new Date(b.end),
       ...(b.isBreak ? { isBreak: true } : {}),
     }));
+    // No `walkDays` here: the 🚶 walk is opt-in per day (chosen in the plan
+    // wizard), so replan never resurrects a walk on a day that has none. An
+    // already-scheduled walk that now conflicts is still re-slotted above (its
+    // ritualKind uses the walk window); this only governs NEW additions.
     additions = proposeRitualBlocks({
       config,
       busyIntervals: additionBusy,

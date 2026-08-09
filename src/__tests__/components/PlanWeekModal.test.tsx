@@ -134,6 +134,78 @@ describe('PlanWeekModal — next-week targeting', () => {
   });
 });
 
+describe('PlanWeekModal — walks (opt-in per day)', () => {
+  const WEEK = '2026-07-20'; // Monday
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.getPrepCandidates as jest.Mock).mockResolvedValue({
+      meetings: [],
+      unplaced: [],
+      workingDays: ['2026-07-20', '2026-07-21'], // Mon, Tue
+    });
+    (api.getWeekCandidates as jest.Mock).mockResolvedValue({ categories: [] });
+    (api.proposeWeeklyPlan as jest.Mock).mockResolvedValue({
+      proposals: [],
+      quotaSummary: [],
+      weekStart: WEEK,
+      weekEnd: '2026-07-26',
+    });
+  });
+
+  // Skip priorities (→ prep) then skip prep (→ tasks), where the Walks row shows.
+  async function reachTasksStep() {
+    render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    });
+    await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(
+        screen.queryByRole('button', { name: 'Skip' }) ??
+          screen.getByRole('button', { name: /^Next/i })
+      );
+    });
+    await screen.findByText('🚶 Walks');
+  }
+
+  it('offers a chip per working day, none selected by default, and omits walkDays from propose', async () => {
+    await reachTasksStep();
+
+    // One chip per working day of the target week (Mon, Tue), none pressed.
+    const mon = screen.getByRole('button', { name: 'Mon' });
+    const tue = screen.getByRole('button', { name: 'Tue' });
+    expect(mon).toHaveAttribute('aria-pressed', 'false');
+    expect(tue).toHaveAttribute('aria-pressed', 'false');
+
+    // Advance to review WITHOUT picking a walk → propose gets no walkDays.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+    expect(api.proposeWeeklyPlan).toHaveBeenCalledWith(
+      expect.not.objectContaining({ walkDays: expect.anything() })
+    );
+  });
+
+  it('sends the picked day in walkDays when a chip is toggled on', async () => {
+    await reachTasksStep();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Mon' }));
+    });
+    expect(screen.getByRole('button', { name: 'Mon' })).toHaveAttribute('aria-pressed', 'true');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+    expect(api.proposeWeeklyPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ walkDays: ['2026-07-20'] })
+    );
+  });
+});
+
 describe('PlanWeekModal', () => {
   it('renders nothing when closed', () => {
     const { container } = render(<PlanWeekModal isOpen={false} onClose={jest.fn()} />);

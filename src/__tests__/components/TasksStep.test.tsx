@@ -45,6 +45,9 @@ function renderStep(
       taskDurationOverrides={{}}
       setTaskDurationOverrides={jest.fn()}
       mustDoIds={new Set()}
+      walkDays={new Set()}
+      weekWorkingDays={[]}
+      toggleWalkDay={jest.fn()}
       completingIds={new Set()}
       addMoreMode={false}
       spareCapacity={null}

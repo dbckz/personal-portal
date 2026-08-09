@@ -44,7 +44,22 @@ export async function POST(request: NextRequest) {
     const durationOverrides = sanitizeDurations(body?.durationOverrides);
     const taskDurationOverrides = sanitizeDurations(body?.taskDurationOverrides);
 
+    // Days (yyyy-MM-dd) the user opted a 🚶 walk into, from the wizard. Kept only
+    // when they are well-formed date strings inside this plan's week; the ritual
+    // placer further restricts them to actual working days.
+    const rawWalkDays: string[] = Array.isArray(body?.walkDays)
+      ? body.walkDays.filter((d: unknown): d is string => typeof d === 'string')
+      : [];
+
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
+
+    const weekDateStrs = new Set<string>();
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(ctx.weekStart);
+      day.setDate(day.getDate() + d);
+      weekDateStrs.add(localDateStr(day));
+    }
+    const walkDays = rawWalkDays.filter(d => weekDateStrs.has(d));
 
     // Daily lunch/exercise/emails rituals are placed FIRST (before task
     // allocation), around the calendar's existing busy time + any accepted prep
@@ -62,6 +77,7 @@ export async function POST(request: NextRequest) {
       weekStart: ctx.weekStart,
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
+      walkDays,
     });
 
     // Accepted prep + placed ritual blocks occupy time before task placement

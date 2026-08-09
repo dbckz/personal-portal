@@ -209,6 +209,10 @@ export function PlanWeekModal({
   // for single-task (non-grouped) categories. Only holds explicit picks; a task
   // not present here uses its category's default block length.
   const [taskDurationOverrides, setTaskDurationOverrides] = useState<Record<string, number>>({});
+  // Step 3 — "🚶 Walks": days (yyyy-MM-dd) the user opted a walk into. Walks are
+  // opt-in per day, so this starts empty (no walks) and the chosen days are sent
+  // to the propose route. Reset on open.
+  const [walkDays, setWalkDays] = useState<Set<string>>(new Set());
 
   // Step 3 — "Must do this week": task ids (gid/adhocId) the user flagged as
   // must-do. Flagging auto-selects the task and bypasses the selection cap; the
@@ -292,6 +296,7 @@ export function PlanWeekModal({
     setTasksEngaged(false);
     setTaskDurations({});
     setTaskDurationOverrides({});
+    setWalkDays(new Set());
     setMustDoIds(new Set());
     setCompletingIds(new Set());
     setDeletingIds(new Set());
@@ -679,6 +684,7 @@ export function PlanWeekModal({
       }
       if (Object.keys(taskDurations).length) body.durationOverrides = taskDurations;
       if (Object.keys(taskDurationOverrides).length) body.taskDurationOverrides = taskDurationOverrides;
+      if (walkDays.size) body.walkDays = Array.from(walkDays);
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
       // Overflow blocks are OPTIONAL — default them to rejected so the user opts in.
       setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
@@ -695,7 +701,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, weekStart]);
+  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, walkDays, weekStart]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -876,6 +882,16 @@ export function PlanWeekModal({
         return { ...prev, [category]: set };
       });
     }
+  };
+
+  // Toggle a 🚶 walk on/off for a given working day (yyyy-MM-dd).
+  const toggleWalkDay = (dateStr: string) => {
+    setWalkDays(prev => {
+      const next = new Set(prev);
+      if (next.has(dateStr)) next.delete(dateStr);
+      else next.add(dateStr);
+      return next;
+    });
   };
 
   // Mark an Asana-backed candidate complete in Asana, then drop it from the wizard
@@ -1357,6 +1373,9 @@ export function PlanWeekModal({
                   taskDurationOverrides={taskDurationOverrides}
                   setTaskDurationOverrides={setTaskDurationOverrides}
                   mustDoIds={mustDoIds}
+                  walkDays={walkDays}
+                  weekWorkingDays={prepData?.workingDays ?? []}
+                  toggleWalkDay={toggleWalkDay}
                   completingIds={completingIds}
                   addMoreMode={addMoreMode}
                   spareCapacity={spareCapacity}

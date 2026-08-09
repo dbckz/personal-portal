@@ -53,6 +53,7 @@ function run(input: {
   scheduling?: Partial<WorkflowConfig['scheduling']>;
   busyIntervals?: BusyInterval[];
   existingRitualTitlesByDate?: Record<string, Set<string>>;
+  walkDays?: string[];
   now?: Date;
 }) {
   return proposeRitualBlocks({
@@ -61,8 +62,13 @@ function run(input: {
     weekStart: WEEK_START,
     now: input.now ?? WEEK_START,
     existingRitualTitlesByDate: input.existingRitualTitlesByDate ?? {},
+    walkDays: input.walkDays,
   });
 }
+
+// The five weekday dates of the test week (Mon 2026-07-13 … Fri 2026-07-17), for
+// opting days into a walk.
+const WEEK_DAYS = ['2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17'];
 
 const busy = (h1: number, m1: number, h2: number, m2: number): BusyInterval => ({
   start: new Date(2026, 6, 13, h1, m1),
@@ -440,6 +446,9 @@ describe('placeWeekRituals — prep/propose determinism', () => {
       busyIntervals,
       weekStart: WEEK_START,
       now: WEEK_START,
+      // Opt every day into a walk so the full ritual set (including the 10:30
+      // walk) is exercised for the prep/propose determinism check.
+      walkDays: WEEK_DAYS,
     });
 
   it('places the same ritual slots in the prep step and the propose step (prep never steals the exercise slot)', () => {
@@ -543,13 +552,22 @@ describe('walk ritual (daily, break)', () => {
     expect(isRitualLikeTitle('walk')).toBe(true);
   });
 
-  it('places a 45-min walk mid-morning (from 10:30) every working day, as a break', () => {
+  it('places NO walks by default (opt-in per day)', () => {
     const blocks = run({
       scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
     });
+    expect(blocks.filter(b => b.title === WALK_TITLE)).toHaveLength(0);
+  });
+
+  it('places a 45-min walk mid-morning (from 10:30) only on opted-in working days, as a break', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      // Opt only Monday + Wednesday into a walk.
+      walkDays: ['2026-07-13', '2026-07-15'],
+    });
     const walks = blocks.filter(b => b.title === WALK_TITLE);
-    expect(walks).toHaveLength(5); // one per working day
-    expect(new Set(walks.map(w => w.date)).size).toBe(5);
+    expect(walks).toHaveLength(2);
+    expect(new Set(walks.map(w => w.date))).toEqual(new Set(['2026-07-13', '2026-07-15']));
     for (const w of walks) {
       expect(w.kind).toBe('ritual');
       expect(w.category).toBe('Walk');
@@ -558,15 +576,26 @@ describe('walk ritual (daily, break)', () => {
     }
   });
 
+  it('ignores an opted-in day that is not a working day', () => {
+    // Only Monday is a working day; opting Tuesday in as well places nothing there.
+    const blocks = run({
+      scheduling: { workingDays: ['Monday'] },
+      walkDays: ['2026-07-13', '2026-07-14'],
+    });
+    const walks = blocks.filter(b => b.title === WALK_TITLE);
+    expect(walks).toHaveLength(1);
+    expect(walks[0].date).toBe('2026-07-13');
+  });
+
   it('tags the walk block as a break busy interval (splits work runs)', () => {
-    const walk = run({}).find(b => b.title === WALK_TITLE)!;
+    const walk = run({ walkDays: ['2026-07-13'] }).find(b => b.title === WALK_TITLE)!;
     expect(proposedBlockToBusyInterval(walk).isBreak).toBe(true);
   });
 
   it('widens to 09:30–12:00 when the ideal 10:30–11:30 window is busy', () => {
     // Block the ideal window; the walk falls back to the earliest free 45-min
     // slot in 09:30–12:00 (here 09:30, before the block).
-    const blocks = run({ busyIntervals: [busy(10, 30, 11, 30)] });
+    const blocks = run({ busyIntervals: [busy(10, 30, 11, 30)], walkDays: ['2026-07-13'] });
     const walk = blocks.find(b => b.title === WALK_TITLE);
     expect(walk).toBeDefined();
     expect(walk!.start).toBe('09:30');
@@ -574,6 +603,7 @@ describe('walk ritual (daily, break)', () => {
 
   it('dedupes against an existing walk that day', () => {
     const blocks = run({
+      walkDays: ['2026-07-13'],
       existingRitualTitlesByDate: { '2026-07-13': new Set([WALK_TITLE]) },
     });
     expect(blocks.find(b => b.title === WALK_TITLE)).toBeUndefined();

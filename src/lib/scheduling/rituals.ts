@@ -280,6 +280,10 @@ export interface ProposeRitualsInput {
   existingRitualTitlesByDate: Record<string, Set<string>>;
   // Out-of-office dates (yyyy-MM-dd) to drop from working days — no rituals there.
   outOfOfficeDates?: Set<string>;
+  // Days (yyyy-MM-dd) the user opted in to a 🚶 walk. The walk is OPT-IN PER DAY:
+  // it is placed ONLY on a listed day that is also a working day. Absent or empty
+  // → no walks at all. Every other ritual is unaffected.
+  walkDays?: string[];
 }
 
 // Absolute ms for an hour/minute on a working day (local).
@@ -392,6 +396,10 @@ export function placeWeekRituals(params: {
   weekStart: Date;
   now: Date;
   outOfOfficeDates?: Set<string>;
+  // Days (yyyy-MM-dd) the user opted in to a 🚶 walk. Omit for no walks (the
+  // default): the prep-candidates route reserves ritual time before walks are
+  // picked, so it passes nothing here.
+  walkDays?: string[];
 }): ProposedBlock[] {
   return proposeRitualBlocks({
     config: params.config,
@@ -400,6 +408,7 @@ export function placeWeekRituals(params: {
     now: params.now,
     existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(params.weekEvents),
     outOfOfficeDates: params.outOfOfficeDates,
+    walkDays: params.walkDays,
   });
 }
 
@@ -464,6 +473,9 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   const durationMs = RITUAL_DURATION_MINUTES * MS_PER_MINUTE;
   const exerciseDurationMs = EXERCISE_DURATION_MINUTES * MS_PER_MINUTE;
   const walkDurationMs = WALK_DURATION_MINUTES * MS_PER_MINUTE;
+  // Walk is opt-in per day: place it only on the days the user picked (that are
+  // also working days). No picks → no walks.
+  const walkDaySet = new Set(input.walkDays ?? []);
 
   // Titles present on ANY day this week (for weekly-ritual dedupe: a weekly
   // ritual is skipped when its title already exists — or already happened —
@@ -487,8 +499,9 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
 
     // --- Walk (break) — mid-morning, ideal 10:30–11:30, widening to 09:30–12:00
     // (earliest-first, like lunch). Placed first so it sits before lunch; the
-    // busy set it pushes keeps every later ritual off it. ---
-    if (!present.has(WALK_TITLE)) {
+    // busy set it pushes keeps every later ritual off it. Opt-in per day: only a
+    // day the user picked gets a walk. ---
+    if (walkDaySet.has(day.dateStr) && !present.has(WALK_TITLE)) {
       let startMs = findFreeSlot(
         msAtDay(day, 10, 30),
         msAtDay(day, 11, 30),

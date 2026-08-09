@@ -31,6 +31,12 @@ interface TasksStepProps {
   taskDurationOverrides: Record<string, number>;
   setTaskDurationOverrides: Dispatch<SetStateAction<Record<string, number>>>;
   mustDoIds: Set<string>;
+  // 🚶 Walks: days (yyyy-MM-dd) opted into a walk, the target week's working days
+  // to offer as chips, and the per-day toggle. Walks are opt-in per day (none by
+  // default).
+  walkDays: Set<string>;
+  weekWorkingDays: string[];
+  toggleWalkDay: (dateStr: string) => void;
   completingIds: Set<string>;
   addMoreMode: boolean;
   spareCapacity: SpareCapacity | null;
@@ -50,6 +56,9 @@ export function TasksStep({
   taskDurationOverrides,
   setTaskDurationOverrides,
   mustDoIds,
+  walkDays,
+  weekWorkingDays,
+  toggleWalkDay,
   completingIds,
   addMoreMode,
   spareCapacity,
@@ -77,16 +86,60 @@ export function TasksStep({
     []
   );
 
+  // Compact "🚶 Walks" row: one toggle chip per working day of the target week,
+  // none selected by default. Walks are opt-in per day; selected days are sent to
+  // the propose route. Hidden when the week's working days aren't known yet. Shown
+  // above the task list on the tasks step regardless of whether there are any
+  // quota categories to fill.
+  const renderWalksRow = () => {
+    if (weekWorkingDays.length === 0) return null;
+    return (
+      <div className="rounded-lg border border-gray-200 p-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-gray-700 mr-1">🚶 Walks</span>
+          {weekWorkingDays.map(dateStr => {
+            const on = walkDays.has(dateStr);
+            return (
+              <button
+                key={dateStr}
+                type="button"
+                onClick={() => toggleWalkDay(dateStr)}
+                aria-pressed={on}
+                title={`${on ? 'Remove' : 'Add a'} walk on ${format(parseISO(dateStr), 'EEEE d MMM')}`}
+                className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
+                  on
+                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                    : 'text-gray-500 border-gray-200 hover:bg-gray-100'
+                }`}
+              >
+                {format(parseISO(dateStr), 'EEE')}
+              </button>
+            );
+          })}
+          <span className="text-[11px] text-gray-400 ml-1">
+            {walkDays.size === 0 ? 'None' : `${walkDays.size} selected`}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
   if (!taskCats) {
     return (
-      <p className="text-sm text-gray-400 italic py-8 text-center">No candidates available.</p>
+      <div className="space-y-5">
+        {renderWalksRow()}
+        <p className="text-sm text-gray-400 italic py-8 text-center">No candidates available.</p>
+      </div>
     );
   }
   if (taskCats.length === 0) {
     return (
-      <p className="text-sm text-gray-400 italic py-8 text-center">
-        No quota categories to fill this week.
-      </p>
+      <div className="space-y-5">
+        {renderWalksRow()}
+        <p className="text-sm text-gray-400 italic py-8 text-center">
+          No quota categories to fill this week.
+        </p>
+      </div>
     );
   }
 
@@ -301,6 +354,7 @@ export function TasksStep({
 
   return (
     <div className="space-y-5">
+      {renderWalksRow()}
       {addMoreMode && (
         <div className="rounded-lg bg-orange-50 border border-orange-200 p-3 text-sm text-orange-800">
           {spareCapacity && spareCapacity.totalMinutes > 0

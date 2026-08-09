@@ -119,6 +119,9 @@ export interface ProposeWeekRequest {
   prepBlocks?: ProposedBlock[];
   durationOverrides?: Record<string, number>; // grouped category -> per-week block length (mins)
   taskDurationOverrides?: Record<string, number>; // task id (gid/adhocId) -> block length (mins)
+  // Days (yyyy-MM-dd) the user opted a 🚶 walk into, from the wizard's Walks row.
+  // Absent/empty → no walks are scheduled (walks are opt-in per day).
+  walkDays?: string[];
 }
 
 export interface PriorityMatchRow {
