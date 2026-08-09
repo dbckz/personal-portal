@@ -30,25 +30,20 @@ stays read-only unless Dave says otherwise.
 
 ## Development and deployment
 
-**Deploys are NOT gated on Dave's approval** (his instruction, 9 Aug 2026 —
-superseding the earlier staged-approval workflow): once a change is implemented
-and the full test suite passes, commit, push, and deploy to production
-immediately without asking.
+**Deploys are NOT gated on Dave's approval** (his instruction, 9 Aug 2026):
+once a change is implemented and the full test suite passes, commit, push, and
+deploy to production immediately without asking. (A staging worktree existed
+briefly on 8–9 Aug 2026; Dave had it removed — develop directly in this
+checkout.)
 
-- Dave uses the production app (`portal.localhost`) all day. A **staging
-  worktree** exists as a scratch area for development so the live app isn't
-  disturbed mid-work: `/Users/dave/working_dir/github/dbckz/personal-portal-staging`
-  (branch `staging`), served at `portal-staging.localhost` (port 3002) by the
-  launchd service `com.davebuckley.portal-staging` running `next dev` via
-  `scripts/start-staging.sh`, with `PORTAL_DATA_DIR` pointing at
-  `~/.claude/data/portal-staging`, a copy of production data. Refresh the copy
-  with: `rsync -a --delete ~/.claude/data/portal/ ~/.claude/data/portal-staging/`
-- Never run `npm run build` in the production checkout except as part of a
-  deploy — it replaces `.next` under the live server and breaks the running
-  app until restarted.
-- To deploy: merge `staging` into `main` (fast-forward preferred), push both
-  branches, then in the production checkout run:
+- Never run `npm run build` except as part of a deploy — it replaces `.next`
+  under the live launchd server and breaks the running app until restarted.
+  Test with jest/tsc during development; build only when about to restart.
+- To deploy, after pushing:
 
 ```bash
 npm run build && launchctl stop com.davebuckley.portal && launchctl start com.davebuckley.portal
 ```
+
+- `PORTAL_DATA_DIR` env var overrides the data directory (normally unset in
+  production; useful for pointing a scratch instance at copied data).
