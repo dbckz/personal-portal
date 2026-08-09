@@ -53,6 +53,12 @@ export const EXERCISE_NAME_ALIASES: Record<string, string> = {
   // so it merges into that one history rather than being logged separately.
   'Rear delt machine': 'Reverse pec deck',
 
+  // A bare "Knee raise" is the hanging knee raise Dave logs it as — merged so
+  // the prescribed "Hanging knee raise" picks up that history. The live log
+  // spells it plural ("Knee raises"), so both forms map.
+  'Knee raise': 'Hanging knee raise',
+  'Knee raises': 'Hanging knee raise',
+
   // Singularise where the plural is not the exercise's common name.
   'Cable bicep curls': 'Cable bicep curl',
   // Mid-word capitalisation drift ("Bicep") — only the DB/KB tokens are

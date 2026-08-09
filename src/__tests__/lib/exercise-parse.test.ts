@@ -217,6 +217,9 @@ describe('isHoldName', () => {
     expect(isHoldName('High plank shoulder taps')).toBe(false);
     expect(isHoldName('Plank jacks')).toBe(false);
     expect(isHoldName('Mountain climbers')).toBe(false);
+    // Dynamic raises match \bhang\b but are rep-based, not timed holds.
+    expect(isHoldName('Hanging knee raise')).toBe(false);
+    expect(isHoldName('Hanging leg raise')).toBe(false);
   });
 });
 

@@ -198,4 +198,59 @@ describe('buildPrescribedTargets — progression semantics', () => {
     expect(row.repsMin).toBe(15);
     expect(row.repsMax).toBe(15);
   });
+
+  function historyOf(entry: Record<string, unknown>) {
+    return progressionsFrom({
+      id: 'h', date: '2026-08-03', type: 'gym', planned: false, completed: true, source: 'manual',
+      createdAt: '', updatedAt: '',
+      exercises: [{ id: 'x', done: true, ...entry } as never],
+    });
+  }
+
+  it('floors bodyweight reps at what was last achieved, above the written scheme', () => {
+    // "Dead bug: 3 x 8 each side" but last time was 3 x 10 with a "keep it same"
+    // note — never aim below the 10 that was managed.
+    const { sections } = parsePrescription('Core:\n- Dead bug: 3 x 8 each side');
+    const prog = historyOf({ name: 'Dead bug', sets: 3, reps: 10, perSide: true, notes: 'keep it same' });
+    const [row] = buildPrescribedTargets(sections, prog);
+    expect(row.action).toBe('hold');
+    expect(row.reps).toBe(10);
+    expect(row.rationale).toMatch(/8.*10|10/);
+  });
+
+  it('floors a hold at the seconds last held', () => {
+    // "Side plank: 3 x 30–45 sec" and last time held 45 — target the 45, not 30.
+    const { sections } = parsePrescription('Core:\n- Side plank: 3 x 30–45 sec each side');
+    const prog = historyOf({ name: 'Side plank', sets: 3, holdSeconds: 45, perSide: true });
+    const [row] = buildPrescribedTargets(sections, prog);
+    expect(row.holdSeconds).toBe(45);
+    expect(row.holdSecondsMax).toBe(45);
+  });
+
+  it('lets an explicit user-driven reduction lower the target below last time', () => {
+    const { sections } = parsePrescription('Anchors:\n- Seated cable row: 3 x 8–12');
+    const prog = historyOf({ name: 'Seated cable row', sets: 3, reps: 10, weightKg: 40, notes: 'too heavy, make lighter' });
+    const [row] = buildPrescribedTargets(sections, prog);
+    expect(row.action).toBe('reduce');
+    expect(row.weightKg).toBeLessThan(40);
+  });
+
+  it('leaves the prescription verbatim when there is no history', () => {
+    const { sections } = parsePrescription('Core:\n- Dead bug: 3 x 8 each side');
+    const [row] = buildPrescribedTargets(sections, []);
+    expect(row.action).toBe('no-history');
+    expect(row.reps).toBe(8);
+    expect(row.repsMax).toBe(8);
+  });
+
+  it('resolves a prescribed hanging knee raise against knee raise history', () => {
+    const { sections } = parsePrescription('Core:\n- Hanging knee raise: 3 x 8–12');
+    // History logged under the bare "Knee raise" alias.
+    const prog = historyOf({ name: 'Knee raise', sets: 3, reps: 12 });
+    const [row] = buildPrescribedTargets(sections, prog);
+    expect(row.name).toBe('Hanging knee raise');
+    // A real progression point was found — not the no-history fallback.
+    expect(row.action).not.toBe('no-history');
+    expect(row.lastSummary).toBeDefined();
+  });
 });

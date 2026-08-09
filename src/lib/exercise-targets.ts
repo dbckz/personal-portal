@@ -229,6 +229,17 @@ function roundLoad(kg: number): number {
   return Math.round(kg / step) * step;
 }
 
+// Never aim below what was last achieved. Floors a prescribed seed number
+// (reps, hold seconds, weight) at the value logged last time, so a calendar
+// scheme written below current form ("3 × 8" when 10 was managed) can't pull the
+// target back down. Returns the prescription's own number when there is nothing
+// logged to floor against, and the logged value when the scheme left it open.
+function floorAt(prescribed: number | undefined, achieved: number | undefined): number | undefined {
+  if (achieved === undefined) return prescribed;
+  if (prescribed === undefined) return achieved;
+  return Math.max(prescribed, achieved);
+}
+
 // How big a jump the effort justifies. Deliberately conservative: a jump that is
 // too small costs one session, a jump that is too large costs three.
 function increment(weightKg: number, rir: number): number {
@@ -531,14 +542,14 @@ export function buildPrescribedTarget(
   }
 
   if (isHold) {
-    return { ...context, ...resolveHoldProgression(last, effort, ex.holdSecondsMax) };
+    return { ...context, ...resolveHoldProgression(last, effort, ex) };
   }
 
   if (last.weightKg === undefined) {
-    return { ...context, ...resolveBodyweightProgression(last, effort, ex.repsMax) };
+    return { ...context, ...resolveBodyweightProgression(last, effort, ex) };
   }
 
-  return { ...context, ...resolveLoadedProgression(last, effort, ex.repsMax) };
+  return { ...context, ...resolveLoadedProgression(last, effort, ex) };
 }
 
 // The load half of a prescribed loaded lift: double progression against the top
@@ -546,21 +557,32 @@ export function buildPrescribedTarget(
 function resolveLoadedProgression(
   last: ProgressionPoint,
   effort: EffortReading,
-  repsMax: number | undefined
+  ex: PrescribedExercise
 ): Partial<ExerciseTarget> {
   const weightKg = last.weightKg!;
+  const repsMax = ex.repsMax;
+
+  // A user-driven cut stays: an explicit "too heavy" reading still lowers the
+  // target, even below last time. Only prescription-driven regressions are barred.
   if (effort.explicit === 'down') {
     const reduced = roundLoad(weightKg * 0.9);
     return { action: 'reduce', weightKg: reduced, rationale: `You noted it was too heavy — drop to about ${reduced}kg.` };
   }
+
+  // Never seed the reps below what was completed at this weight last time.
+  const flooredReps = floorAt(ex.repsMin, last.reps);
+  const repsFloor = flooredReps !== undefined ? { reps: flooredReps } : {};
+
   if (effort.failed) {
-    return { action: 'hold', weightKg, rationale: `Last time was a struggle — repeat ${weightKg}kg until every set is complete.` };
+    return { action: 'hold', weightKg, ...repsFloor, rationale: `Last time was a struggle — repeat ${weightKg}kg until every set is complete.` };
   }
 
   const atTop = repsMax !== undefined && last.reps !== undefined && last.reps >= repsMax;
   const rir = effort.explicit === 'up' ? Math.max(effort.rir ?? 0, 4) : (effort.rir ?? 0);
   const step = atTop ? increment(weightKg, rir) : 0;
   if (step > 0) {
+    // Weight goes up, so the reps rebuild from the prescribed bottom — a heavier
+    // set at fewer reps is progress, not a regression, so no floor applies here.
     const next = roundLoad(weightKg + step);
     return {
       action: 'increase',
@@ -575,10 +597,11 @@ function resolveLoadedProgression(
     return {
       action: 'add-reps',
       weightKg,
+      ...repsFloor,
       rationale: `Stay at ${weightKg}kg and work the reps up toward ${repsMax} before adding weight.`,
     };
   }
-  return { action: 'hold', weightKg, rationale: `Repeat ${weightKg}kg — consolidate before the next jump.` };
+  return { action: 'hold', weightKg, ...repsFloor, rationale: `Repeat ${weightKg}kg — consolidate before the next jump.` };
 }
 
 // The bodyweight-rep counterpart: no weight to add, so progression is reps
@@ -586,15 +609,31 @@ function resolveLoadedProgression(
 function resolveBodyweightProgression(
   last: ProgressionPoint,
   effort: EffortReading,
-  repsMax: number | undefined
+  ex: PrescribedExercise
 ): Partial<ExerciseTarget> {
   if (effort.failed) {
     return { action: 'hold', rationale: `Last time was a struggle — repeat ${describeVolume(last)} before adding reps.` };
   }
+
+  const repsMax = ex.repsMax;
+  // Never seed below the reps managed last time, even where the written scheme
+  // asks for fewer.
+  const flooredReps = floorAt(ex.repsMin, last.reps);
+  const repsFloor = flooredReps !== undefined ? { reps: flooredReps } : {};
+
   if (repsMax !== undefined && (last.reps === undefined || last.reps < repsMax)) {
-    return { action: 'add-reps', rationale: `Work the reps up toward ${repsMax} a set.` };
+    return { action: 'add-reps', ...repsFloor, rationale: `Work the reps up toward ${repsMax} a set.` };
   }
-  return { action: 'hold', rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
+  // Logged reps beyond the prescribed ceiling: hold what was achieved rather
+  // than dropping back to the written number, and say so.
+  if (repsMax !== undefined && last.reps !== undefined && last.reps > repsMax) {
+    return {
+      action: 'hold',
+      ...repsFloor,
+      rationale: `The range tops out at ${repsMax}, but you did ${last.reps} last time — hold ${last.reps}, don't drop back.`,
+    };
+  }
+  return { action: 'hold', ...repsFloor, rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
 }
 
 // The timed-hold counterpart: progression is seconds held toward the top of the
@@ -602,15 +641,29 @@ function resolveBodyweightProgression(
 function resolveHoldProgression(
   last: ProgressionPoint,
   effort: EffortReading,
-  holdSecondsMax: number | undefined
+  ex: PrescribedExercise
 ): Partial<ExerciseTarget> {
   if (effort.failed) {
     return { action: 'hold', rationale: `Last time was a struggle — repeat ${describeVolume(last)} before adding time.` };
   }
+
+  const holdSecondsMax = ex.holdSecondsMax;
+  // Never seed below the seconds held last time.
+  const flooredHold = floorAt(ex.holdSecondsMin, last.holdSeconds);
+  const holdFloor = flooredHold !== undefined ? { holdSeconds: flooredHold } : {};
+
   if (holdSecondsMax !== undefined && (last.holdSeconds === undefined || last.holdSeconds < holdSecondsMax)) {
-    return { action: 'add-time', rationale: `Hold toward ${holdSecondsMax}s a set.` };
+    return { action: 'add-time', ...holdFloor, rationale: `Hold toward ${holdSecondsMax}s a set.` };
   }
-  return { action: 'hold', rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
+  // Held beyond the prescribed ceiling: keep what was achieved, don't drop back.
+  if (holdSecondsMax !== undefined && last.holdSeconds !== undefined && last.holdSeconds > holdSecondsMax) {
+    return {
+      action: 'hold',
+      ...holdFloor,
+      rationale: `The range tops out at ${holdSecondsMax}s, but you held ${last.holdSeconds}s last time — hold ${last.holdSeconds}s, don't drop back.`,
+    };
+  }
+  return { action: 'hold', ...holdFloor, rationale: `Repeat ${describeVolume(last)} — hold the top of the range.` };
 }
 
 function capitalise(s: string): string {

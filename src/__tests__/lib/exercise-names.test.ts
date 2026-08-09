@@ -63,6 +63,12 @@ describe('normalizeExerciseName', () => {
     expect(normalizeExerciseName('Reverse pec deck machine')).toBe('Reverse pec deck');
   });
 
+  it('merges a bare knee raise into the hanging knee raise', () => {
+    // History logged as "Knee raise" groups with a prescribed "Hanging knee raise".
+    expect(normalizeExerciseName('Knee raise')).toBe('Hanging knee raise');
+    expect(normalizeExerciseName('Hanging knee raise')).toBe('Hanging knee raise');
+  });
+
   it('singularises where the plural is not the common name', () => {
     expect(normalizeExerciseName('Cable rows')).toBe('Cable row');
     expect(normalizeExerciseName('Reverse lunges')).toBe('Reverse lunge');
@@ -71,8 +77,11 @@ describe('normalizeExerciseName', () => {
 
   it('keeps naturally-plural names as-is (only casing db)', () => {
     expect(normalizeExerciseName('Db shrugs')).toBe('DB shrugs');
-    expect(normalizeExerciseName('Knee raises')).toBe('Knee raises');
     expect(normalizeExerciseName('High plank shoulder taps')).toBe('High plank shoulder taps');
+  });
+
+  it('merges the plural knee-raise spelling the live log uses', () => {
+    expect(normalizeExerciseName('Knee raises')).toBe('Hanging knee raise');
   });
 
   it('keeps distinct exercises distinct', () => {
