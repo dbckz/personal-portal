@@ -85,6 +85,7 @@ function setContext(
     asanaNameByGid?: Map<string, string>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     nextWeekEarlyEvents?: any[];
+    nextWeekFirstWorkingDay?: string | null;
   } = {}
 ) {
   mockGather.mockResolvedValue({
@@ -94,6 +95,9 @@ function setContext(
     weekEndStr: '2026-07-19',
     weekEvents: over.weekEvents ?? [],
     nextWeekEarlyEvents: over.nextWeekEarlyEvents ?? [],
+    // First working day of next week (Mon 2026-07-20) — gates next-week prep.
+    nextWeekFirstWorkingDay:
+      over.nextWeekFirstWorkingDay !== undefined ? over.nextWeekFirstWorkingDay : '2026-07-20',
     asanaCandidates: over.asanaCandidates ?? [],
     asanaNameByGid: over.asanaNameByGid ?? new Map(),
     quotas: [],

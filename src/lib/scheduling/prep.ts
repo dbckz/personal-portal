@@ -30,8 +30,7 @@ const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 
 const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// A working day's placeable span: the shape resolveWorkingWindow returns, which
-// the next-week day windows are built to match.
+// A working day's placeable span: the shape resolveWorkingWindow returns.
 interface DayWindow {
   dateStr: string;
   whStartMs: number;
@@ -53,17 +52,18 @@ export interface PrepMeeting {
   date: string;
   // Length of this meeting's prep block in minutes; defaults to 15 when absent.
   durationMinutes?: number;
-  // User's chosen day (yyyy-MM-dd) for this prep block. When set, placement tries
-  // that day first (with the before-meeting end-cap when it is the meeting day),
-  // then walks BACKWARDS through earlier working days to today — never to a day
-  // later than the pick. Nothing fitting anywhere in that walk leaves the meeting
-  // unplaced. When absent, default behaviour applies.
+  // User's chosen day (yyyy-MM-dd) for this prep block, always a working day of
+  // THIS week. When set, placement tries that day first (with the before-meeting
+  // end-cap when it is the meeting day), then walks BACKWARDS through earlier
+  // working days to today — never to a day later than the pick. Nothing fitting
+  // anywhere in that walk leaves the meeting unplaced. When absent, default
+  // behaviour applies.
   preferredDate?: string;
   // True for a meeting that lands EARLY NEXT WEEK (its day-before / day-of fall
   // outside this week's working days). Its prep is placed into THIS week's
   // remaining working days, LATEST day first — prep closest to the meeting is
   // freshest — rather than the default day-before → day-of search. A preferredDate
-  // (if the user picks a specific day) still wins.
+  // (a this-week day the user picks) still wins.
   preferLatest?: boolean;
 }
 
@@ -75,11 +75,6 @@ export interface ProposePrepInput {
   now: Date;
   // Out-of-office dates (yyyy-MM-dd) to drop from working days — no prep there.
   outOfOfficeDates?: Set<string>;
-  // Working days (yyyy-MM-dd) of EARLY NEXT WEEK offered as prep-day picks for
-  // next-week meetings (the route caps them at the latest next-week meeting and
-  // drops out-of-office days). A meeting's preferredDate may name one of these,
-  // so placement can book prep on a day that lies outside THIS week's window.
-  nextWeekWorkingDays?: string[];
 }
 
 // A meeting that couldn't be placed, with a short human reason (rendered after
@@ -94,29 +89,13 @@ export function proposePrepBlocks(
 ): { placed: ProposedBlock[]; unplaced: UnplacedPrep[] } {
   const { config, weekStart, now } = input;
 
-  const { workRun, workingDays, workingHoursStart, workingHoursEnd } = resolveWorkingWindow(
+  const { workRun, workingDays } = resolveWorkingWindow(
     config.scheduling,
     weekStart,
     now,
     input.outOfOfficeDates
   );
   const dayByDateStr = new Map(workingDays.map(d => [d.dateStr, d]));
-
-  // Day windows for the offered early-next-week days, built from the same working
-  // hours as this week's days (same {dateStr, whStartMs, whEndMs} shape). A
-  // next-week preferredDate resolves against these; the preferred-day walk then
-  // falls back from the pick through earlier next-week days and into this week.
-  const nextWeekDayWindows: DayWindow[] = (input.nextWeekWorkingDays ?? []).map(dateStr => {
-    const midnight = parseLocalDate(dateStr);
-    const at = (h: number, m: number) => new Date(midnight).setHours(h, m, 0, 0);
-    return {
-      dateStr,
-      whStartMs: at(workingHoursStart.h, workingHoursStart.m),
-      whEndMs: at(workingHoursEnd.h, workingHoursEnd.m),
-    };
-  });
-  // Every placeable day, this week + offered next-week, for the preferred-day walk.
-  const allDayWindows = [...workingDays, ...nextWeekDayWindows];
 
   const todayStr = localDateStr(now);
 
@@ -154,15 +133,15 @@ export function proposePrepBlocks(
 
     if (meeting.preferredDate) {
       // (0) User-preferred day: try the CHOSEN day first, then walk BACKWARDS
-      // through each preceding working day to today. The pick may be an early
-      // NEXT-WEEK day (for a next-week meeting), so draw from allDayWindows —
-      // this week's days plus the offered next-week days. Prep may sit on the
-      // meeting day or earlier, never after it — so cap the walk at the meeting
-      // date and apply the before-meeting end-cap on the meeting day itself. If
-      // nothing fits on the chosen day or any earlier day, the meeting goes
-      // unplaced (we never slide prep to a day LATER than the user's pick).
+      // through each preceding working day to today. The pick is always a
+      // this-week working day (the route drops any override into next week), so
+      // draw from this week's days only. Prep may sit on the meeting day or
+      // earlier, never after it — so cap the walk at the meeting date and apply
+      // the before-meeting end-cap on the meeting day itself. If nothing fits on
+      // the chosen day or any earlier day, the meeting goes unplaced (we never
+      // slide prep to a day LATER than the user's pick).
       const latestStr = meeting.preferredDate < meeting.date ? meeting.preferredDate : meeting.date;
-      const daysBackToToday = allDayWindows
+      const daysBackToToday = workingDays
         .filter(d => d.dateStr <= latestStr)
         .sort((a, b) => (a.dateStr < b.dateStr ? 1 : -1)); // chosen/latest first, back to today
       for (const day of daysBackToToday) {

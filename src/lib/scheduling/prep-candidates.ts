@@ -42,11 +42,21 @@ export interface PrepCandidate {
   nextWeek: boolean;
 }
 
+// A next-week meeting warrants prep this week only when it starts before this
+// hour (local) on the first working day of next week: a morning meeting can't
+// realistically be prepped that same morning. A later meeting that day — or any
+// meeting on a later day — is left for next week's own planning.
+const NEXT_WEEK_PREP_CUTOFF_HOUR = 12;
+
 export interface ResolvePrepInput {
   // This week's events (for candidates + the "Prep:" title dedupe).
   weekEvents: CalendarEvent[];
-  // Meetings on the first working day(s) of next week (offered for prep this week).
+  // Meetings on the first working day of next week (offered for prep this week).
   nextWeekEarlyEvents: CalendarEvent[];
+  // The first working day of next week (yyyy-MM-dd). A next-week meeting only
+  // qualifies for prep when it lands on this day and starts before noon; null
+  // (next week has no working days) means no next-week candidates.
+  nextWeekFirstWorkingDay: string | null;
   nowMs: number;
   prepBlocks: PrepBlock[];
 }
@@ -55,7 +65,7 @@ export interface ResolvePrepInput {
 // prep verdict. AI verdicts for newly-classified meetings are persisted as a
 // side effect (mirrors the previous inline logic in the prep-candidates route).
 export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<PrepCandidate[]> {
-  const { weekEvents, nextWeekEarlyEvents, nowMs, prepBlocks } = input;
+  const { weekEvents, nextWeekEarlyEvents, nextWeekFirstWorkingDay, nowMs, prepBlocks } = input;
 
   // Meetings already prepped, from two angles:
   //  * preppedTitles — a "Prep:" event on the calendar (covers preps made outside
@@ -98,8 +108,18 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
     if (preppedMeetingEventIds.has(e.id)) return false;
     return !preppedTitles.has(normalizePrepKey(e.title));
   };
+  // A next-week meeting also has to sit on the first working day of next week and
+  // start before noon to be offered (see NEXT_WEEK_PREP_CUTOFF_HOUR) — otherwise
+  // next week's own planning preps it on the day.
+  const qualifiesNextWeek = (e: CalendarEvent): boolean =>
+    !!nextWeekFirstWorkingDay &&
+    localDateStr(e.startTime) === nextWeekFirstWorkingDay &&
+    e.startTime.getHours() < NEXT_WEEK_PREP_CUTOFF_HOUR;
+
   const thisWeek = weekEvents.filter(isCandidate).map(e => ({ event: e, nextWeek: false }));
-  const nextWeek = nextWeekEarlyEvents.filter(isCandidate).map(e => ({ event: e, nextWeek: true }));
+  const nextWeek = nextWeekEarlyEvents
+    .filter(e => isCandidate(e) && qualifiesNextWeek(e))
+    .map(e => ({ event: e, nextWeek: true }));
   const candidates = [...thisWeek, ...nextWeek];
 
   const decisions = await getMeetingPrepDecisions();

@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import {
-  gatherWeekContext,
-  firstWorkingDaysOfNextWeek,
-  NEXT_WEEK_PREP_LOOKAHEAD_DAYS,
-} from '@/lib/scheduling/gather';
-import { resolveWorkingWindow, localDateStr } from '@/lib/scheduling/engine';
+import { gatherWeekContext } from '@/lib/scheduling/gather';
+import { resolveWorkingWindow } from '@/lib/scheduling/engine';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
 import { placeWeekRituals, proposedBlockToBusyInterval } from '@/lib/scheduling/rituals';
@@ -59,34 +55,18 @@ export async function POST(request: NextRequest) {
     const candidates = await resolvePrepCandidates({
       weekEvents: ctx.weekEvents,
       nextWeekEarlyEvents: ctx.nextWeekEarlyEvents,
+      nextWeekFirstWorkingDay: ctx.nextWeekFirstWorkingDay,
       nowMs,
       prepBlocks,
     });
 
-    // Early-next-week working days offered as prep-day picks: the first working
-    // day(s) of next week (same config), capped at the latest next-week candidate
-    // meeting and with out-of-office days dropped. Empty when nothing lands next
-    // week. Returned so the UI can offer "Day before"/"Day of" for those meetings.
-    const nextWeekDates = candidates.filter(c => c.nextWeek).map(c => c.date);
-    const latestNextWeekDate = nextWeekDates.length
-      ? nextWeekDates.reduce((a, b) => (a > b ? a : b))
-      : null;
-    const nextWeekWorkingDayStrs = latestNextWeekDate
-      ? firstWorkingDaysOfNextWeek(ctx.config.scheduling, ctx.weekStart, NEXT_WEEK_PREP_LOOKAHEAD_DAYS)
-          .map(localDateStr)
-          .filter(d => d <= latestNextWeekDate && !ctx.outOfOfficeDates.has(d))
-      : [];
-    const nextWeekWorkingDaySet = new Set(nextWeekWorkingDayStrs);
-
-    // A per-meeting preferred day is valid when it is a working day THIS week, or
-    // (for a next-week meeting) an offered next-week working day on/before the
-    // meeting's own day; anything else is dropped (default placement then applies).
+    // A per-meeting preferred day is valid only when it is a working day THIS
+    // week — prep for a next-week meeting is always placed this week, so a day
+    // override pointing into next week is dropped (default placement then applies).
     const preferredDateFor = (c: (typeof candidates)[number]): string | undefined => {
       const raw = rawPrepDays[c.eventId];
       if (!raw) return undefined;
-      if (workingDaySet.has(raw)) return raw;
-      if (c.nextWeek && nextWeekWorkingDaySet.has(raw) && raw <= c.date) return raw;
-      return undefined;
+      return workingDaySet.has(raw) ? raw : undefined;
     };
 
     // Meetings needing prep → propose a slot for each event instance. Next-week
@@ -132,7 +112,6 @@ export async function POST(request: NextRequest) {
       weekStart: ctx.weekStart,
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
-      nextWeekWorkingDays: nextWeekWorkingDayStrs,
     });
     const blockByEventId = new Map(placed.map(b => [b.meeting!.eventId, b]));
     const reasonByEventId = new Map(unplaced.map(u => [u.meeting.eventId, u.reason]));
@@ -164,7 +143,6 @@ export async function POST(request: NextRequest) {
       meetings,
       unplaced: unplacedRows,
       workingDays: workingDayStrs,
-      nextWeekWorkingDays: nextWeekWorkingDayStrs,
     });
   } catch (error) {
     console.error('Error resolving prep candidates:', error);

@@ -74,12 +74,16 @@ export interface WeekContext {
   asanaNameByGid: Map<string, string>;
   busyIntervals: BusyInterval[];
   weekEvents: CalendarEvent[]; // full events (for the prep step + "Prep:" dedupe)
-  // Meetings on the first working day(s) of NEXT week (e.g. next Mon/Tue). These
-  // fall OUTSIDE this week, so they never enter busyIntervals, quota counting or
+  // Meetings on the FIRST working day of NEXT week (e.g. next Mon). These fall
+  // OUTSIDE this week, so they never enter busyIntervals, quota counting or
   // reconcile — they exist solely so the prep step can offer a prep block THIS
-  // week for a meeting that lands early next week (a Monday meeting can only
-  // realistically be prepped the week before). See NEXT_WEEK_PREP_LOOKAHEAD_DAYS.
+  // week for a meeting that lands early next week (a Monday-morning meeting can
+  // only realistically be prepped the week before). Candidacy (before noon on
+  // that day) is decided in resolvePrepCandidates against nextWeekFirstWorkingDay.
   nextWeekEarlyEvents: CalendarEvent[];
+  // The first working day of NEXT week (yyyy-MM-dd), or null when next week has no
+  // working days. resolvePrepCandidates uses it to gate next-week prep candidacy.
+  nextWeekFirstWorkingDay: string | null;
   existingScheduledCounts: Record<string, number>;
   existingCategoryCountsByDate: Record<string, Record<string, number>>;
   // Dates (yyyy-MM-dd) the user is out of office this week (a full-day OOO event
@@ -178,11 +182,6 @@ async function fetchAsanaData(completedSince: string): Promise<{
 
 const DEFAULT_CALENDAR = { id: 'primary', backgroundColor: '#4285f4', summary: 'Primary', selected: true as const };
 
-// How many working days into NEXT week the prep step looks ahead. Meetings on
-// these days can get a prep block scheduled in THIS week's remaining days (a
-// Monday-morning meeting can only realistically be prepped the week before).
-export const NEXT_WEEK_PREP_LOOKAHEAD_DAYS = 2;
-
 const WEEKDAY_NAMES = [
   'Sunday',
   'Monday',
@@ -274,17 +273,18 @@ export async function fetchWeekEvents(
   return fetchEventsForDays(integrations, days);
 }
 
-// Fetch meetings on the first working day(s) of NEXT week (see
-// NEXT_WEEK_PREP_LOOKAHEAD_DAYS). Used only to offer prep blocks this week; these
-// events never enter this week's busy set, quotas or reconcile.
+// Fetch meetings on the FIRST working day of NEXT week. Used only to offer prep
+// blocks this week; these events never enter this week's busy set, quotas or
+// reconcile. Which of them actually warrant prep (a before-noon meeting on that
+// day) is decided in resolvePrepCandidates.
 export async function fetchNextWeekEarlyEvents(
   weekStart: Date,
   scheduling: WorkflowConfig['scheduling']
 ): Promise<CalendarEvent[]> {
-  const days = firstWorkingDaysOfNextWeek(scheduling, weekStart, NEXT_WEEK_PREP_LOOKAHEAD_DAYS);
-  if (days.length === 0) return [];
+  const [firstDay] = firstWorkingDaysOfNextWeek(scheduling, weekStart, 1);
+  if (!firstDay) return [];
   const integrations = await getEnabledGoogleIntegrations();
-  const { events } = await fetchEventsForDays(integrations, days);
+  const { events } = await fetchEventsForDays(integrations, [firstDay]);
   return events;
 }
 
@@ -404,6 +404,8 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     : startOfWeek(logicalTodayDate(now, rolloverHour), { weekStartsOn: 1 });
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
+  const [nextWeekFirstDay] = firstWorkingDaysOfNextWeek(config.scheduling, weekStart, 1);
+  const nextWeekFirstWorkingDay = nextWeekFirstDay ? format(nextWeekFirstDay, 'yyyy-MM-dd') : null;
 
   const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, nextWeekEarlyEvents, prepBlocksRaw, ritualBlocksRaw, deferralsRaw, carryOversRaw] =
     await Promise.all([
@@ -637,6 +639,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     busyIntervals,
     weekEvents,
     nextWeekEarlyEvents,
+    nextWeekFirstWorkingDay,
     existingScheduledCounts,
     existingCategoryCountsByDate,
     outOfOfficeDates: oooDates,

@@ -516,6 +516,7 @@ export async function POST(request: NextRequest) {
       const prepCandidates = await resolvePrepCandidates({
         weekEvents: ctx.weekEvents,
         nextWeekEarlyEvents,
+        nextWeekFirstWorkingDay: ctx.nextWeekFirstWorkingDay,
         nowMs,
         prepBlocks,
       });

@@ -37,7 +37,6 @@ function run(input: {
   meetings: PrepMeeting[];
   scheduling?: Partial<WorkflowConfig['scheduling']>;
   busyIntervals?: BusyInterval[];
-  nextWeekWorkingDays?: string[];
 }) {
   return proposePrepBlocks({
     meetings: input.meetings,
@@ -45,7 +44,6 @@ function run(input: {
     busyIntervals: input.busyIntervals ?? [],
     weekStart: WEEK_START,
     now: WEEK_START,
-    ...(input.nextWeekWorkingDays ? { nextWeekWorkingDays: input.nextWeekWorkingDays } : {}),
   });
 }
 
@@ -306,39 +304,18 @@ describe('proposePrepBlocks', () => {
     expect(unplaced).toHaveLength(1);
   });
 
-  it('places a next-week meeting on its own day when picked (preferredDate outside this week), before the meeting', () => {
-    // Meeting next Monday 11:00. User picks the "Day of" (next Monday itself) — a
-    // day outside THIS week's working days. Prep must land that day, after the
-    // morning exclusion (earliest 10:30) and before the 11:00 meeting start.
-    const startMs = new Date(2026, 6, 20, 11, 0).getTime(); // next Mon 11:00
+  it('never places a next-week meeting into next week, even given a next-week preferredDate', () => {
+    // Meeting next Monday 09:00. Prep is always placed in THIS week — a
+    // preferredDate that points at next Monday can't escape this week (there are
+    // no next-week windows), so it lands on the latest this-week day (Friday).
+    const startMs = new Date(2026, 6, 20, 9, 0).getTime(); // next Mon 09:00
     const { placed, unplaced } = run({
       meetings: [meeting({ startMs, preferLatest: true, preferredDate: '2026-07-20' })],
       scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
-      nextWeekWorkingDays: ['2026-07-20', '2026-07-21'],
     });
     expect(unplaced).toHaveLength(0);
     expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-20'); // next Monday, the picked day
-    expect(placed[0].start).toBe('10:30'); // after the exclusion, before 11:00
-  });
-
-  it('falls back from a next-week pick through earlier days into this week (never a later day)', () => {
-    // Meeting next Tuesday; user picks next Monday, but next Monday is full. Prep
-    // walks back to THIS week's Friday (never forward to next Tuesday).
-    const startMs = new Date(2026, 6, 21, 14, 0).getTime(); // next Tue 14:00
-    const nextMondayFull: BusyInterval = {
-      start: new Date(2026, 6, 20, 9, 0),
-      end: new Date(2026, 6, 20, 17, 0),
-    };
-    const { placed, unplaced } = run({
-      meetings: [meeting({ startMs, preferLatest: true, preferredDate: '2026-07-20' })],
-      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
-      busyIntervals: [nextMondayFull],
-      nextWeekWorkingDays: ['2026-07-20', '2026-07-21'],
-    });
-    expect(unplaced).toHaveLength(0);
-    expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-17'); // this week's Friday
+    expect(placed[0].date).toBe('2026-07-17'); // this week's Friday, never next week
   });
 
   it('default placement walks back beyond the day-before when it and the day-of are full', () => {

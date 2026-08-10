@@ -165,10 +165,6 @@ export interface PrepCandidatesResponse {
   // Working days (yyyy-MM-dd) of the remaining week, for the per-meeting prep-day
   // dropdown. Absent on older responses.
   workingDays?: string[];
-  // Early-next-week working days (yyyy-MM-dd) offered as prep-day picks for
-  // next-week meetings, so their dropdown can include "Day before"/"Day of".
-  // Absent on older responses.
-  nextWeekWorkingDays?: string[];
 }
 
 export interface WeekCandidate {

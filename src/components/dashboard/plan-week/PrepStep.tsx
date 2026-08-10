@@ -45,18 +45,17 @@ export function PrepStep({
   const suggested = prepData.meetings.filter(m => m.needsPrep && !unplacedKeys.has(m.key));
   const others = prepData.meetings.filter(m => !m.needsPrep);
   const workingDays = prepData.workingDays ?? [];
-  const nextWeekWorkingDays = prepData.nextWeekWorkingDays ?? [];
 
-  // Per-meeting prep-day options: every working day from now up to and including
-  // the meeting's day. For an early-next-week meeting the pool also includes the
-  // offered next-week working days, so its own day ("Day of") and the day before
-  // are pickable rather than only this week's tail. Labels: the meeting day is
-  // "Day of", the day immediately before is "Day before", the rest are "EEE d".
+  // Per-meeting prep-day options: every working day THIS week up to and including
+  // the meeting's day. A next-week meeting's prep is always placed this week, so
+  // its options are this week's remaining days (none is "Day of"/"Day before").
+  // Labels: the meeting day is "Day of", the day immediately before is "Day
+  // before", the rest are "EEE d".
   const dayOptionsFor = (m: (typeof prepData.meetings)[number]): Array<{ value: string; label: string }> => {
     const meetingDate = m.date;
     const md = parseISO(meetingDate);
     const dayBefore = format(new Date(md.getFullYear(), md.getMonth(), md.getDate() - 1), 'yyyy-MM-dd');
-    const pool = [...workingDays, ...(m.nextWeek ? nextWeekWorkingDays : [])].filter(d => d <= meetingDate);
+    const pool = workingDays.filter(d => d <= meetingDate);
     return [...new Set(pool)]
       .sort()
       .map(d => ({
