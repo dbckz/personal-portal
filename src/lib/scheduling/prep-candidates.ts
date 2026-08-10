@@ -71,12 +71,16 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
   //    has usually already purged such a record before we run).
   const preppedTitles = new Set<string>();
   const preppedMeetingEventIds = new Set<string>();
-  for (const e of weekEvents) {
+  // A prep for a next-week meeting may itself sit in next week (a per-meeting
+  // day override can place it on the meeting's own day), so the dedupe must
+  // scan the lookahead events too — otherwise a wizard re-run can't see that
+  // prep and schedules a duplicate this week.
+  for (const e of [...weekEvents, ...nextWeekEarlyEvents]) {
     if (isPrepTitle(e.title)) {
       preppedTitles.add(normalizePrepKey(prepMeetingTitleFromEvent(e.title)));
     }
   }
-  const presentEventIds = new Set(weekEvents.map(e => e.id));
+  const presentEventIds = new Set([...weekEvents, ...nextWeekEarlyEvents].map(e => e.id));
   for (const p of prepBlocks) {
     const present = presentEventIds.has(p.googleEventId);
     if (present) preppedTitles.add(normalizePrepKey(p.meetingTitle));
