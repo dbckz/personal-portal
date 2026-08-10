@@ -1100,6 +1100,32 @@ export const api = {
     });
   },
 
+  // Settle a single member of a grouped/batch block from the desktop drill-down
+  // dialog: 'done' completes the task and records a 'done' weekly outcome;
+  // 'remove' takes it out of the block (task returns to the backlog unscheduled)
+  // and records an 'unscheduled' outcome — the same recording paths a review uses.
+  async updateBlockMember(
+    action: 'done' | 'remove',
+    member: {
+      source: 'asana' | 'adhoc';
+      taskId: string;
+      gid?: string;
+      integrationId?: string;
+      scheduleId?: string;
+      adhocId?: string;
+    }
+  ): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>(
+      '/api/scheduling/block-member',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, member }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   async getAsanaFilterPreferences(integrationId?: string): Promise<{ filters: AsanaFilterState }> {
     const url = integrationId
       ? `/api/user-data/asana-filters?integrationId=${encodeURIComponent(integrationId)}`

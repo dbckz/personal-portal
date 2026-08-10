@@ -136,6 +136,44 @@ describe('api methods', () => {
     });
   });
 
+  describe('updateBlockMember', () => {
+    it('posts a done action for an Asana member', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) });
+
+      await api.updateBlockMember('done', {
+        source: 'asana',
+        taskId: 'g1',
+        gid: 'g1',
+        integrationId: 'int-1',
+        scheduleId: 's1',
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/scheduling/block-member', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'done',
+          member: { source: 'asana', taskId: 'g1', gid: 'g1', integrationId: 'int-1', scheduleId: 's1' },
+        }),
+      });
+    });
+
+    it('posts a remove action', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) });
+
+      await api.updateBlockMember('remove', { source: 'asana', taskId: 'g2', scheduleId: 's2' });
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/scheduling/block-member', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'remove',
+          member: { source: 'asana', taskId: 'g2', scheduleId: 's2' },
+        }),
+      });
+    });
+  });
+
   describe('createCalendarEvent', () => {
     it('creates event with correct payload', async () => {
       const mockEvent = { id: 'new-event', title: 'Test' };

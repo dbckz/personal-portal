@@ -34,6 +34,8 @@ import { CalendarTab } from '@/components/home/CalendarTab';
 import { CalendarSelectionModal } from '@/components/home/CalendarSelectionModal';
 import { DeleteConfirmModal } from '@/components/home/DeleteConfirmModal';
 import { GoogleEventModal } from '@/components/home/GoogleEventModal';
+import { BatchBlockDialog } from '@/components/home/BatchBlockDialog';
+import { resolveBlockMembers, isGroupedBlock, type BlockMember } from '@/lib/scheduling/block-members';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useTaskMetadata } from '@/hooks/useTaskMetadata';
@@ -228,7 +230,7 @@ export default function Home() {
   // Weekly-capacity store lifted here (from DashboardContent) so mutations that
   // affect counts — task complete/delete, delegation — can refetch it.
   const { data: capacityData, isLoading: capacityLoading, refetch: refetchCapacity } = useDashboard();
-  const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
+  const { addTask, updateTask, removeTask, getTasksForDate, tasks: allAdhocTasks } = useTasks();
   const {
     googleEvents,
     allAsanaTasks,
@@ -284,6 +286,12 @@ export default function Home() {
   // AI-runnable); null for every other open path, so no nav chevrons appear.
   const [taskNavIds, setTaskNavIds] = useState<string[] | null>(null);
   const [staleModalOpen, setStaleModalOpen] = useState(false);
+  // The grouped/batch calendar block being drilled into (double-clicked). Its
+  // member tasks are resolved below and shown in the BatchBlockDialog.
+  const [batchBlockEvent, setBatchBlockEvent] = useState<CalendarEvent | null>(null);
+  // Set true when a member action mutates data, so the calendar refreshes once
+  // when the dialog closes rather than on every tick.
+  const batchDidMutate = useRef(false);
   const googleEventModal = useGoogleEventModal();
   const {
     selectedGoogleEvent,
@@ -1041,6 +1049,12 @@ export default function Home() {
   }, []);
 
   const handleEventDoubleClick = useCallback((event: CalendarEvent) => {
+    // A grouped/batch block (several tasks sharing one Google event) opens the
+    // drill-down dialog; single-task and plain events keep their behaviour.
+    if (isGroupedBlock(event, scheduledAsanaTasks, allAdhocTasks)) {
+      setBatchBlockEvent(event);
+      return;
+    }
     const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
     if (asanaTaskId) {
       setOpenTaskDialogId(asanaTaskId);
@@ -1048,7 +1062,72 @@ export default function Home() {
     } else if (event.source === 'google') {
       setSelectedGoogleEvent(event);
     }
-  }, [setSelectedGoogleEvent]);
+  }, [setSelectedGoogleEvent, scheduledAsanaTasks, allAdhocTasks]);
+
+  // The member tasks of the block being drilled into, resolved from the same
+  // scheduled-task / ad-hoc data the calendar renders. Live title + completion
+  // come from the loaded Asana task list (id === gid).
+  const batchBlockMembers = useMemo<BlockMember[]>(() => {
+    if (!batchBlockEvent) return [];
+    return resolveBlockMembers(
+      batchBlockEvent.id,
+      scheduledAsanaTasks,
+      allAdhocTasks,
+      gid => {
+        const t = allAsanaTasks.find(task => task.id === gid);
+        return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
+      }
+    );
+  }, [batchBlockEvent, scheduledAsanaTasks, allAdhocTasks, allAsanaTasks]);
+
+  const closeBatchBlock = useCallback(() => {
+    setBatchBlockEvent(null);
+    if (batchDidMutate.current) {
+      batchDidMutate.current = false;
+      fetchAllEvents();
+    }
+  }, [fetchAllEvents]);
+
+  const handleBatchMemberDone = useCallback(async (member: BlockMember) => {
+    try {
+      await api.updateBlockMember('done', {
+        source: member.source,
+        taskId: member.taskId,
+        ...(member.gid ? { gid: member.gid } : {}),
+        ...(member.integrationId ? { integrationId: member.integrationId } : {}),
+        ...(member.scheduleId ? { scheduleId: member.scheduleId } : {}),
+        ...(member.adhocId ? { adhocId: member.adhocId } : {}),
+      });
+      batchDidMutate.current = true;
+    } catch (err) {
+      toast.error('Could not mark the task done');
+      throw err;
+    }
+  }, [toast]);
+
+  const handleBatchMemberRemove = useCallback(async (member: BlockMember) => {
+    try {
+      await api.updateBlockMember('remove', {
+        source: member.source,
+        taskId: member.taskId,
+        ...(member.gid ? { gid: member.gid } : {}),
+        ...(member.integrationId ? { integrationId: member.integrationId } : {}),
+        ...(member.scheduleId ? { scheduleId: member.scheduleId } : {}),
+        ...(member.adhocId ? { adhocId: member.adhocId } : {}),
+      });
+      batchDidMutate.current = true;
+    } catch (err) {
+      toast.error('Could not remove the task from the block');
+      throw err;
+    }
+  }, [toast]);
+
+  const handleBatchMemberOpen = useCallback((member: BlockMember) => {
+    if (!member.gid) return;
+    closeBatchBlock();
+    setOpenTaskDialogId(member.gid);
+    setTaskNavIds(null);
+  }, [closeBatchBlock]);
 
   const handleClearOpenTaskDialog = useCallback(() => {
     setOpenTaskDialogId(null);
@@ -1463,6 +1542,17 @@ export default function Home() {
         googleIntegrations={connectedGoogleIntegrations.map(i => ({ id: i.id, name: i.name }))}
         asanaIntegrations={asanaIntegrations.map(i => ({ id: i.id, name: i.name }))}
       />
+
+      {batchBlockEvent && (
+        <BatchBlockDialog
+          event={batchBlockEvent}
+          members={batchBlockMembers}
+          onMemberDone={handleBatchMemberDone}
+          onMemberRemove={handleBatchMemberRemove}
+          onOpenTask={handleBatchMemberOpen}
+          onClose={closeBatchBlock}
+        />
+      )}
 
       {selectedGoogleEvent && (
         <GoogleEventModal
