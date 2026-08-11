@@ -4,6 +4,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAsanaTasks } from '@/hooks/useAsanaTasks';
 import * as api from '@/lib/api';
+import { CalendarEvent, CalendarEventResponse, CalendarEventsResponse } from '@/types';
 
 // Mock the api module
 jest.mock('@/lib/api', () => ({
@@ -84,6 +85,7 @@ describe('useAsanaTasks hook', () => {
         sortDirection: 'desc' as const,
         groupBy: 'none' as const,
         groupOrder: [],
+        expandedGroups: [],
       };
       mockApi.getAllAsanaFilterPreferences.mockResolvedValue({ filtersMap: { 'int-1': savedFilters } });
 
@@ -111,7 +113,7 @@ describe('useAsanaTasks hook', () => {
       const mockTasks = [
         { id: 'task-1', title: 'Task 1', source: 'asana', startTime: new Date(), endTime: new Date() },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(mockTasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(mockTasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(mockTasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -145,7 +147,7 @@ describe('useAsanaTasks hook', () => {
         { id: 'task-1', title: 'Task 1', source: 'asana', startTime: new Date(), endTime: new Date(), customFields: [{ name: 'Type', displayValue: 'Bug' }] },
         { id: 'task-2', title: 'Task 2', source: 'asana', startTime: new Date(), endTime: new Date(), customFields: [{ name: 'Type', displayValue: 'NOT A TASK' }] },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(mockTasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(mockTasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(mockTasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -243,7 +245,7 @@ describe('useAsanaTasks hook', () => {
 
   describe('filtering', () => {
     const setupTasksWithFilters = async (tasks: Record<string, unknown>[]) => {
-      mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(tasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -316,7 +318,7 @@ describe('useAsanaTasks hook', () => {
         { id: 'task-1', title: 'Task 1', source: 'asana', projects: [{ gid: 'proj-1', name: 'Project A' }], integrationId: 'int-1', startTime: new Date(), endTime: new Date() },
         { id: 'task-2', title: 'Task 2', source: 'asana', projects: [{ gid: 'proj-1', name: 'Project A' }, { gid: 'proj-2', name: 'Project B' }], integrationId: 'int-1', startTime: new Date(), endTime: new Date() },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(tasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -336,7 +338,7 @@ describe('useAsanaTasks hook', () => {
         { id: 'task-2', title: 'Task 2', source: 'asana', customFields: [{ name: 'Type', displayValue: 'Feature' }], startTime: new Date(), endTime: new Date() },
         { id: 'task-3', title: 'Task 3', source: 'asana', customFields: [{ name: 'Type', displayValue: 'Bug' }], startTime: new Date(), endTime: new Date() },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(tasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -356,7 +358,7 @@ describe('useAsanaTasks hook', () => {
         { id: 'task-2', title: 'Task 2', source: 'asana', integrationId: 'int-2', integrationName: 'Personal', startTime: new Date(), endTime: new Date() },
         { id: 'task-3', title: 'Task 3', source: 'asana', integrationId: 'int-1', integrationName: 'Work', startTime: new Date(), endTime: new Date() },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(tasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
       const { result } = renderHook(() => useAsanaTasks());
@@ -433,7 +435,7 @@ describe('useAsanaTasks hook', () => {
 
   describe('task actions', () => {
     it('completes an Asana task', async () => {
-      mockApi.completeAsanaTask.mockResolvedValue(undefined);
+      mockApi.completeAsanaTask.mockResolvedValue({ success: true, completed: true });
 
       const { result } = renderHook(() => useAsanaTasks());
 
@@ -445,7 +447,7 @@ describe('useAsanaTasks hook', () => {
     });
 
     it('adds a comment to an Asana task', async () => {
-      mockApi.addAsanaComment.mockResolvedValue(undefined);
+      mockApi.addAsanaComment.mockResolvedValue({ success: true });
 
       const { result } = renderHook(() => useAsanaTasks());
 
@@ -459,28 +461,28 @@ describe('useAsanaTasks hook', () => {
     it('creates a new Asana task', async () => {
       const now = new Date();
       const newTask = { id: 'new-task', title: 'New Task', source: 'asana', startTime: now.toISOString(), endTime: now.toISOString() };
-      mockApi.createAsanaTask.mockResolvedValue({ success: true, task: newTask });
+      mockApi.createAsanaTask.mockResolvedValue({ success: true, task: newTask as unknown as CalendarEventResponse });
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      let created: unknown;
+      let created: CalendarEvent | null = null;
       await act(async () => {
         created = await result.current.createAsanaTask('int-1', 'New Task', { notes: 'Test notes' });
       });
 
       expect(mockApi.createAsanaTask).toHaveBeenCalledWith('int-1', 'New Task', { notes: 'Test notes' });
       expect(created).not.toBeNull();
-      expect(created.id).toBe('new-task');
-      expect(created.title).toBe('New Task');
+      expect(created!.id).toBe('new-task');
+      expect(created!.title).toBe('New Task');
     });
 
     it('deletes an Asana task', async () => {
-      mockApi.deleteAsanaTask.mockResolvedValue(undefined);
+      mockApi.deleteAsanaTask.mockResolvedValue({ success: true });
 
       const tasks = [
         { id: 'task-1', title: 'Task 1', source: 'asana', startTime: new Date(), endTime: new Date() },
       ];
-      mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
+      mockApi.getAllAsanaTasks.mockResolvedValue(tasks as unknown as CalendarEventsResponse);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
       const { result } = renderHook(() => useAsanaTasks());

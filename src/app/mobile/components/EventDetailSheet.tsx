@@ -1,8 +1,10 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { CalendarDays, Clock, MapPin, X } from 'lucide-react';
+import { CalendarDays, Check, Clock, Loader2, MapPin, Pencil, Trash2, X } from 'lucide-react';
 import { SOURCE_STYLES, formatTimeRange, fullDescription, sourceLabel } from '@/lib/event-display';
+import type { BlockMember } from '@/lib/scheduling/block-members';
 import { CalendarEvent } from '@/types';
 
 function renderLinkedText(text: string) {
@@ -23,16 +25,171 @@ function renderLinkedText(text: string) {
   });
 }
 
+type RowState = { busy?: boolean; error?: boolean };
+
+// Grouped batch block: the member tasks scheduled into this block, each of which
+// can be ticked done or removed from the block. Double-click has no touch
+// analogue, so the members surface here in the tapped block's sheet. Owns the
+// list while open so a per-action optimistic update survives a parent refetch.
+function BlockMemberList({
+  members: initialMembers,
+  onMemberDone,
+  onMemberRemove,
+}: {
+  members: BlockMember[];
+  onMemberDone: (member: BlockMember) => Promise<void>;
+  onMemberRemove: (member: BlockMember) => Promise<void>;
+}) {
+  const [members, setMembers] = useState<BlockMember[]>(initialMembers);
+  const [rows, setRows] = useState<Record<string, RowState>>({});
+
+  const handleDone = useCallback(async (member: BlockMember) => {
+    if (member.done) return;
+    setRows(prev => ({ ...prev, [member.key]: { busy: true } }));
+    setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, done: true } : m)));
+    try {
+      await onMemberDone(member);
+      setRows(prev => ({ ...prev, [member.key]: {} }));
+    } catch {
+      setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, done: false } : m)));
+      setRows(prev => ({ ...prev, [member.key]: { error: true } }));
+    }
+  }, [onMemberDone]);
+
+  const handleRemove = useCallback(async (member: BlockMember) => {
+    setRows(prev => ({ ...prev, [member.key]: { busy: true } }));
+    setMembers(prev => prev.filter(m => m.key !== member.key));
+    try {
+      await onMemberRemove(member);
+    } catch {
+      setMembers(prev => {
+        if (prev.some(m => m.key === member.key)) return prev;
+        const idx = initialMembers.findIndex(m => m.key === member.key);
+        const next = [...prev];
+        next.splice(idx < 0 ? next.length : idx, 0, member);
+        return next;
+      });
+      setRows(prev => ({ ...prev, [member.key]: { error: true } }));
+    }
+  }, [onMemberRemove, initialMembers]);
+
+  return (
+    <section className="mt-5 border-t border-gray-200 pt-4">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Tasks in this block</h3>
+      {members.length === 0 ? (
+        <p className="mt-2 text-sm text-gray-400">No tasks left in this block.</p>
+      ) : (
+        <ul className="mt-2 divide-y divide-gray-100">
+          {members.map(member => {
+            const row = rows[member.key] ?? {};
+            return (
+              <li key={member.key} className="flex items-center gap-2 py-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleDone(member)}
+                  disabled={member.done || row.busy}
+                  aria-label={member.done ? 'Done' : 'Mark done'}
+                  className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border transition-colors ${
+                    member.done
+                      ? 'border-emerald-500 bg-emerald-500 text-white'
+                      : 'border-gray-300 text-transparent active:text-emerald-500'
+                  } disabled:opacity-60`}
+                >
+                  {row.busy ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : <Check className="h-4 w-4" />}
+                </button>
+                <span
+                  className={`min-w-0 flex-1 truncate text-sm ${
+                    member.done ? 'text-gray-400 line-through' : 'text-gray-800'
+                  }`}
+                >
+                  {member.title}
+                </span>
+                {row.error && <span className="flex-shrink-0 text-xs text-red-500">Failed</span>}
+                <button
+                  type="button"
+                  onClick={() => handleRemove(member)}
+                  disabled={row.busy}
+                  aria-label="Remove from block"
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors active:bg-red-50 active:text-red-500 disabled:opacity-60"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function EventDetailSheet({
   event,
   onClose,
+  onEdit,
+  onDelete,
+  attribution,
+  asanaIntegrations,
+  onSetAttribution,
+  onRemoveAttribution,
+  members,
+  onMemberDone,
+  onMemberRemove,
 }: {
   event: CalendarEvent;
   onClose: () => void;
+  // Google events are editable/deletable; when omitted the sheet stays read-only.
+  onEdit?: (event: CalendarEvent) => void;
+  onDelete?: (event: CalendarEvent) => Promise<void>;
+  // Time-tracking attribution for a Google event not linked to an Asana task.
+  attribution?: { asanaIntegrationId: string };
+  asanaIntegrations?: { id: string; name: string }[];
+  onSetAttribution?: (asanaIntegrationId: string) => Promise<void>;
+  onRemoveAttribution?: () => Promise<void>;
+  // Present (non-empty) when the event is a grouped batch block.
+  members?: BlockMember[];
+  onMemberDone?: (member: BlockMember) => Promise<void>;
+  onMemberRemove?: (member: BlockMember) => Promise<void>;
 }) {
   const description = fullDescription(event.description);
   const sourceStyle = SOURCE_STYLES[event.source];
   const customFields = event.customFields?.filter(field => field.displayValue) || [];
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [attributionBusy, setAttributionBusy] = useState(false);
+
+  // A stalled confirm reverts so a later tap can't delete by surprise.
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const timer = window.setTimeout(() => setConfirmDelete(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmDelete]);
+
+  const isEditable = event.source === 'google' && !!onEdit;
+  const isDeletable = event.source === 'google' && !!onDelete;
+  const showAttribution =
+    event.source === 'google' && !event.linkedAsanaTaskId && !!asanaIntegrations && asanaIntegrations.length > 0;
+  const showMembers = !!members && members.length > 0 && !!onMemberDone && !!onMemberRemove;
+
+  const currentAttributionName = attribution
+    ? asanaIntegrations?.find(i => i.id === attribution.asanaIntegrationId)?.name
+    : null;
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      await onDelete(event);
+    } catch {
+      setIsDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
 
   return (
     <div
@@ -137,7 +294,97 @@ export function EventDetailSheet({
               </dl>
             </section>
           )}
+
+          {showMembers && (
+            <BlockMemberList
+              members={members!}
+              onMemberDone={onMemberDone!}
+              onMemberRemove={onMemberRemove!}
+            />
+          )}
+
+          {showAttribution && (
+            <section className="mt-5 border-t border-gray-200 pt-4">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Time tracking</h3>
+              {currentAttributionName ? (
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-sm text-gray-700">
+                    Counts toward <span className="font-medium">{currentAttributionName}</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={attributionBusy}
+                    onClick={async () => {
+                      if (!onRemoveAttribution) return;
+                      setAttributionBusy(true);
+                      try {
+                        await onRemoveAttribution();
+                      } finally {
+                        setAttributionBusy(false);
+                      }
+                    }}
+                    className="flex-shrink-0 text-xs font-medium text-red-600 underline underline-offset-2 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-gray-500">Count toward:</span>
+                  {asanaIntegrations!.map(integration => (
+                    <button
+                      key={integration.id}
+                      type="button"
+                      disabled={attributionBusy}
+                      onClick={async () => {
+                        if (!onSetAttribution) return;
+                        setAttributionBusy(true);
+                        try {
+                          await onSetAttribution(integration.id);
+                        } finally {
+                          setAttributionBusy(false);
+                        }
+                      }}
+                      className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors active:bg-gray-200 disabled:opacity-50"
+                    >
+                      {integration.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
         </div>
+
+        {(isEditable || isDeletable) && (
+          <div className="flex gap-2 border-t border-gray-200 p-4">
+            {isEditable && (
+              <button
+                type="button"
+                onClick={() => onEdit!(event)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors active:bg-blue-700"
+              >
+                <Pencil className="h-4 w-4" />
+                Edit
+              </button>
+            )}
+            {isDeletable && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 ${
+                  confirmDelete
+                    ? 'border-red-600 bg-red-600 text-white active:bg-red-700'
+                    : 'border-red-300 text-red-600 active:bg-red-50'
+                }`}
+              >
+                {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {confirmDelete ? 'Tap to confirm' : 'Delete'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

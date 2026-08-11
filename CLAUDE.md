@@ -17,16 +17,17 @@ The `/mobile` view (`src/app/mobile/`) must be kept in step with the desktop:
 when a feature is added or changed, add the mobile equivalent as part of the
 same piece of work.
 
-**Mobile is read-only by default.** Surface and view the data there; creating,
-editing, deleting and wizard flows belong on the desktop. Reuse shared modules
-rather than duplicating logic.
+**Mobile is read/write** (Dave's instruction, 11 Aug 2026 — supersedes the
+earlier read-only-by-default policy). Mobile should offer functionality very
+similar to the desktop, adapted to touch idioms: bottom sheets and tap flows
+instead of drag-and-drop, hover and double-click. Reuse shared modules (api
+client, hooks, lib) rather than duplicating logic.
 
-**Exception: exercise logging is read/write on mobile.** Sessions are logged
-standing in a gym, so the phone is the primary surface for it — starting a
-session, ticking exercises off, correcting weights and adding notes all write
-from `/mobile`. Those writes save per-action and optimistically, because the
-connection is unreliable and a lost session is unrecoverable. Anything else
-stays read-only unless Dave says otherwise.
+Mobile writes save per-action and optimistically — the pattern generalised
+from exercise logging (`useTodaySession`'s `runWrite`: optimistic apply,
+reconcile server actuals, roll back on failure, per-row busy state) — because
+phone connections are unreliable. Commit text inputs on blur, not per
+keystroke.
 
 ## Development and deployment
 

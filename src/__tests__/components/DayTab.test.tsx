@@ -1,13 +1,16 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { DayTab } from '@/app/mobile/tabs/DayTab';
 import { createMockCalendarEvent } from '../mocks/data';
 
 const NOW = new Date('2024-01-15T10:30:00');
 
-function renderDay(events = [] as ReturnType<typeof createMockCalendarEvent>[]) {
+function renderDay(
+  events = [] as ReturnType<typeof createMockCalendarEvent>[],
+  props: Partial<React.ComponentProps<typeof DayTab>> = {}
+) {
   return render(
     <DayTab
       selectedDate={NOW}
@@ -16,6 +19,7 @@ function renderDay(events = [] as ReturnType<typeof createMockCalendarEvent>[]) 
       dueTodayTasks={[]}
       isLoading={false}
       onSelectEvent={jest.fn()}
+      {...props}
     />
   );
 }
@@ -66,5 +70,39 @@ describe('DayTab', () => {
 
     expect(screen.getByText('No timed events')).toBeInTheDocument();
     expect(screen.getByLabelText('Current time')).toBeInTheDocument();
+  });
+
+  it('fires onCreateEvent from the Add affordance', () => {
+    const onCreateEvent = jest.fn();
+    renderDay([], { onCreateEvent });
+
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+    expect(onCreateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Schedule on an unscheduled Asana row', () => {
+    const onScheduleTask = jest.fn();
+    const task = createMockCalendarEvent({ id: 'due-1', title: 'Write brief', source: 'asana' });
+    renderDay([], { dueTodayTasks: [task], onScheduleTask });
+
+    fireEvent.click(screen.getByRole('button', { name: /schedule/i }));
+    expect(onScheduleTask).toHaveBeenCalledWith(task);
+  });
+
+  it('offers Move and Unschedule on a scheduled Asana event', () => {
+    const onMoveEvent = jest.fn();
+    const onUnscheduleEvent = jest.fn();
+    const scheduled = createMockCalendarEvent({
+      id: 'schedule-1',
+      title: 'Deep work',
+      source: 'asana',
+      linkedAsanaTaskId: 'asana-task-1',
+    });
+    renderDay([scheduled], { onMoveEvent, onUnscheduleEvent });
+
+    fireEvent.click(screen.getByRole('button', { name: /move/i }));
+    fireEvent.click(screen.getByRole('button', { name: /unschedule/i }));
+    expect(onMoveEvent).toHaveBeenCalledWith(scheduled);
+    expect(onUnscheduleEvent).toHaveBeenCalledWith(scheduled);
   });
 });

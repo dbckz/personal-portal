@@ -9,6 +9,7 @@ import { createMockCalendarEvent } from '../mocks/data';
 jest.mock('@/lib/api', () => ({
   api: {
     getTaskStories: jest.fn(),
+    setLocalTaskTypes: jest.fn(),
   },
 }));
 
@@ -102,5 +103,50 @@ describe('MobileTaskDetailSheet', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /delegate/i }));
     expect(onDelegate).toHaveBeenCalledWith(task);
+  });
+
+  it('edits the due date and saves only the changed field', async () => {
+    const onUpdateTask = jest.fn();
+    render(
+      <MobileTaskDetailSheet
+        task={task}
+        onClose={jest.fn()}
+        onUpdateTask={onUpdateTask}
+        projects={[{ gid: 'p1', name: 'Policy', integrationId: 'integration-1', integrationName: 'OM' }]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /edit task/i }));
+    // Only the due date changes; start date is left as-is.
+    const dueInput = screen.getByLabelText(/due date/i);
+    fireEvent.change(dueInput, { target: { value: '2030-07-15' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(onUpdateTask).toHaveBeenCalledWith('task-1', 'integration-1', { dueOn: '2030-07-15' });
+  });
+
+  it('deletes the task only after a second confirming tap', async () => {
+    const onDeleteTask = jest.fn();
+    const onClose = jest.fn();
+    render(
+      <MobileTaskDetailSheet task={task} onClose={onClose} onDeleteTask={onDeleteTask} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete task$/i }));
+    expect(onDeleteTask).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /tap again to delete/i }));
+    expect(onDeleteTask).toHaveBeenCalledWith('task-1', 'integration-1');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('saves task metadata through the metadata editor', async () => {
+    const onSaveMetadata = jest.fn().mockResolvedValue(undefined);
+    render(
+      <MobileTaskDetailSheet task={task} onClose={jest.fn()} onSaveMetadata={onSaveMetadata} />
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ai-delegable/i }));
+    expect(onSaveMetadata).toHaveBeenCalledWith('task-1', 'integration-1', { aiDelegable: true });
   });
 });

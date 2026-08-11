@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef } from 'react';
 import { format, isSameDay, startOfDay } from 'date-fns';
-import { CalendarDays, Loader2 } from 'lucide-react';
+import { CalendarClock, CalendarDays, Loader2, Plus } from 'lucide-react';
 import { SOURCE_STYLES } from '@/lib/event-display';
 import { CalendarEvent } from '@/types';
 import { MobileEventCard } from '../components/MobileEventCard';
@@ -25,6 +25,10 @@ export function DayTab({
   isLoading,
   onSelectEvent,
   onSelectTask,
+  onCreateEvent,
+  onScheduleTask,
+  onMoveEvent,
+  onUnscheduleEvent,
 }: {
   selectedDate: Date;
   now: Date;
@@ -34,8 +38,15 @@ export function DayTab({
   dueTodayTasks: CalendarEvent[];
   isLoading: boolean;
   onSelectEvent: (event: CalendarEvent) => void;
-  // When set, Asana Today rows become tappable (opens the task detail sheet).
+  // Opens the task detail sheet for an Asana-backed row/event.
   onSelectTask?: (task: CalendarEvent) => void;
+  // Add a new calendar event on the selected day.
+  onCreateEvent?: () => void;
+  // Schedule an unscheduled Asana task into a time slot.
+  onScheduleTask?: (task: CalendarEvent) => void;
+  // Reschedule / unschedule a scheduled Asana event.
+  onMoveEvent?: (event: CalendarEvent) => void;
+  onUnscheduleEvent?: (event: CalendarEvent) => void;
 }) {
   const nowIndicatorRef = useRef<HTMLDivElement | null>(null);
   const hasAutoScrolledRef = useRef(false);
@@ -131,7 +142,19 @@ export function DayTab({
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Agenda</h2>
-          <span className="text-sm text-gray-500">{timedEvents.length}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">{timedEvents.length}</span>
+            {onCreateEvent && (
+              <button
+                type="button"
+                onClick={onCreateEvent}
+                className="inline-flex h-8 items-center gap-1 rounded-full bg-blue-600 px-3 text-xs font-semibold text-white transition-colors active:bg-blue-700"
+              >
+                <Plus className="h-4 w-4" />
+                Add
+              </button>
+            )}
+          </div>
         </div>
         {timedEvents.length > 0 ? (
           <>
@@ -143,6 +166,8 @@ export function DayTab({
                   onSelect={onSelectEvent}
                   isPast={isEventPast(event)}
                   isCurrent={isEventCurrent(event)}
+                  onMove={onMoveEvent}
+                  onUnschedule={onUnscheduleEvent}
                 />
               </Fragment>
             ))}
@@ -180,19 +205,39 @@ export function DayTab({
               </div>
             );
             const key = `${task.integrationId || 'asana'}-${task.id}`;
-            return onSelectTask ? (
-              <button
-                type="button"
-                key={key}
-                onClick={() => onSelectTask(task)}
-                className="w-full rounded-lg border border-gray-200 bg-white p-3 text-left shadow-sm transition-colors active:bg-gray-50"
-              >
-                {body}
-              </button>
-            ) : (
-              <article key={key} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-                {body}
-              </article>
+            if (!onSelectTask && !onScheduleTask) {
+              return (
+                <article key={key} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                  {body}
+                </article>
+              );
+            }
+            return (
+              <div key={key} className="rounded-lg border border-gray-200 bg-white shadow-sm">
+                {onSelectTask ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectTask(task)}
+                    className="w-full rounded-lg p-3 text-left transition-colors active:bg-gray-50"
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="p-3">{body}</div>
+                )}
+                {onScheduleTask && (
+                  <div className="flex border-t border-gray-100 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => onScheduleTask(task)}
+                      className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors active:bg-gray-100"
+                    >
+                      <CalendarClock className="h-4 w-4 text-gray-400" />
+                      Schedule
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </section>

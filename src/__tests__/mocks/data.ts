@@ -60,7 +60,7 @@ export const mockTaskTemplate: TaskTemplate = {
   title: 'Daily Standup',
   description: 'Team standup meeting',
   duration: 15,
-  taskType: 'meeting',
+  taskType: 'custom:meeting',
   priority: 'medium',
   createdAt: '2024-01-01T00:00:00.000Z',
 };

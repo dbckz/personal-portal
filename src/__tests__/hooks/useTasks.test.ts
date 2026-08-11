@@ -4,6 +4,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useTasks } from '@/hooks/useTasks';
 import { api } from '@/lib/api';
+import { AdHocTask } from '@/types';
 
 // Mock the API module
 jest.mock('@/lib/api', () => ({
@@ -96,7 +97,7 @@ describe('useTasks hook', () => {
         expect(result.current.isLoaded).toBe(true);
       });
 
-      let returned: typeof createdTask | null = null;
+      let returned: AdHocTask | null = null;
       await act(async () => {
         returned = await result.current.addTask(newTask);
       });
@@ -153,7 +154,7 @@ describe('useTasks hook', () => {
         expect(result.current.isLoaded).toBe(true);
       });
 
-      let returned: typeof updatedTask | null = null;
+      let returned: AdHocTask | null = null;
       await act(async () => {
         returned = await result.current.updateTask('1', { title: 'Updated Task' });
       });
@@ -254,7 +255,7 @@ describe('useTasks hook', () => {
         expect(result.current.isLoaded).toBe(true);
       });
 
-      let returned: typeof toggledTask | null = null;
+      let returned: AdHocTask | null = null;
       await act(async () => {
         returned = await result.current.toggleComplete('1');
       });

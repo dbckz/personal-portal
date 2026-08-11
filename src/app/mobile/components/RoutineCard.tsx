@@ -1,15 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarRange, ChevronDown, ChevronRight } from 'lucide-react';
+import { CalendarRange, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import type { WeeklyRoutineDay } from '@/types/life';
+import { MobileRoutineEditor } from './MobileRoutineEditor';
 
-// The standing weekly routine on the phone: read-only, tucked below today's
-// checklist in a collapsible card. Editing the routine is a desk job (desktop
-// owns the read/write surface, per CLAUDE.md); on mobile you just want to
-// glance at what a given day is meant to be.
+// The standing weekly routine on the phone, tucked below today's checklist in a
+// collapsible card: a glance at what each day is meant to be, and — via the Edit
+// affordance — the read/write surface for changing it, in a bottom sheet.
 
 const DAY_LABELS: Record<number, string> = {
   1: 'Mon',
@@ -25,6 +25,7 @@ export function RoutineCard() {
   const [open, setOpen] = useState(false);
   const [routine, setRoutine] = useState<WeeklyRoutineDay[] | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     // Fetch lazily on first expand — the card is closed by default and most
@@ -63,6 +64,18 @@ export function RoutineCard() {
           {loaded && routine && routine.length === 0 && (
             <p className="text-sm text-gray-400">No routine set.</p>
           )}
+          {loaded && routine && (
+            <div className="mb-1 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-500 active:text-gray-900"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            </div>
+          )}
           {loaded && routine && routine.length > 0 && (
             <ul className="divide-y divide-gray-100">
               {routine.map(day => (
@@ -90,6 +103,17 @@ export function RoutineCard() {
             </ul>
           )}
         </div>
+      )}
+
+      {editing && routine && (
+        <MobileRoutineEditor
+          initial={routine}
+          onClose={() => setEditing(false)}
+          onSaved={saved => {
+            setRoutine(saved);
+            setEditing(false);
+          }}
+        />
       )}
     </section>
   );

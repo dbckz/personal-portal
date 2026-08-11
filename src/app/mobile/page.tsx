@@ -3,7 +3,7 @@ import { MobileShell } from './MobileShell';
 
 export const metadata: Metadata = {
   title: 'Portal',
-  description: 'Read-only phone view of Dave\'s portal',
+  description: 'Mobile view of Dave\'s portal',
 };
 
 export default function MobilePage() {
