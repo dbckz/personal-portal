@@ -1,4 +1,4 @@
-import { getTask, postComment } from '../asana-tools';
+import { getTask, draftComment } from '../asana-tools';
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -53,33 +53,34 @@ describe('getTask', () => {
   });
 });
 
-describe('postComment', () => {
-  it('posts the comment and reports the workspace', async () => {
+describe('draftComment', () => {
+  it('saves the comment as a local draft via the draft-comment route', async () => {
     const fetchFn = jest.fn().mockResolvedValue(
-      jsonResponse({ success: true, integration: { name: 'OM' } })
+      jsonResponse({ draft: { id: 'd1', text: 'Looks good' } })
     );
 
-    const result = await postComment('456', 'Looks good', { baseUrl: 'http://x', fetchFn });
+    const result = await draftComment('456', 'Looks good', { baseUrl: 'http://x', fetchFn });
 
     expect(fetchFn).toHaveBeenCalledWith(
-      'http://x/api/orchestrator/asana/tasks/456',
+      'http://x/api/orchestrator/asana/tasks/456/draft-comment',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ text: 'Looks good' }),
       })
     );
-    expect(result).toContain('Comment posted to task 456');
-    expect(result).toContain('OM');
+    expect(result).toContain('LOCAL DRAFT');
+    expect(result).toContain('456');
+    expect(result).toContain('NOT posted to Asana');
   });
 
   it('requires non-empty text', async () => {
     const fetchFn = jest.fn();
-    await expect(postComment('456', '  ', { baseUrl: 'http://x', fetchFn })).rejects.toThrow(/text is required/);
+    await expect(draftComment('456', '  ', { baseUrl: 'http://x', fetchFn })).rejects.toThrow(/text is required/);
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it('throws the route error on failure', async () => {
     const fetchFn = jest.fn().mockResolvedValue(jsonResponse({ error: 'boom' }, false, 500));
-    await expect(postComment('1', 'hi', { baseUrl: 'http://x', fetchFn })).rejects.toThrow(/boom/);
+    await expect(draftComment('1', 'hi', { baseUrl: 'http://x', fetchFn })).rejects.toThrow(/boom/);
   });
 });

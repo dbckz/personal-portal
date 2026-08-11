@@ -7,6 +7,9 @@ import {
   upsertDelegationEntry,
   claimNextDelegationEntry,
   deleteDelegationEntry,
+  addDraftComment,
+  updateDraftComment,
+  removeDraftComment,
 } from '@/lib/user-data-storage';
 import { __resetDbForTests } from '@/lib/storage/db';
 
@@ -151,6 +154,60 @@ describe('delegation queue storage', () => {
     await upsertDelegationEntry('legacy-1', 'int-1', { title: 'Old task', state: 'queued' });
     const entry = await getDelegationEntry('legacy-1');
     expect(entry?.claudeAccount).toBeUndefined();
+  });
+
+  it('adds a draft comment to an existing entry', async () => {
+    await upsertDelegationEntry('draft-1', 'int-1', { title: 'Task', state: 'done' });
+    const draft = await addDraftComment('draft-1', 'int-1', 'Proposed reply');
+
+    expect(draft.id).toBeTruthy();
+    expect(draft.text).toBe('Proposed reply');
+
+    const entry = await getDelegationEntry('draft-1');
+    expect(entry?.draftComments).toHaveLength(1);
+    expect(entry?.draftComments?.[0].text).toBe('Proposed reply');
+    expect(entry?.state).toBe('done'); // unchanged
+  });
+
+  it('creates a skeleton entry when a draft arrives with no existing entry', async () => {
+    const draft = await addDraftComment('draft-2', 'int-9', 'Orphan draft');
+    const entry = await getDelegationEntry('draft-2');
+
+    expect(entry).not.toBeNull();
+    expect(entry?.integrationId).toBe('int-9');
+    expect(entry?.draftComments?.[0].id).toBe(draft.id);
+  });
+
+  it('appends multiple drafts in order', async () => {
+    await addDraftComment('draft-3', 'int-1', 'first');
+    await addDraftComment('draft-3', 'int-1', 'second');
+
+    const entry = await getDelegationEntry('draft-3');
+    expect(entry?.draftComments?.map(d => d.text)).toEqual(['first', 'second']);
+  });
+
+  it('updates a draft comment text and stamps updatedAt', async () => {
+    const draft = await addDraftComment('draft-4', 'int-1', 'original');
+    const updated = await updateDraftComment('draft-4', draft.id, 'edited');
+
+    expect(updated?.text).toBe('edited');
+    const entry = await getDelegationEntry('draft-4');
+    expect(entry?.draftComments?.[0].text).toBe('edited');
+  });
+
+  it('returns null updating a missing draft or entry', async () => {
+    expect(await updateDraftComment('nope', 'x', 'y')).toBeNull();
+    await addDraftComment('draft-5', 'int-1', 'a');
+    expect(await updateDraftComment('draft-5', 'missing-id', 'y')).toBeNull();
+  });
+
+  it('removes a draft comment and reports whether one was removed', async () => {
+    const draft = await addDraftComment('draft-6', 'int-1', 'to remove');
+    expect(await removeDraftComment('draft-6', draft.id)).toBe(true);
+
+    const entry = await getDelegationEntry('draft-6');
+    expect(entry?.draftComments).toHaveLength(0);
+    expect(await removeDraftComment('draft-6', draft.id)).toBe(false); // already gone
   });
 
   it('deletes an entry by GID', async () => {

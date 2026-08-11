@@ -1,7 +1,7 @@
 // API utilities with retry logic and proper typing
 
 import { EventAttributionRule } from '@/types';
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
@@ -755,6 +755,47 @@ export const api = {
         returnedToAiAt: now,
       }),
     });
+  },
+
+  // Draft comments a delegated run left for review (stored on the delegation
+  // entry; never posted to Asana until the user posts them here).
+  async updateDraftComment(
+    asanaTaskGid: string,
+    draftId: string,
+    text: string
+  ): Promise<{ draft: DelegationDraftComment }> {
+    return fetchWithRetry<{ draft: DelegationDraftComment }>(
+      `/api/delegation/${encodeURIComponent(asanaTaskGid)}/draft-comments/${encodeURIComponent(draftId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }
+    );
+  },
+
+  async discardDraftComment(asanaTaskGid: string, draftId: string): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>(
+      `/api/delegation/${encodeURIComponent(asanaTaskGid)}/draft-comments/${encodeURIComponent(draftId)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  // Post a draft to Asana (optionally with the latest edited text) then remove it.
+  async postDraftComment(
+    asanaTaskGid: string,
+    draftId: string,
+    text?: string
+  ): Promise<{ success: boolean; integration?: { id: string; name: string } }> {
+    return fetchWithRetry(
+      `/api/delegation/${encodeURIComponent(asanaTaskGid)}/draft-comments/${encodeURIComponent(draftId)}/post`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(text !== undefined ? { text } : {}),
+      },
+      { maxRetries: 0 }
+    );
   },
 
   async deleteDelegationEntry(asanaTaskGid: string): Promise<{ success: boolean }> {

@@ -87,8 +87,10 @@ export async function getTask(gid: string, overrides?: Partial<ToolDeps>): Promi
   return lines.join('\n');
 }
 
-// post_comment: add a comment (story) to a task by gid, in its owning workspace.
-export async function postComment(
+// draft_comment: save a comment on a task by gid as a LOCAL DRAFT for Dave to
+// review — it is NOT posted to Asana. Delegated runs have no path that writes to
+// Asana; this stores the comment on the task's delegation entry instead.
+export async function draftComment(
   gid: string,
   text: string,
   overrides?: Partial<ToolDeps>
@@ -100,7 +102,7 @@ export async function postComment(
   if (!trimmedText) throw new Error('text is required');
 
   const response = await fetchFn(
-    `${baseUrl}/api/orchestrator/asana/tasks/${encodeURIComponent(trimmedGid)}`,
+    `${baseUrl}/api/orchestrator/asana/tasks/${encodeURIComponent(trimmedGid)}/draft-comment`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,6 +114,8 @@ export async function postComment(
     throw new Error(await readError(response));
   }
 
-  const data = (await response.json()) as { integration?: { name?: string } };
-  return `Comment posted to task ${trimmedGid}${data.integration?.name ? ` in workspace "${data.integration.name}"` : ''}.`;
+  return (
+    `Saved as a LOCAL DRAFT on task ${trimmedGid} for Dave to review. ` +
+    `It was NOT posted to Asana — Dave will edit and post it (or discard it) himself.`
+  );
 }

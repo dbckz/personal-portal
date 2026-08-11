@@ -158,6 +158,17 @@ export type DelegationState = 'queued' | 'running' | 'done' | 'failed';
 // one at delegation time, and the runner refuses to run an entry without it.
 export type ClaudeAccount = 'claude-dbc' | 'claude-om';
 
+// A comment a delegated agent wants to leave on the Asana task, held LOCALLY for
+// Dave to review, edit, and either post or discard. Delegated runs never write
+// to Asana directly — they only ever produce these drafts. A draft exists only
+// while pending: posting or discarding removes it from the entry's array.
+export interface DelegationDraftComment {
+  id: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DelegationRunResult {
   status: 'successful' | 'failed';
   summary: string;
@@ -196,6 +207,11 @@ export interface DelegationQueueEntry {
   // back, and it is never set automatically. Cleared on any re-queue (a fresh
   // delegation run takes the task out of the queue again).
   returnedToAiAt?: string;
+  // Pending comments a delegated run drafted for this task, awaiting Dave's
+  // review. Absent/empty when there is nothing to review. Posting or discarding
+  // a draft removes it from this array (see the delegation-queue storage
+  // helpers). Runs never post to Asana directly — this is the only channel.
+  draftComments?: DelegationDraftComment[];
   updatedAt: string;
 }
 

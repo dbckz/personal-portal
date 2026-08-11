@@ -320,6 +320,14 @@ export function DelegationWidget({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="text-sm text-gray-700 truncate">{e.title || 'Task'}</span>
+                          {e.draftComments && e.draftComments.length > 0 && (
+                            <span
+                              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700"
+                              title="Pending draft comment(s) awaiting your review"
+                            >
+                              {e.draftComments.length} draft{e.draftComments.length > 1 ? 's' : ''}
+                            </span>
+                          )}
                           <span className="text-xs text-gray-400 flex-shrink-0">{relativeTime(e.result?.finishedAt || e.updatedAt)}</span>
                         </div>
                         {e.result?.summary && (

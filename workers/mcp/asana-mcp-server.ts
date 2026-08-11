@@ -2,10 +2,11 @@
 //
 // A thin stdio MCP shim the headless delegation runner spawns (see
 // workers/orchestrator/config.ts mcpServers + claude-runner.ts). It exposes two
-// tools that let a delegated agent read and comment on Asana tasks in ANY of
-// Dave's workspaces (DBC, OM, ...) through the calendar app's own stored
-// integrations — use these instead of the claude.ai Asana connector when that
-// connector lacks access to the workspace a task lives in.
+// tools: get_task READS any task in ANY of Dave's workspaces (DBC, OM, ...), and
+// draft_comment saves a comment as a LOCAL DRAFT for Dave to review (it never
+// posts to Asana). Both go through the calendar app's own stored integrations —
+// use them instead of the claude.ai Asana connector when that connector lacks
+// access to the workspace a task lives in.
 //
 // The actual Asana calls happen in the app's orchestrator-scoped routes; this
 // server only forwards to them (see asana-tools.ts). Run it with:
@@ -15,7 +16,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-import { getTask, postComment } from './asana-tools';
+import { getTask, draftComment } from './asana-tools';
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -43,21 +44,23 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
-    'post_comment',
+    'draft_comment',
     {
-      title: 'Post Asana comment',
+      title: 'Draft Asana comment for review',
       description:
-        "Post a comment (story) on any Asana task in Dave's DBC or OM " +
-        'workspace, via the calendar app. Use this instead of the Asana ' +
-        'connector when it lacks access to the task\'s workspace. The owning ' +
-        'workspace is resolved automatically from the gid.',
+        'Draft a comment on an Asana task for Dave to review, edit, and post ' +
+        'himself. This does NOT post to Asana — it saves the comment locally as ' +
+        'a pending draft on the task, and Dave decides whether to post or ' +
+        'discard it. Use this to leave a note, findings, or a proposed reply on ' +
+        'a task; never try to post to Asana directly. The owning workspace is ' +
+        'resolved automatically from the gid.',
       inputSchema: {
-        gid: z.string().describe('The Asana task gid to comment on.'),
-        text: z.string().describe('The comment body (plain text).'),
+        gid: z.string().describe('The Asana task gid to draft a comment on.'),
+        text: z.string().describe('The draft comment body (plain text).'),
       },
     },
     async ({ gid, text }) => {
-      const result = await postComment(gid, text);
+      const result = await draftComment(gid, text);
       return { content: [{ type: 'text', text: result }] };
     }
   );

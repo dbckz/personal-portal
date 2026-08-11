@@ -909,6 +909,7 @@ export function MobileShell() {
           metadata={metadataByGid[openTask.id]}
           onSaveMetadata={saveMetadata}
           onDelegate={setDelegateTask}
+          onDraftChange={refreshDelegation}
           onMoveToBacklog={handleMoveToBacklog}
           onReturnToAiQueue={handleReturnToAiQueue}
         />

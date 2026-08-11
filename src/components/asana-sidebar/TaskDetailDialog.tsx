@@ -179,6 +179,24 @@ export function TaskDetailDialog({
     (delegationEntry.state === 'done' || delegationEntry.state === 'failed') &&
     !delegationEntry.reviewedAt;
 
+  // With a finished run to read, the dialog grows to a wide two-pane layout: task
+  // details on the left, the delegation result in a tall right pane. Without one
+  // it keeps the compact single-column form.
+  const hasResult = !!delegationEntry?.result;
+
+  // The Agent delegation section (queue state, result, draft comments, delegate
+  // button). Rendered inline in single-column mode, or in the wide right pane
+  // (roomy) when there's a result to read.
+  const delegationBlock = (roomy: boolean) =>
+    onUpdateTask && task.integrationId ? (
+      <DelegationSection
+        entry={delegationEntry}
+        onDelegate={() => setShowDelegateModal(true)}
+        roomy={roomy}
+        onDraftChange={onDelegated}
+      />
+    ) : null;
+
   const handleMoveToBacklog = () => {
     if (!delegationEntry || !onMoveToBacklog) return;
     onMoveToBacklog(delegationEntry);
@@ -275,7 +293,7 @@ export function TaskDetailDialog({
     <div className={`fixed inset-0 bg-black/50 flex items-center justify-center ${elevated ? 'z-[70]' : 'z-50'}`} onClick={onClose}>
       {/* Relative wrapper (no overflow clipping) so the prev/next controls can
           float just outside the panel's left/right edges, over the backdrop. */}
-      <div className="relative w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+      <div className={`relative w-full mx-4 ${hasResult ? 'max-w-5xl md:w-[90vw]' : 'max-w-md'}`} onClick={(e) => e.stopPropagation()}>
         {/* Prev/next task navigation — carousel-style buttons vertically centred
             just outside the panel edges. Each renders only when its neighbour
             exists. stopPropagation keeps clicks off the backdrop-close handler. */}
@@ -299,7 +317,7 @@ export function TaskDetailDialog({
         )}
 
         <div
-          className="bg-white rounded-lg shadow-xl w-full overflow-hidden max-h-[90vh] flex flex-col"
+          className={`bg-white rounded-lg shadow-xl w-full overflow-hidden flex flex-col ${hasResult ? 'h-[90vh]' : 'max-h-[90vh]'}`}
         >
         {/* Header */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
@@ -353,6 +371,12 @@ export function TaskDetailDialog({
           )}
         </div>
 
+        {/* Body: a plain stack in single-column mode; a two-pane row (details
+            left, delegation result right) once there's a result. The `contents`
+            wrappers vanish from layout in single-column mode so the scrollable
+            content and footer keep behaving exactly as before. */}
+        <div className={hasResult ? 'flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden' : 'contents'}>
+        <div className={hasResult ? 'flex flex-col min-h-0 md:w-[400px] md:flex-shrink-0 md:border-r md:border-gray-200 overflow-hidden' : 'contents'}>
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {isEditing ? (
@@ -538,17 +562,14 @@ export function TaskDetailDialog({
                 </div>
               )}
 
-              {/* Agent delegation */}
-              {onUpdateTask && task.integrationId && (
+              {/* Agent delegation — inline only in single-column mode. With a
+                  result, it moves to the wide right pane below. */}
+              {!hasResult && onUpdateTask && task.integrationId && (
                 <div>
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1 mb-2">
                     <Bot className="w-3 h-3" /> Agent delegation
                   </label>
-
-                  <DelegationSection
-                    entry={delegationEntry}
-                    onDelegate={() => setShowDelegateModal(true)}
-                  />
+                  {delegationBlock(false)}
                 </div>
               )}
 
@@ -697,6 +718,18 @@ export function TaskDetailDialog({
             </button>
           )}
         </div>
+        </div>{/* end left column */}
+
+        {/* Wide right pane: the delegation result, only in two-pane mode. */}
+        {hasResult && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50/40">
+            <div className="flex items-center gap-1 mb-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
+              <Bot className="w-3 h-3" /> Delegation result
+            </div>
+            {delegationBlock(true)}
+          </div>
+        )}
+        </div>{/* end body */}
         </div>
       </div>
 

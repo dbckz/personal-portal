@@ -54,6 +54,7 @@ export function MobileTaskDetailSheet({
   metadata,
   onSaveMetadata,
   onDelegate,
+  onDraftChange,
   onMoveToBacklog,
   onReturnToAiQueue,
 }: {
@@ -73,6 +74,8 @@ export function MobileTaskDetailSheet({
     updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
   ) => Promise<void>;
   onDelegate?: (task: CalendarEvent) => void;
+  // Refresh the delegation queue after a draft comment is edited/posted/discarded.
+  onDraftChange?: () => void;
   onMoveToBacklog?: (entry: DelegationQueueEntry) => void;
   onReturnToAiQueue?: (entry: DelegationQueueEntry) => void;
 }) {
@@ -435,7 +438,7 @@ export function MobileTaskDetailSheet({
                 <label className="mb-2 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-gray-500">
                   <Bot className="h-3 w-3" /> Agent delegation
                 </label>
-                <DelegationSection entry={delegationEntry} onDelegate={() => onDelegate(task)} />
+                <DelegationSection entry={delegationEntry} onDelegate={() => onDelegate(task)} roomy onDraftChange={onDraftChange} />
               </div>
             )}
 
