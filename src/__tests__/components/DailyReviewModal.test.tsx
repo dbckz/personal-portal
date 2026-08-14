@@ -3,9 +3,29 @@
  */
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { format, subDays } from 'date-fns';
 
 import { DailyReviewModal } from '@/components/dashboard/DailyReviewModal';
+import { logicalToday } from '@/lib/date-utils';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
+
+// The habit panel asks for today plus any recent day whose habits were never
+// answered. Everything below wants the plain single-day case, so the default
+// store has the six prior days already answered — only today is asked.
+const TODAY = logicalToday();
+
+function habitDay(date: string, habits: Array<{ habitId: string; done: boolean; reason?: string }>, notes = '') {
+  return { date, habits, notes, createdAt: '', updatedAt: '' };
+}
+
+function priorWeekAnswered() {
+  return Array.from({ length: 6 }, (_, i) =>
+    habitDay(format(subDays(new Date(`${TODAY}T12:00:00`), i + 1), 'yyyy-MM-dd'), [
+      { habitId: 'meditate', done: true },
+      { habitId: 'morning-pages', done: true },
+    ])
+  );
+}
 
 // The modal imports the api layer at module load; mock every method it (and the
 // step-2 replan hook) can reach so no real network calls happen.
@@ -106,7 +126,7 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     });
     (api.completeDailyReview as jest.Mock).mockResolvedValue({});
     (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
-    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: priorWeekAnswered() });
     (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   });
 
@@ -357,7 +377,7 @@ describe('DailyReviewModal — catch-up context', () => {
     });
     (api.completeDailyReview as jest.Mock).mockResolvedValue({});
     (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
-    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: priorWeekAnswered() });
     (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   });
 
@@ -443,7 +463,7 @@ describe('DailyReviewModal — daily habits', () => {
     });
     (api.completeDailyReview as jest.Mock).mockResolvedValue({});
     (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
-    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: priorWeekAnswered() });
     (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   });
 
@@ -512,18 +532,102 @@ describe('DailyReviewModal — daily habits', () => {
   it('seeds the answers already recorded for the day', async () => {
     (api.getWellbeingDays as jest.Mock).mockResolvedValue({
       days: [
-        {
-          date: '2026-08-07',
-          habits: [{ habitId: 'meditate', done: false, reason: 'Travelling' }],
-          notes: 'On a train',
-          createdAt: '',
-          updatedAt: '',
-        },
+        ...priorWeekAnswered(),
+        habitDay(TODAY, [{ habitId: 'meditate', done: false, reason: 'Travelling' }], 'On a train'),
       ],
     });
     await openModal([reviewBlock()]);
 
     expect(screen.getByLabelText(/Why meditate didn’t happen/i)).toHaveValue('Travelling');
     expect(screen.getByLabelText(/Anything else worth noting\?/i)).toHaveValue('On a train');
+  });
+});
+
+// A review skipped for a day or two asks the habit questions separately for each
+// missed day, not just today.
+describe('DailyReviewModal — habit catch-up across days', () => {
+  const YESTERDAY = format(subDays(new Date(`${TODAY}T12:00:00`), 1), 'yyyy-MM-dd');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.confirmReplan as jest.Mock).mockResolvedValue({
+      results: [],
+      doneResults: [],
+      additionResults: [],
+    });
+    (api.completeDailyReview as jest.Mock).mockResolvedValue({});
+    (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
+    (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
+    // Yesterday was never answered (absent from the store); the days before it
+    // were. So the review should ask for yesterday and today.
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({
+      days: priorWeekAnswered().filter(d => d.date !== YESTERDAY),
+    });
+  });
+
+  it('renders a section per missed day, headed and separately answerable', async () => {
+    await openModal([reviewBlock()]);
+
+    // Both days' meditate question appears; today's group is unadorned, the
+    // catch-up day's is disambiguated with its header.
+    expect(screen.getByRole('group', { name: 'Did you meditate today?' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('group', { name: 'Did you meditate today? (Yesterday)' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(screen.getByText('Yesterday')).toBeInTheDocument();
+  });
+
+  it('saves each answered day separately', async () => {
+    await openModal([reviewBlock()]);
+
+    // Meditate: yes today, no (with reason) yesterday.
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole('group', { name: 'Did you meditate today?' })).getByRole('button', {
+          name: /^Yes$/,
+        })
+      );
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(
+          screen.getByRole('group', { name: 'Did you meditate today? (Yesterday)' })
+        ).getByRole('button', { name: /^No$/ })
+      );
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/Why meditate didn’t happen \(Yesterday\)/i), {
+        target: { value: 'Away' },
+      });
+    });
+
+    await saveAndReplan();
+
+    const calls = (api.saveWellbeingDay as jest.Mock).mock.calls.map(c => c[0]);
+    expect(calls).toHaveLength(2);
+    const byDate = Object.fromEntries(calls.map(c => [c.date, c]));
+    expect(byDate[TODAY].habits).toEqual([{ habitId: 'meditate', done: true }]);
+    expect(byDate[YESTERDAY].habits).toEqual([
+      { habitId: 'meditate', done: false, reason: 'Away' },
+    ]);
+  });
+
+  it('blocks the save when any day has a skip without a reason', async () => {
+    await openModal([reviewBlock()]);
+
+    // A "no" on the catch-up day with no reason blocks the whole save.
+    await act(async () => {
+      fireEvent.click(
+        within(
+          screen.getByRole('group', { name: 'Did you meditate today? (Yesterday)' })
+        ).getByRole('button', { name: /^No$/ })
+      );
+    });
+    await saveAndReplan();
+
+    expect(api.saveWellbeingDay).not.toHaveBeenCalled();
+    expect(api.confirmReplan).not.toHaveBeenCalled();
+    expect(screen.getByText(/Say why a habit didn’t happen/i)).toBeInTheDocument();
   });
 });

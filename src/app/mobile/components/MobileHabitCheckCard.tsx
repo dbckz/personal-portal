@@ -6,10 +6,9 @@ import { Loader2 } from 'lucide-react';
 
 import {
   HabitCheckPanel,
-  emptyHabitAnswers,
-  habitLogsFrom,
-  incompleteHabits,
-  type HabitAnswers,
+  incompleteHabitDays,
+  saveableHabitDays,
+  type HabitDayState,
 } from '@/components/dashboard/HabitCheckPanel';
 import { api } from '@/lib/api';
 import { useToast } from '@/hooks/useToast';
@@ -17,26 +16,28 @@ import { useToast } from '@/hooks/useToast';
 // Today's habit check, on the phone. Desktop only asks these inside the daily
 // review wizard; mobile gives them a standalone home so the day can be answered
 // from a phone. The panel itself is self-contained — it seeds today's existing
-// answers on mount — so this card only owns the draft state and the save.
+// answers on mount, and surfaces any recent unanswered day to catch up — so this
+// card only owns the draft state and the save.
 export function MobileHabitCheckCard({ onSaved }: { onSaved?: () => void }) {
   const toast = useToast();
   const today = format(new Date(), 'yyyy-MM-dd');
 
-  const [answers, setAnswers] = useState<HabitAnswers>(emptyHabitAnswers);
-  const [notes, setNotes] = useState('');
+  const [habitDays, setHabitDays] = useState<HabitDayState>({});
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     // A "no" without a reason is the one thing the store rejects; surface it
-    // here rather than letting the save fail.
-    if (incompleteHabits(answers).length > 0) {
+    // here rather than letting the save fail. Checked across every day shown.
+    if (incompleteHabitDays(habitDays).length > 0) {
       setShowErrors(true);
       return;
     }
     setSaving(true);
     try {
-      await api.saveWellbeingDay({ date: today, habits: habitLogsFrom(answers), notes });
+      for (const day of saveableHabitDays(habitDays)) {
+        await api.saveWellbeingDay(day);
+      }
       setShowErrors(false);
       toast.success('Habits saved for today');
       onSaved?.();
@@ -51,11 +52,9 @@ export function MobileHabitCheckCard({ onSaved }: { onSaved?: () => void }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
       <HabitCheckPanel
-        date={today}
-        answers={answers}
-        onChange={setAnswers}
-        notes={notes}
-        onNotesChange={setNotes}
+        today={today}
+        state={habitDays}
+        onChange={setHabitDays}
         showErrors={showErrors}
       />
       <button

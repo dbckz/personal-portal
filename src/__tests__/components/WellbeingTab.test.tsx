@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { WellbeingTab } from '@/app/mobile/tabs/WellbeingTab';
 import { ToastProvider } from '@/hooks/useToast';
@@ -111,6 +111,13 @@ describe('WellbeingTab (mobile, read/write)', () => {
     // Wait for the panel to finish seeding (its loading note clears).
     await waitFor(() => expect(api.getWellbeingDays).toHaveBeenCalled());
 
+    // Answer today's meditate — an untouched day is deliberately not saved, so
+    // the card needs a real answer before it writes anything.
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Did you meditate today?' })).getByRole('button', {
+        name: /^Yes$/,
+      })
+    );
     fireEvent.click(screen.getByText("Save today's habits"));
 
     await waitFor(() => expect(api.saveWellbeingDay).toHaveBeenCalled());

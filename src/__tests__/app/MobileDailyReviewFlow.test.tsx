@@ -2,11 +2,31 @@
  * @jest-environment jsdom
  */
 import '@testing-library/jest-dom';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { format, subDays } from 'date-fns';
 
 import { MobileDailyReviewFlow } from '@/app/mobile/components/MobileDailyReviewFlow';
 import { MobileReviewCard } from '@/app/mobile/command-center/MobileReviewCard';
+import { logicalToday } from '@/lib/date-utils';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
+
+// The habit panel asks for today plus any recent day whose habits were never
+// answered. Most tests want the single-day case, so the default store has the
+// six prior days already answered — only today is asked.
+const TODAY = logicalToday();
+
+function habitDay(date: string, habits: Array<{ habitId: string; done: boolean; reason?: string }>) {
+  return { date, habits, notes: '', createdAt: '', updatedAt: '' };
+}
+
+function priorWeekAnswered() {
+  return Array.from({ length: 6 }, (_, i) =>
+    habitDay(format(subDays(new Date(`${TODAY}T12:00:00`), i + 1), 'yyyy-MM-dd'), [
+      { habitId: 'meditate', done: true },
+      { habitId: 'morning-pages', done: true },
+    ])
+  );
+}
 
 // The flow (and the step-2 replan hook / habit panel) reach the api layer at
 // module load; mock every method they can touch so nothing hits the network.
@@ -83,7 +103,7 @@ beforeEach(() => {
   });
   (api.completeDailyReview as jest.Mock).mockResolvedValue({});
   (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
-  (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+  (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: priorWeekAnswered() });
   (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   (api.resetWeek as jest.Mock).mockResolvedValue({});
 });
@@ -121,6 +141,41 @@ describe('MobileDailyReviewFlow — review step', () => {
     expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument();
     // A second analyze runs to gather the post-review replan state.
     expect((api.analyzeReplan as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('asks and saves a missed day alongside today', async () => {
+    const yesterday = format(subDays(new Date(`${TODAY}T12:00:00`), 1), 'yyyy-MM-dd');
+    // Yesterday never answered → the review asks for yesterday and today.
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({
+      days: priorWeekAnswered().filter(d => d.date !== yesterday),
+    });
+    (api.analyzeReplan as jest.Mock).mockResolvedValue(analyzeResponse({ reviewBlocks: [reviewBlock()] }));
+    await renderFlow({ entry: 'review' });
+
+    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(screen.getByText('Yesterday')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole('group', { name: 'Did you meditate today?' })).getByRole('button', {
+          name: /^Yes$/,
+        })
+      );
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(
+          screen.getByRole('group', { name: 'Did you meditate today? (Yesterday)' })
+        ).getByRole('button', { name: /^Yes$/ })
+      );
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save & continue/i }));
+    });
+
+    const calls = (api.saveWellbeingDay as jest.Mock).mock.calls.map(c => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls.map(c => c.date).sort()).toEqual([yesterday, TODAY].sort());
   });
 });
 

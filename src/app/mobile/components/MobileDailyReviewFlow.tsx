@@ -28,10 +28,9 @@ import { ReplanSections, replanHasWork } from '@/components/dashboard/ReplanSect
 import { GoalCheckInPanel } from '@/components/goals/GoalCheckInPanel';
 import {
   HabitCheckPanel,
-  emptyHabitAnswers,
-  habitLogsFrom,
-  incompleteHabits,
-  type HabitAnswers,
+  incompleteHabitDays,
+  saveableHabitDays,
+  type HabitDayState,
 } from '@/components/dashboard/HabitCheckPanel';
 import { logicalToday } from '@/lib/date-utils';
 import { useReplanActions } from '@/components/dashboard/useReplanActions';
@@ -102,8 +101,9 @@ export function MobileDailyReviewFlow({
   const [isApplying, setIsApplying] = useState(false);
   const [reviewMessage, setReviewMessage] = useState<string | null>(null);
   const [reviewMessageLoading, setReviewMessageLoading] = useState(false);
-  const [habitAnswers, setHabitAnswers] = useState<HabitAnswers>(emptyHabitAnswers);
-  const [wellbeingNotes, setWellbeingNotes] = useState('');
+  // Keyed by day: usually just today, but a review skipped for a day or two asks
+  // for each missed day too. The panel owns seeding and the day list.
+  const [habitDays, setHabitDays] = useState<HabitDayState>({});
   const [showHabitErrors, setShowHabitErrors] = useState(false);
   const [reviewDate] = useState(() => logicalToday());
   // Reset-week progress.
@@ -203,7 +203,7 @@ export function MobileDailyReviewFlow({
 
   // Apply the step-1 marks, then re-analyze and advance to the plan view.
   const applyAndContinue = useCallback(async () => {
-    if (incompleteHabits(habitAnswers).length > 0) {
+    if (incompleteHabitDays(habitDays).length > 0) {
       setShowHabitErrors(true);
       setError('Say why a habit didn’t happen before saving.');
       return;
@@ -255,10 +255,13 @@ export function MobileDailyReviewFlow({
         if (failed > 0) setError(`${failed} update${failed === 1 ? '' : 's'} could not be saved.`);
         onApplied?.();
       }
-      const habitLogs = habitLogsFrom(habitAnswers);
-      if (habitLogs.length > 0 || wellbeingNotes.trim()) {
+      // Save each day being caught up; days left fully untouched aren't saved.
+      const daysToSave = saveableHabitDays(habitDays);
+      if (daysToSave.length > 0) {
         try {
-          await api.saveWellbeingDay({ date: reviewDate, habits: habitLogs, notes: wellbeingNotes });
+          for (const day of daysToSave) {
+            await api.saveWellbeingDay(day);
+          }
         } catch (err) {
           console.error('Failed to save the day’s habits:', err);
           setError('Your review was saved, but the habit answers were not.');
@@ -279,9 +282,7 @@ export function MobileDailyReviewFlow({
     analyze,
     onApplied,
     summariseOutcome,
-    habitAnswers,
-    wellbeingNotes,
-    reviewDate,
+    habitDays,
   ]);
 
   const resetWeek = useCallback(async () => {
@@ -386,11 +387,9 @@ export function MobileDailyReviewFlow({
               </ul>
             )}
             <HabitCheckPanel
-              date={reviewDate}
-              answers={habitAnswers}
-              onChange={setHabitAnswers}
-              notes={wellbeingNotes}
-              onNotesChange={setWellbeingNotes}
+              today={reviewDate}
+              state={habitDays}
+              onChange={setHabitDays}
               showErrors={showHabitErrors}
             />
           </>

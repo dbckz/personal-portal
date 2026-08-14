@@ -29,10 +29,9 @@ import { ReplanSections, replanHasWork } from './ReplanSections';
 import { GoalCheckInPanel } from '@/components/goals/GoalCheckInPanel';
 import {
   HabitCheckPanel,
-  emptyHabitAnswers,
-  habitLogsFrom,
-  incompleteHabits,
-  type HabitAnswers,
+  incompleteHabitDays,
+  saveableHabitDays,
+  type HabitDayState,
 } from './HabitCheckPanel';
 import { logicalToday } from '@/lib/date-utils';
 import { useReplanActions } from './useReplanActions';
@@ -102,8 +101,9 @@ export function DailyReviewModal({
   const [reviewMessageLoading, setReviewMessageLoading] = useState(false);
   // The daily habits, asked alongside "what got done" — the review is the one
   // moment the day is being thought about, so it is where the answers come from.
-  const [habitAnswers, setHabitAnswers] = useState<HabitAnswers>(emptyHabitAnswers);
-  const [wellbeingNotes, setWellbeingNotes] = useState('');
+  // Keyed by day: usually just today, but a review skipped for a day or two asks
+  // for each missed day too. The panel owns seeding and the day list.
+  const [habitDays, setHabitDays] = useState<HabitDayState>({});
   const [showHabitErrors, setShowHabitErrors] = useState(false);
   // Fixed for the life of the modal so the panel doesn't re-seed if the review
   // is left open across the rollover hour.
@@ -138,8 +138,7 @@ export function DailyReviewModal({
     setIsApplying(false);
     setReviewMessage(null);
     setReviewMessageLoading(false);
-    setHabitAnswers(emptyHabitAnswers());
-    setWellbeingNotes('');
+    setHabitDays({});
     setShowHabitErrors(false);
     analyze().then(res => {
       if (res) setMarks(initMarks(res.reviewBlocks ?? []));
@@ -237,8 +236,8 @@ export function DailyReviewModal({
   const applyAndContinue = useCallback(async () => {
     // A habit answered "no" without a reason blocks the save: the reason is the
     // only part of a skip worth having later, so an empty one is worse than no
-    // answer at all.
-    if (incompleteHabits(habitAnswers).length > 0) {
+    // answer at all. Checked across every day being caught up, not just today.
+    if (incompleteHabitDays(habitDays).length > 0) {
       setShowHabitErrors(true);
       setError('Say why a habit didn’t happen before saving.');
       return;
@@ -294,17 +293,16 @@ export function DailyReviewModal({
         if (failed > 0) setError(`${failed} update${failed === 1 ? '' : 's'} could not be saved.`);
         onApplied?.();
       }
-      // The day's habits and notes. Awaited rather than fired-and-forgotten:
-      // unlike the closing message this is data being recorded, and a silent
-      // loss would leave a hole in the record that nothing else can refill.
-      const habitLogs = habitLogsFrom(habitAnswers);
-      if (habitLogs.length > 0 || wellbeingNotes.trim()) {
+      // The habits and notes for each day being caught up. Awaited rather than
+      // fired-and-forgotten: unlike the closing message this is data being
+      // recorded, and a silent loss would leave a hole in the record that
+      // nothing else can refill. Days left fully untouched aren't saved.
+      const daysToSave = saveableHabitDays(habitDays);
+      if (daysToSave.length > 0) {
         try {
-          await api.saveWellbeingDay({
-            date: reviewDate,
-            habits: habitLogs,
-            notes: wellbeingNotes,
-          });
+          for (const day of daysToSave) {
+            await api.saveWellbeingDay(day);
+          }
         } catch (err) {
           console.error('Failed to save the day’s habits:', err);
           setError('Your review was saved, but the habit answers were not.');
@@ -331,9 +329,7 @@ export function DailyReviewModal({
     analyze,
     onApplied,
     summariseOutcome,
-    habitAnswers,
-    wellbeingNotes,
-    reviewDate,
+    habitDays,
   ]);
 
   if (!isOpen) return null;
@@ -426,11 +422,9 @@ export function DailyReviewModal({
                 being thought about. Shown even when there was nothing to
                 review — a quiet day still had a morning. */}
             <HabitCheckPanel
-              date={reviewDate}
-              answers={habitAnswers}
-              onChange={setHabitAnswers}
-              notes={wellbeingNotes}
-              onNotesChange={setWellbeingNotes}
+              today={reviewDate}
+              state={habitDays}
+              onChange={setHabitDays}
               showErrors={showHabitErrors}
             />
             </>
