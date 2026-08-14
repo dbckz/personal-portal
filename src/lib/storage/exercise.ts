@@ -10,6 +10,7 @@
 import { randomUUID } from 'crypto';
 import { readAllDomains, writeAllDomains } from './db';
 import { normalizeExerciseName } from '../exercise-names';
+import { deriveCompletedLabel } from '../exercise-label';
 import type { ExerciseEntry, ExerciseSession, ExerciseSource } from '@/types/life';
 
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
@@ -39,6 +40,39 @@ export async function getAllSessions(): Promise<ExerciseSession[]> {
 
 async function writeSessions(sessions: ExerciseSession[]): Promise<void> {
   writeAllDomains({ exerciseSessions: sessions });
+}
+
+function sameComponents(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+// Keep a plan-linked completed session's TITLE honest: after its exercises
+// change, re-derive label/components from what was actually done, so a swapped
+// treadmill run shows in history as "Treadmill run + core", not the planned
+// "Parkrun + core". This is the server-side chokepoint every client writes
+// through (tick, swap, add, remove), so desktop, mobile and freeform all get it.
+//
+// Derivation always reads the PLAN's own parts — the linked planned session, or
+// the session itself when a plan is being completed in place — never the parts
+// this function last wrote. That keeps repeated edits stable and reversible:
+// undoing a swap restores the planned wording. A session with no plan parts
+// (freeform, ad-hoc) is left exactly as it was.
+function withDerivedLabel(session: ExerciseSession, all: ExerciseSession[]): ExerciseSession {
+  if (!session.completed) return session;
+  const plan = session.plannedSessionId
+    ? all.find(s => s.id === session.plannedSessionId)
+    : undefined;
+  const source = plan ?? session;
+  if (!source.components?.length) return session;
+
+  const { components, label } = deriveCompletedLabel(
+    source.components,
+    source.label,
+    session.exercises ?? []
+  );
+  if (label === session.label && sameComponents(components, session.components)) return session;
+  return { ...session, components, label };
 }
 
 // Inclusive date-string range; both bounds optional.
@@ -127,8 +161,10 @@ export async function createSession(
     updatedAt: now,
   };
 
-  await writeSessions([...(await getAllSessions()), session]);
-  return session;
+  const existing = await getAllSessions();
+  const derived = withDerivedLabel(session, existing);
+  await writeSessions([...existing, derived]);
+  return derived;
 }
 
 export type UpdateSessionInput = Partial<CreateSessionInput>;
@@ -143,12 +179,15 @@ export async function updateSession(
   if (!existing) return null;
   if (patch.date && !DATE_KEY.test(patch.date)) throw new Error(`Invalid date: ${patch.date}`);
 
-  const next: ExerciseSession = {
+  const patched: ExerciseSession = {
     ...existing,
     ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)),
     updatedAt: now,
   } as ExerciseSession;
 
+  // When this patch is what completes a planned session in place, retitle it from
+  // whatever actuals it carries before writing.
+  const next = withDerivedLabel(patched, sessions);
   await writeSessions(sessions.map(s => (s.id === id ? next : s)));
   return next;
 }
@@ -269,11 +308,12 @@ export async function updateSessionEntry(
   const canonicalPatch =
     typeof patch.name === 'string' ? { ...patch, name: normalizeExerciseName(patch.name) } : patch;
 
-  const next: ExerciseSession = {
+  const patched: ExerciseSession = {
     ...existing,
     exercises: existing.exercises.map(e => (e.id === entryId ? applyEntryPatch(e, canonicalPatch) : e)),
     updatedAt: now,
   };
+  const next = withDerivedLabel(patched, sessions);
   await writeSessions(sessions.map(s => (s.id === sessionId ? next : s)));
   return next;
 }
@@ -289,11 +329,12 @@ export async function addSessionEntry(
   if (!existing) return null;
 
   const withId: ExerciseEntry = { ...canonicalise(entry), id: randomUUID() };
-  const next: ExerciseSession = {
+  const patched: ExerciseSession = {
     ...existing,
     exercises: [...(existing.exercises ?? []), withId],
     updatedAt: now,
   };
+  const next = withDerivedLabel(patched, sessions);
   await writeSessions(sessions.map(s => (s.id === sessionId ? next : s)));
   return { session: next, entry: withId };
 }
@@ -307,11 +348,12 @@ export async function removeSessionEntry(
   const existing = sessions.find(s => s.id === sessionId);
   if (!existing?.exercises) return null;
 
-  const next: ExerciseSession = {
+  const patched: ExerciseSession = {
     ...existing,
     exercises: existing.exercises.filter(e => e.id !== entryId),
     updatedAt: now,
   };
+  const next = withDerivedLabel(patched, sessions);
   await writeSessions(sessions.map(s => (s.id === sessionId ? next : s)));
   return next;
 }

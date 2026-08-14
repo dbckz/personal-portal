@@ -691,7 +691,7 @@ function orderTargets(targets: ExerciseTarget[]): ExerciseTarget[] {
 }
 
 // A muscle group a plan day can call for.
-type Group = 'run' | 'core' | 'legs' | 'pull' | 'push';
+export type Group = 'run' | 'core' | 'legs' | 'pull' | 'push';
 
 // The words in an exercise NAME that classify it into a group. Ordered
 // most-specific first: an exercise is assigned to the FIRST group whose words it
@@ -727,6 +727,19 @@ export function classifyExercise(name: string): Group | null {
     if (re.test(name)) return group;
   }
   return null;
+}
+
+// The groups a plan COMPONENT ("Push (shoulders)", "Pull (back)") activates by
+// its words — the component side of classifyExercise. Exported for the
+// completed-label derivation, which needs to know which logged exercises answer
+// to which planned component. Empty for a component with no recognised group
+// word (yoga, climb, footy), which the caller reads as "unmappable, keep as-is".
+export function componentGroups(component: string): Group[] {
+  const groups: Group[] = [];
+  for (const [group, re] of ACTIVATE) {
+    if (re.test(component)) groups.push(group);
+  }
+  return groups;
 }
 
 function filterToPlan(
