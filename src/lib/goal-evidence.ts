@@ -15,7 +15,7 @@ import { getEnabledAsanaIntegrations, updateIntegration } from './integration-st
 import { refreshAsanaToken } from './asana';
 import { getAllSessions } from './storage/exercise';
 import { getAllWeeklyStats } from './storage/weekly-stats';
-import type { ExerciseSession, Goal } from '@/types/life';
+import type { ExerciseEntry, ExerciseSession, Goal } from '@/types/life';
 
 export interface ResolvedEvidence {
   actual: number | null;
@@ -30,12 +30,12 @@ export async function resolveEvidence(goal: Goal): Promise<ResolvedEvidence> {
       case 'manual':
         return resolveManual(goal);
       case 'exercise':
-        return await resolveExercise(goal, start, end);
+        return withManualOverride(goal, await resolveExercise(goal, start, end));
       case 'calendar-category':
-        return await resolveCalendarCategory(goal, start, end);
+        return withManualOverride(goal, await resolveCalendarCategory(goal, start, end));
       case 'asana-project':
       case 'asana-tag':
-        return await resolveAsana(goal, start, end);
+        return withManualOverride(goal, await resolveAsana(goal, start, end));
       default:
         return { actual: null, label: 'Unknown evidence source' };
     }
@@ -67,35 +67,89 @@ function resolveManual(goal: Goal): ResolvedEvidence {
   };
 }
 
+// Layer a self-report over an auto-derived figure. For a goal that names a
+// tracking source but where Dave has also typed a number in (a check-in figure
+// the auto source doesn't yet see — a race he ran that wasn't logged as an
+// exercise, say), the higher of the two is the honest actual, and the label
+// shows both so the discrepancy is visible rather than silently resolved.
+function withManualOverride(goal: Goal, auto: ResolvedEvidence): ResolvedEvidence {
+  if (typeof goal.manualValue !== 'number') return auto;
+  const manual = round1(goal.manualValue);
+  const unit = goal.target?.unit ? ` ${goal.target.unit}` : '';
+  // Higher wins; the manual figure wins outright when nothing was auto-derived.
+  const actual = auto.actual === null ? manual : Math.max(auto.actual, manual);
+  const autoPart = auto.actual === null ? auto.label : lowerFirst(auto.label);
+  return { actual, label: `Self-reported ${manual}${unit} (auto: ${autoPart})` };
+}
+
+function lowerFirst(s: string): string {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
 async function resolveExercise(goal: Goal, start: Date, end: Date): Promise<ResolvedEvidence> {
   const from = format(start, 'yyyy-MM-dd');
   const to = format(new Date(end.getTime() - 1), 'yyyy-MM-dd');
   const wanted = goal.evidence.ref?.trim().toLowerCase();
 
-  const sessions = (await getAllSessions()).filter(
-    s =>
-      s.completed &&
-      s.date >= from &&
-      s.date <= to &&
-      (!wanted || s.type.toLowerCase() === wanted)
+  const inPeriod = (await getAllSessions()).filter(
+    s => s.completed && s.date >= from && s.date <= to
   );
+  // A ref matches a session either by its type OR by naming an exercise inside
+  // it — Dave logs runs as an "Outdoor run" exercise within a mixed session, so
+  // the session type ("strength + cardio") never equals "run". When a session
+  // matches only through its exercises, its own distance/minutes are ignored and
+  // only the matching exercises contribute, so a walk that happens to share a
+  // session with nothing runnable never counts toward a run goal.
+  const matches = inPeriod
+    .map(s => matchSession(s, wanted))
+    .filter((m): m is SessionMatch => m !== null);
 
-  const noun = sessions.length === 1 ? 'session' : 'sessions';
+  const noun = matches.length === 1 ? 'session' : 'sessions';
   const scope = wanted ? `"${goal.evidence.ref}" ${noun}` : noun;
   if (goal.evidence.unit === 'minutes') {
-    const minutes = sessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
-    return { actual: minutes, label: `${minutes} min logged across ${sessions.length} ${scope}` };
+    const minutes = matches.reduce((sum, m) => sum + matchMinutes(m), 0);
+    return { actual: minutes, label: `${minutes} min logged across ${matches.length} ${scope}` };
   }
   // Peak metric: the longest single distance covered in the period, so a "run
-  // 10K" goal is judged by the best run, not a tally. Both the session's own
-  // distance and any distance logged on an exercise inside it count.
+  // 10K" goal is judged by the best run, not a tally.
   if (goal.evidence.unit === 'max-distance-km') {
-    const longest = sessions.reduce((max, s) => Math.max(max, sessionDistanceKm(s)), 0);
+    const longest = matches.reduce((max, m) => Math.max(max, matchDistanceKm(m)), 0);
     if (longest <= 0) return { actual: null, label: `No distance logged in ${scope}` };
-    const rounded = Math.round(longest * 10) / 10;
-    return { actual: rounded, label: `Longest ${rounded} km across ${sessions.length} ${scope}` };
+    const rounded = round1(longest);
+    return { actual: rounded, label: `Longest ${rounded} km across ${matches.length} ${scope}` };
   }
-  return { actual: sessions.length, label: `${sessions.length} ${scope} logged` };
+  return { actual: matches.length, label: `${matches.length} ${scope} logged` };
+}
+
+// A session that counts toward an exercise goal. `matchedExercises` is null when
+// the whole session qualifies (no ref, or the ref matched its type), and the
+// specific exercises when it qualified only by exercise name — the distinction
+// decides whether the session's own figures or just those exercises contribute.
+interface SessionMatch {
+  session: ExerciseSession;
+  matchedExercises: ExerciseEntry[] | null;
+}
+
+function matchSession(session: ExerciseSession, wanted?: string): SessionMatch | null {
+  if (!wanted || session.type.toLowerCase() === wanted) {
+    return { session, matchedExercises: null };
+  }
+  const named = (session.exercises ?? []).filter(e => e.name.toLowerCase().includes(wanted));
+  return named.length > 0 ? { session, matchedExercises: named } : null;
+}
+
+function matchMinutes(match: SessionMatch): number {
+  if (match.matchedExercises === null) return match.session.durationMinutes ?? 0;
+  return match.matchedExercises.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+}
+
+function matchDistanceKm(match: SessionMatch): number {
+  if (match.matchedExercises === null) return sessionDistanceKm(match.session);
+  return match.matchedExercises.reduce((max, e) => Math.max(max, e.distanceKm ?? 0), 0);
 }
 
 // The greatest single distance a session represents: its own distance, or the

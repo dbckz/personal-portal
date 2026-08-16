@@ -9,9 +9,9 @@ import { goalSections } from '@/lib/life-sections';
 import { periodKeyFor, periodLabel, quarterKeyForMonth } from '@/lib/goal-periods';
 import { milestoneDate } from '@/lib/goal-plan';
 // Type-only: goal-inference itself is server-side, so nothing is bundled here.
-import type { InferredGoal } from '@/lib/goal-inference';
+import type { InferredEvidence, InferredGoal } from '@/lib/goal-inference';
 import type { AsanaProject, AsanaTagWithIntegration } from '@/types';
-import type { Goal, GoalEvidenceKind, GoalMilestone, GoalPeriodKind } from '@/types/life';
+import type { Goal, GoalEvidence, GoalEvidenceKind, GoalMilestone, GoalPeriodKind } from '@/types/life';
 import { MobileSheet } from './MobileSheet';
 
 type EvidenceUnit = 'count' | 'minutes' | 'max-distance-km';
@@ -49,6 +49,23 @@ const UNIT_OPTIONS: Record<'exercise' | 'calendar-category', Array<{ value: Evid
     { value: 'minutes', label: 'Minutes' },
   ],
 };
+
+// A one-line, human-readable rendering of a suggested evidence source for the
+// proposal card — the label of the kind, plus its ref/unit where they add meaning.
+function describeEvidence(evidence: GoalEvidence): string {
+  const base = EVIDENCE_OPTIONS.find(o => o.kind === evidence.kind)?.label ?? evidence.kind;
+  const parts: string[] = [];
+  if (evidence.kind === 'exercise') {
+    const unit = UNIT_OPTIONS.exercise.find(u => u.value === evidence.unit)?.label;
+    if (unit) parts.push(unit.toLowerCase());
+    if (evidence.ref) parts.push(`matching "${evidence.ref}"`);
+  } else if (evidence.kind === 'calendar-category') {
+    if (evidence.ref) parts.push(`"${evidence.ref}"`);
+    const unit = UNIT_OPTIONS['calendar-category'].find(u => u.value === evidence.unit)?.label;
+    if (unit) parts.push(unit.toLowerCase());
+  }
+  return parts.length > 0 ? `${base} — ${parts.join(', ')}` : base;
+}
 
 interface MobileGoalEditorSheetProps {
   // Absent (undefined) or null for a new goal.
@@ -105,6 +122,13 @@ export function MobileGoalEditorSheet({
   const [inferNote, setInferNote] = useState<string | null>(null);
   const [milestones, setMilestones] = useState<GoalMilestone[]>(goal?.plan ?? []);
   const [planSource, setPlanSource] = useState<Goal['planSource']>(goal?.planSource);
+
+  // "Suggest tracking source", offered for an existing manual goal: ask the model
+  // to map it onto an auto-derived source, then apply straight to the saved goal.
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState<InferredEvidence | null>(null);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null);
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false);
 
   useEffect(() => {
     if (evidenceKind !== 'asana-project' || projects.length > 0) return;
@@ -186,6 +210,43 @@ export function MobileGoalEditorSheet({
       setInferNote("Couldn't reach the drafting model — fill it in below.");
     } finally {
       setInferring(false);
+    }
+  };
+
+  const suggestEvidence = async () => {
+    if (!goal) return;
+    setSuggesting(true);
+    setSuggestNote(null);
+    setSuggestion(null);
+    try {
+      const { proposal } = await api.suggestGoalEvidence(goal.id);
+      if (!proposal) {
+        setSuggestNote("Couldn't find an automatic source for this one — keep self-reporting it.");
+        return;
+      }
+      setSuggestion(proposal);
+    } catch {
+      setSuggestNote("Couldn't reach the model — try again in a moment.");
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  // Apply a suggested source to the saved goal straight away, then close: the
+  // proposal card is the review step, so there's nothing more to confirm.
+  const applySuggestion = async () => {
+    if (!goal || !suggestion) return;
+    setApplyingSuggestion(true);
+    setError(null);
+    try {
+      await api.updateGoal(goal.id, {
+        evidence: suggestion.evidence,
+        ...(suggestion.target ? { target: suggestion.target } : {}),
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to apply the tracking source.');
+      setApplyingSuggestion(false);
     }
   };
 
@@ -406,6 +467,57 @@ export function MobileGoalEditorSheet({
           </select>
         </Field>
         {evidenceHint && <p className="-mt-2 text-xs text-gray-500">{evidenceHint}</p>}
+
+        {goal && evidenceKind === 'manual' && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+            {!suggestion ? (
+              <>
+                <button
+                  type="button"
+                  onClick={suggestEvidence}
+                  disabled={suggesting}
+                  className="flex h-11 items-center justify-center gap-1.5 rounded-md bg-indigo-600 px-4 text-sm font-semibold text-white active:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {suggesting ? 'Looking…' : 'Suggest tracking source'}
+                </button>
+                <p className="mt-1.5 text-[11px] text-indigo-800/70">
+                  Track this goal automatically from data you already keep.
+                </p>
+                {suggestNote && <p className="mt-2 text-xs text-amber-700">{suggestNote}</p>}
+              </>
+            ) : (
+              <div>
+                <p className="text-xs font-semibold text-indigo-900">Suggested tracking source</p>
+                <p className="mt-1 text-sm text-gray-800">{describeEvidence(suggestion.evidence)}</p>
+                {suggestion.target && (
+                  <p className="mt-0.5 text-xs text-gray-600">
+                    Target: {suggestion.target.value}
+                    {suggestion.target.unit ? ` ${suggestion.target.unit}` : ''}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-gray-500">{suggestion.rationale}</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={applySuggestion}
+                    disabled={applyingSuggestion}
+                    className="h-11 rounded-md bg-indigo-600 px-4 text-sm font-semibold text-white active:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {applyingSuggestion ? 'Applying…' : 'Apply'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSuggestion(null)}
+                    className="h-11 rounded-md px-4 text-sm font-medium text-gray-600 active:bg-gray-100"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {evidenceKind === 'asana-project' && (
           <Field label="Project" htmlFor="mobile-goal-project">

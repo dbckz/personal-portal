@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getProjects, refreshAsanaToken } from '@/lib/asana';
-import { getIntegrations, updateIntegration } from '@/lib/integration-storage';
+import { loadAsanaProjects } from '@/lib/asana-catalogue';
 import { inferGoal } from '@/lib/goal-inference';
 import { getAllSessions } from '@/lib/storage/exercise';
-import type { AsanaIntegration, AsanaProject } from '@/types';
 
 // POST /api/goals/infer  { text, sectionId? }
 //
@@ -33,46 +31,4 @@ export async function POST(request: NextRequest) {
     console.error('Error inferring goal:', error);
     return NextResponse.json({ error: 'Failed to infer goal' }, { status: 500 });
   }
-}
-
-// The Asana project catalogue the inference chooses an asana-project ref from.
-// Mirrors /api/asana-projects: every enabled, credentialled workspace, tokens
-// refreshed as needed, failures per workspace swallowed so one bad integration
-// doesn't sink the proposal.
-async function loadAsanaProjects(): Promise<AsanaProject[]> {
-  const { asanaIntegrations } = await getIntegrations();
-  const usable = asanaIntegrations.filter(
-    (i): i is AsanaIntegration & {
-      credentials: NonNullable<AsanaIntegration['credentials']>;
-      workspaceId: string;
-    } => i.enabled && !!i.credentials && !!i.workspaceId
-  );
-
-  const all: AsanaProject[] = [];
-  for (const integration of usable) {
-    try {
-      let credentials = integration.credentials;
-      if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-        credentials = await refreshAsanaToken(
-          credentials.refreshToken!,
-          integration.clientId,
-          integration.clientSecret
-        );
-        await updateIntegration(integration.id, { credentials });
-      }
-      const projects = await getProjects(credentials.accessToken, integration.workspaceId);
-      for (const project of projects) {
-        all.push({
-          gid: project.gid,
-          name: project.name,
-          integrationId: integration.id,
-          integrationName: integration.name,
-          modifiedAt: project.modifiedAt,
-        });
-      }
-    } catch (err) {
-      console.error(`Error fetching projects for ${integration.name}:`, err);
-    }
-  }
-  return all;
 }

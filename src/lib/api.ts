@@ -34,7 +34,7 @@ import type {
   WellbeingDay,
 } from '@/types/wellbeing';
 import type { GoalNudge } from '@/lib/goal-progress';
-import type { InferredGoal } from '@/lib/goal-inference';
+import type { InferredEvidence, InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { FreeformDraft } from '@/lib/exercise-freeform';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
@@ -1733,6 +1733,17 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Suggest an auto-tracking source for a manually-tracked goal. `proposal` is
+  // null when the goal isn't manual, the model is unavailable, or nothing usable
+  // comes back; the editor then leaves the goal self-reported.
+  async suggestGoalEvidence(id: string): Promise<{ proposal: InferredEvidence | null }> {
+    return fetchWithRetry<{ proposal: InferredEvidence | null }>(
+      `/api/goals/${id}/suggest-evidence`,
+      { method: 'POST' },
       { maxRetries: 0 }
     );
   },

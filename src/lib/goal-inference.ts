@@ -30,6 +30,7 @@ import { sanitizeMilestones } from './goal-plan';
 import type { AsanaProject } from '@/types';
 import type {
   ExerciseSession,
+  Goal,
   GoalEvidence,
   GoalEvidenceKind,
   GoalMilestone,
@@ -318,6 +319,135 @@ export async function inferGoal(text: string, ctx: InferenceContext): Promise<In
     return record ? validateInference(record, ctx) : null;
   } catch (error) {
     console.error('Goal inference failed:', error);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Suggest a tracking source for an existing goal
+// ---------------------------------------------------------------------------
+
+// A proposal to move a manually-tracked goal onto an auto-derived source, so a
+// goal Dave has been self-reporting ("Run a 10k") can start reading its progress
+// from the data he already logs.
+export interface InferredEvidence {
+  evidence: GoalEvidence;
+  target?: { value: number; unit?: string };
+  rationale: string;
+}
+
+export interface EvidenceInferenceContext {
+  sessions: ExerciseSession[];
+  projects: AsanaProject[];
+  // Calendar categories seen in the weekly stats, offered as calendar-category refs.
+  categories: string[];
+  run?: (prompt: string) => Promise<string>;
+  timeoutSeconds?: number;
+}
+
+// The distinct session types and exercise names in the log, so a suggested
+// exercise ref names something that actually appears (as a session type or
+// inside a session) rather than a guess.
+function exerciseVocabulary(sessions: ExerciseSession[]): { types: string[]; names: string[] } {
+  const types = new Set<string>();
+  const names = new Set<string>();
+  for (const s of sessions) {
+    if (s.type?.trim()) types.add(s.type.trim());
+    for (const e of s.exercises ?? []) {
+      if (e.name?.trim()) names.add(e.name.trim());
+    }
+  }
+  return { types: [...types].sort(), names: [...names].sort() };
+}
+
+export function buildEvidencePrompt(goal: Goal, ctx: EvidenceInferenceContext): string {
+  const { types, names } = exerciseVocabulary(ctx.sessions);
+  const projectCatalogue =
+    ctx.projects.length > 0
+      ? ctx.projects.map(p => `  - gid ${p.gid}: ${p.name} (${p.integrationName})`).join('\n')
+      : '  (no Asana projects available)';
+  const list = (items: string[]) => (items.length > 0 ? items.join(', ') : '(none logged)');
+
+  return `A person tracks this goal by typing the figure in by hand. Propose a way to derive its progress automatically from data they already keep, OR return null if none fits well.
+
+The goal:
+- title: "${goal.title}"${goal.detail ? `\n- detail: "${goal.detail}"` : ''}
+- section: ${goal.sectionId}
+- target: ${goal.target ? `${goal.target.value}${goal.target.unit ? ` ${goal.target.unit}` : ''}` : '(none set)'}
+
+Choose ONE evidence.kind and follow its rule:
+- "exercise": progress from the exercise log. evidence.unit is "count" (sessions), "minutes" (total minutes) or "max-distance-km" (the single longest run/session distance — use for a target distance like "run 10K"). evidence.ref optionally narrows to a session type or an exercise name (a session counts if its type matches OR it contains an exercise whose name contains the ref); leave ref blank for all sessions.
+  Session types logged: ${list(types)}.
+  Exercise names logged: ${list(names)}.
+- "calendar-category": time booked against a time-tracking category. evidence.ref MUST be one of: ${list(ctx.categories)}. evidence.unit is "count" or "minutes".
+- "asana-project": tasks completed in a project. evidence.ref MUST be one of the gids below.
+Asana project catalogue:
+${projectCatalogue}
+
+Also propose a numeric "target" ({value, unit}) when the goal implies one and none is set, or to correct an unit mismatch; otherwise omit it.
+Give a one-line "rationale" for why this source fits.
+
+Only propose a source you are confident maps to the goal. If nothing fits (the goal is genuinely subjective), return {"evidence":null}.
+
+Return ONLY a JSON object, no prose, no code fences:
+{"evidence":{"kind":"<kind>","ref":"<optional>","unit":"<optional>"},"target":{"value":<number>,"unit":"<unit>"},"rationale":"<one line>"}`;
+}
+
+// Validate a raw evidence proposal, returning null on anything the app can't act
+// on: a missing/unknown kind, a manual kind (no auto source proposed), an Asana
+// ref that isn't in the catalogue, or a calendar-category with no ref. Unlike
+// the create-flow validator this never degrades to manual — a suggestion that
+// can't be trusted is simply not offered.
+export function validateEvidenceProposal(
+  raw: Record<string, unknown>,
+  ctx: EvidenceInferenceContext
+): InferredEvidence | null {
+  const rawEvidence = raw.evidence;
+  if (!rawEvidence || typeof rawEvidence !== 'object') return null;
+  const e = rawEvidence as Record<string, unknown>;
+  const kind = e.kind as GoalEvidenceKind;
+  if (!EVIDENCE_KINDS.includes(kind) || kind === 'manual') return null;
+
+  let evidence: GoalEvidence;
+  if (kind === 'asana-project') {
+    const project = ctx.projects.find(p => p.gid === str(e.ref));
+    if (!project) return null;
+    evidence = { kind, ref: project.gid, integrationId: project.integrationId };
+  } else if (kind === 'asana-tag') {
+    // No tag catalogue is grounded here, so a tag suggestion can't be verified.
+    return null;
+  } else if (kind === 'exercise') {
+    const unit = pickUnit(e.unit, ['count', 'minutes', 'max-distance-km'] as const);
+    evidence = { kind, ...(str(e.ref) ? { ref: str(e.ref) } : {}), unit };
+  } else if (kind === 'calendar-category') {
+    const ref = str(e.ref);
+    if (!ref || !ctx.categories.includes(ref)) return null;
+    evidence = { kind, ref, unit: pickUnit(e.unit, ['count', 'minutes'] as const) };
+  } else {
+    return null;
+  }
+
+  const target = validateTarget(raw.target);
+  const rationale = str(raw.rationale) || 'Derived from your existing data.';
+  return { evidence, ...(target ? { target } : {}), rationale };
+}
+
+// Propose an auto-tracking source for a manual goal, or null when the model is
+// unavailable, the goal isn't manual, or nothing usable comes back. `run` is
+// injectable so tests drive it without spawning Claude.
+export async function inferEvidence(
+  goal: Goal,
+  ctx: EvidenceInferenceContext
+): Promise<InferredEvidence | null> {
+  if (goal.evidence.kind !== 'manual') return null;
+  const run =
+    ctx.run ??
+    ((prompt: string) => runClaudeText(prompt, { timeoutSeconds: ctx.timeoutSeconds ?? 120 }));
+  try {
+    const record = parseJsonObject(await run(buildEvidencePrompt(goal, ctx)));
+    return record ? validateEvidenceProposal(record, ctx) : null;
+  } catch (error) {
+    console.error('Evidence inference failed:', error);
     return null;
   }
 }

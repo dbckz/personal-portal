@@ -8,13 +8,16 @@
  * null, not half-formed.
  */
 import {
+  inferEvidence,
   inferGoal,
   summariseCurrentState,
+  validateEvidenceProposal,
   validateInference,
+  type EvidenceInferenceContext,
   type InferenceContext,
 } from '@/lib/goal-inference';
 import type { AsanaProject } from '@/types';
-import type { ExerciseSession } from '@/types/life';
+import type { ExerciseSession, Goal } from '@/types/life';
 
 const NOW = new Date('2026-08-07T12:00:00');
 
@@ -164,5 +167,126 @@ describe('inferGoal', () => {
     const run = jest.fn();
     expect(await inferGoal('   ', ctx({ run }))).toBeNull();
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('inferEvidence', () => {
+  function manualGoal(overrides: Partial<Goal> = {}): Goal {
+    return {
+      id: 'g1',
+      sectionId: 'exercise',
+      periodKind: 'quarter',
+      periodKey: '2026-Q3',
+      title: 'Run a 10k',
+      target: { value: 10, unit: 'km' },
+      evidence: { kind: 'manual' },
+      checkIns: [],
+      status: 'active',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function evCtx(overrides: Partial<EvidenceInferenceContext> = {}): EvidenceInferenceContext {
+    return {
+      sessions: [session('2026-07-20', 4), session('2026-08-03', 6)],
+      projects: PROJECTS,
+      categories: ['Deep work', 'Admin'],
+      ...overrides,
+    };
+  }
+
+  describe('validateEvidenceProposal', () => {
+    it('accepts a well-formed exercise proposal', () => {
+      const result = validateEvidenceProposal(
+        {
+          evidence: { kind: 'exercise', ref: 'run', unit: 'max-distance-km' },
+          target: { value: 10, unit: 'km' },
+          rationale: 'You log runs already.',
+        },
+        evCtx()
+      );
+      expect(result).toEqual({
+        evidence: { kind: 'exercise', ref: 'run', unit: 'max-distance-km' },
+        target: { value: 10, unit: 'km' },
+        rationale: 'You log runs already.',
+      });
+    });
+
+    it('rejects a manual proposal — there is no auto source in it', () => {
+      expect(validateEvidenceProposal({ evidence: { kind: 'manual' } }, evCtx())).toBeNull();
+    });
+
+    it('rejects a missing or malformed evidence object', () => {
+      expect(validateEvidenceProposal({}, evCtx())).toBeNull();
+      expect(validateEvidenceProposal({ evidence: null }, evCtx())).toBeNull();
+    });
+
+    it('rejects an asana-project ref that is not in the catalogue', () => {
+      expect(
+        validateEvidenceProposal({ evidence: { kind: 'asana-project', ref: '999' } }, evCtx())
+      ).toBeNull();
+    });
+
+    it('keeps a valid asana-project ref and stamps its integration', () => {
+      const result = validateEvidenceProposal(
+        { evidence: { kind: 'asana-project', ref: '111' }, rationale: 'Tasks map to it.' },
+        evCtx()
+      );
+      expect(result?.evidence).toEqual({ kind: 'asana-project', ref: '111', integrationId: 'int-a' });
+    });
+
+    it('rejects a calendar-category whose ref is not a known category', () => {
+      expect(
+        validateEvidenceProposal({ evidence: { kind: 'calendar-category', ref: 'Napping' } }, evCtx())
+      ).toBeNull();
+    });
+
+    it('accepts a calendar-category ref that is in the list', () => {
+      const result = validateEvidenceProposal(
+        { evidence: { kind: 'calendar-category', ref: 'Deep work', unit: 'minutes' } },
+        evCtx()
+      );
+      expect(result?.evidence).toEqual({ kind: 'calendar-category', ref: 'Deep work', unit: 'minutes' });
+    });
+
+    it('rejects an asana-tag — no tag catalogue is grounded to verify it', () => {
+      expect(
+        validateEvidenceProposal({ evidence: { kind: 'asana-tag', ref: '222' } }, evCtx())
+      ).toBeNull();
+    });
+  });
+
+  it('returns null for a goal that is not manually tracked, without calling the model', async () => {
+    const run = jest.fn();
+    const goal = manualGoal({ evidence: { kind: 'exercise', unit: 'max-distance-km' } });
+    expect(await inferEvidence(goal, evCtx({ run }))).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('parses, validates and returns a proposal from the model', async () => {
+    const run = jest.fn().mockResolvedValue(
+      JSON.stringify({
+        evidence: { kind: 'exercise', ref: 'run', unit: 'max-distance-km' },
+        target: { value: 10, unit: 'km' },
+        rationale: 'Judged by your longest run in the quarter.',
+      })
+    );
+    const proposal = await inferEvidence(manualGoal(), evCtx({ run }));
+    expect(proposal?.evidence).toEqual({ kind: 'exercise', ref: 'run', unit: 'max-distance-km' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null when the model returns nothing usable', async () => {
+    const run = jest.fn().mockResolvedValue('no idea, sorry');
+    expect(await inferEvidence(manualGoal(), evCtx({ run }))).toBeNull();
+  });
+
+  it('returns null when the model call throws', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const run = jest.fn().mockRejectedValue(new Error('claude not found'));
+    expect(await inferEvidence(manualGoal(), evCtx({ run }))).toBeNull();
+    (console.error as jest.Mock).mockRestore();
   });
 });
