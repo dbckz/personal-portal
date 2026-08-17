@@ -20,17 +20,13 @@ import { createHash } from 'node:crypto';
 
 import { extractJsonArray, runClaudeText } from './ai-classifier';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from './exercise-progression';
+import { isCardioName, isHoldName } from './exercise-parse';
 import {
   describeLast,
   selectPlanProgressions,
   type ExerciseKind,
   type ExerciseTarget,
 } from './exercise-targets';
-import {
-  hasPrescribedExercises,
-  type PrescribedExercise,
-  type PrescribedSection,
-} from './exercise-prescription';
 
 // What to aim for on one exercise. Any of the measures may be present: a press
 // has sets/reps/weight, a plank sets/holdSeconds, a run duration/distance;
@@ -57,12 +53,25 @@ export interface ProgrammeRow {
   lastSummary: string;
 }
 
+// A weekday of the standing weekly routine, distilled for the programmer. The
+// anchors and staples are FIXED (must appear); accessories are the model's to
+// rotate from history. `recentAccessories` is the rotation context: the
+// accessories logged in the most recent session(s) of this same routine day.
+export interface ProgrammerRoutineDay {
+  title: string;
+  note?: string;
+  anchors: string[];
+  staples: string[];
+  rest?: boolean;
+  recentAccessories?: string[];
+}
+
 export interface ProgrammerPlan {
   label?: string;
   components: string[];
-  // When the day carries a written prescription, the exercises, order and
-  // rep/hold targets are FIXED: the model only chooses loads. Absent otherwise.
-  prescription?: PrescribedSection[];
+  // The routine day this session is built from: anchors and staples are fixed,
+  // accessories are AI-rotated. Absent for an ad-hoc session with no routine day.
+  routineDay?: ProgrammerRoutineDay;
 }
 
 // One exercise's history as the model sees it: how often it has appeared (the
@@ -107,17 +116,33 @@ export function buildProgrammerInput(
   totalSessions: number,
   goals: ProgrammerGoal[] = []
 ): ProgrammerInput {
-  // A prescription fixes the exercise list and order: the model sees exactly
-  // those exercises (each with its history), and nothing else, so it can only
-  // choose loads. Otherwise the plan's implied exercises are selected from
-  // history. A one-group-plus-core day can carry ~7 pull staples plus ~4 core,
-  // right at the old cap of 12; 16 gives the model the full relevant vocabulary.
-  const exercises = hasPrescribedExercises(plan.prescription)
-    ? prescribedProgrammerExercises(plan.prescription!, progressions, totalSessions)
-    : selectPlanProgressions(progressions, plan.components, 16).map(p =>
-        toProgrammerExercise(p, totalSessions)
-      );
-  return { date, plan, exercises, ...(goals.length > 0 ? { goals } : {}) };
+  const routine = plan.routineDay;
+  // A rest day generates nothing: no exercises, so generateProgramme short-
+  // circuits and the day stays empty.
+  if (routine?.rest) {
+    return { date, plan, exercises: [], ...(goals.length > 0 ? { goals } : {}) };
+  }
+
+  // The rotation vocabulary: the plan's implied exercises, selected from history.
+  // A one-group-plus-core day can carry ~7 pull staples plus ~4 core, right at
+  // the old cap of 12; 16 gives the model the full relevant vocabulary.
+  const vocab = selectPlanProgressions(progressions, plan.components, 16).map(p =>
+    toProgrammerExercise(p, totalSessions)
+  );
+
+  // The routine's fixed anchors and staples MUST be available to the model even
+  // when they have no history yet, so validateProgramme can guarantee them.
+  const fixed = routine ? [...routine.anchors, ...routine.staples] : [];
+  const have = new Set(vocab.map(e => e.key));
+  const extra: ProgrammerExercise[] = [];
+  for (const name of fixed) {
+    const key = exerciseKey(name);
+    if (!key || have.has(key)) continue;
+    have.add(key);
+    extra.push(toProgrammerExerciseFor(name, progressions, totalSessions));
+  }
+
+  return { date, plan, exercises: [...vocab, ...extra], ...(goals.length > 0 ? { goals } : {}) };
 }
 
 function toProgrammerExercise(p: ExerciseProgression, totalSessions: number): ProgrammerExercise {
@@ -131,32 +156,19 @@ function toProgrammerExercise(p: ExerciseProgression, totalSessions: number): Pr
   };
 }
 
-// The prescribed exercises, in written order and de-duplicated by key, each
-// carrying whatever history matches its name. An exercise with no history is
-// still included (frequency 0) so the model programs a load for it too.
-function prescribedProgrammerExercises(
-  sections: PrescribedSection[],
+// A ProgrammerExercise for a named exercise, carrying its history where there is
+// any and a frequency-0, no-history stub where there is not (an anchor/staple
+// never logged). Keyed by the canonical name so it matches history spelling.
+function toProgrammerExerciseFor(
+  name: string,
   progressions: ExerciseProgression[],
   totalSessions: number
-): ProgrammerExercise[] {
-  const byKey = new Map(progressions.map(p => [p.key, p]));
-  const out: ProgrammerExercise[] = [];
-  const seen = new Set<string>();
-  for (const section of sections) {
-    for (const ex of section.exercises) {
-      if (!ex.name.trim()) continue;
-      const key = exerciseKey(ex.name);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const match = byKey.get(key);
-      out.push(
-        match
-          ? toProgrammerExercise(match, totalSessions)
-          : { name: ex.name, key, frequency: 0, totalSessions, recent: [], lastSummary: 'no history' }
-      );
-    }
-  }
-  return out;
+): ProgrammerExercise {
+  const key = exerciseKey(name);
+  const match = progressions.find(p => p.key === key);
+  return match
+    ? toProgrammerExercise(match, totalSessions)
+    : { name, key, frequency: 0, totalSessions, recent: [], lastSummary: 'no history' };
 }
 
 // A stable fingerprint of everything the model reasons over. When it is
@@ -178,24 +190,26 @@ export function programmeHash(input: ProgrammerInput): string {
     goals: (input.goals ?? [])
       .map(g => `${g.title}|${g.target ?? ''}|${g.nextMilestone ?? ''}|${g.pace ?? ''}`)
       .sort(),
-    // A changed prescription (edited on the calendar) must regenerate too.
-    prescription: prescriptionFingerprint(input.plan.prescription),
+    // A changed routine day (anchors, staples, title, note edited in the portal)
+    // must regenerate the programme.
+    routineDay: routineFingerprint(input.plan.routineDay),
   });
   return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }
 
-// The prescription reduced to a stable string: section titles and each
-// exercise's fixed scheme, in order. Empty when there is no prescription.
-function prescriptionFingerprint(sections: PrescribedSection[] | undefined): string {
-  if (!hasPrescribedExercises(sections)) return '';
-  return sections!
-    .map(
-      s =>
-        `${s.title}:${s.exercises
-          .map(e => `${e.name}|${e.sets ?? ''}|${e.repsMin ?? ''}-${e.repsMax ?? ''}|${e.holdSecondsMin ?? ''}-${e.holdSecondsMax ?? ''}|${e.perSide ? 'ps' : ''}`)
-          .join(',')}`
-    )
-    .join(';');
+// The routine day reduced to a stable string. Anchors and staples keep their
+// order (a reorder is an edit); the derived rotation context is sorted. Empty
+// when there is no routine day.
+function routineFingerprint(day: ProgrammerRoutineDay | undefined): string {
+  if (!day) return '';
+  return JSON.stringify({
+    title: day.title,
+    note: day.note ?? '',
+    anchors: day.anchors,
+    staples: day.staples,
+    rest: !!day.rest,
+    recentAccessories: [...(day.recentAccessories ?? [])].sort(),
+  });
 }
 
 function pointFingerprint(p: ProgressionPoint): string {
@@ -261,67 +275,46 @@ const GOALS_HEADER = `Active goals for this person's training. Where an exercise
 
 `;
 
-// The scheme clause for a prescribed exercise ("3 x 8–12", "3 x 30–45s each
-// side"), built from the fixed targets so the model sees exactly what to load.
-function prescribedScheme(ex: PrescribedExercise): string {
-  const perSide = ex.perSide ? ' each side' : '';
-  const range = (min?: number, max?: number, unit = ''): string =>
-    min === undefined ? '' : min === max ? `${min}${unit}` : `${min}–${max}${unit}`;
-  if (ex.holdSecondsMin !== undefined) {
-    return `${ex.sets ?? ''} x ${range(ex.holdSecondsMin, ex.holdSecondsMax, 's')}${perSide}`.trim();
+// The routine block: the standing week's shape for this day. Anchors and staples
+// are REQUIRED and must appear; accessories are the model's to rotate from the
+// history below, keeping the day's muscle-group focus.
+function buildRoutineBlock(day: ProgrammerRoutineDay): string {
+  const lines: string[] = [
+    day.note ? `Day focus: ${day.title} — ${day.note}` : `Day focus: ${day.title}`,
+  ];
+  if (day.anchors.length) {
+    lines.push(
+      `REQUIRED anchors — these MUST appear, and are driven up progressively (beat last time): ${day.anchors.join(', ')}.`
+    );
   }
-  if (ex.repsMin !== undefined) {
-    return `${ex.sets ?? ''} x ${range(ex.repsMin, ex.repsMax)}${perSide}`.trim();
+  if (day.staples.length) {
+    lines.push(`REQUIRED staples — always include these: ${day.staples.join(', ')}.`);
   }
-  return ex.sets !== undefined ? `${ex.sets} sets` : 'as written';
-}
-
-const PRESCRIBED_HEADER = `You are choosing the working loads for a session whose exercises, order and rep/hold targets are ALREADY FIXED by the person's own written plan. Do NOT add, remove, reorder or substitute any exercise, and do NOT change the prescribed sets, reps or hold seconds. For each exercise below — in the given order — use its recent history and effort notes to pick the weight to use (or, for bodyweight, hold and cardio work, leave the load out), and write one sentence of rationale citing what was done last time.
-
-Return ONLY a JSON array, one object per exercise below, the SAME names in the SAME order, no prose, no code fences:
-[{"name":"<exact name>","target":{"weightKg":N},"rationale":"<one sentence citing last time>"}]
-
-Include "weightKg" only for a loaded lift; omit it for bodyweight, hold or cardio work. Do not restate sets/reps — those are fixed.
-
-`;
-
-// The prescription-constrained prompt: the fixed list with schemes and history,
-// and instructions to fill loads only.
-function buildPrescribedPrompt(input: ProgrammerInput): string {
-  const planLabel = input.plan.label || input.plan.components.join(' + ') || 'session';
-  const byKey = new Map(input.exercises.map(e => [e.key, e]));
-  const blocks: string[] = [];
-  for (const section of input.plan.prescription ?? []) {
-    const lines = section.exercises
-      .filter(ex => ex.name.trim())
-      .map(ex => {
-        const known = byKey.get(exerciseKey(ex.name));
-        const history = known?.recent.length
-          ? known.recent.map(p => `    - ${pointLine(p)}`).join('\n')
-          : '    - no history yet';
-        return `- ${ex.name} — prescribed ${prescribedScheme(ex)}\n${history}`;
-      });
-    if (lines.length) blocks.push(`${section.title}:\n${lines.join('\n')}`);
+  lines.push(
+    `Then ADD about 3–5 accessories chosen from the exercise history below, keeping this day's muscle-group focus. You may order the anchors and staples within the session as a coach would. Vary the accessories week to week, but revisit them within a training cycle rather than never repeating one.`
+  );
+  if (day.recentAccessories?.length) {
+    lines.push(
+      `Accessories used in the most recent session(s) of this day: ${day.recentAccessories.join(', ')} — prefer rotating to different ones this week.`
+    );
   }
-  return `${PRESCRIBED_HEADER}Session: ${planLabel}
-
-${blocks.join('\n\n')}`;
+  return lines.join('\n');
 }
 
 // Build the full prompt from the gathered input.
 export function buildProgrammerPrompt(input: ProgrammerInput): string {
-  if (hasPrescribedExercises(input.plan.prescription)) return buildPrescribedPrompt(input);
   const planLabel = input.plan.label || input.plan.components.join(' + ') || 'session';
   const components = input.plan.components.length
     ? `Components: ${input.plan.components.join(', ')}`
     : 'Components: (none recorded)';
+  const routine = input.plan.routineDay ? `\n\n${buildRoutineBlock(input.plan.routineDay)}` : '';
   const exercises = input.exercises.map(exerciseBlock).join('\n');
   const goals =
     input.goals && input.goals.length > 0
       ? `\n\n${GOALS_HEADER}${input.goals.map(goalBlock).join('\n')}`
       : '';
   return `${PROMPT_HEADER}Session: ${planLabel}
-${components}
+${components}${routine}
 
 Exercises available (with recent history):
 ${exercises}${goals}`;
@@ -398,7 +391,73 @@ export function validateProgramme(
     });
   }
 
-  return enforceToFailure(rows);
+  return enforceToFailure(guaranteeFixed(rows, seen, input));
+}
+
+// The routine's anchors and staples are FIXED: whatever the model returned, any
+// the model dropped are appended here (anchors first, then staples) with a
+// deterministic fallback target read from history, so the guarantee holds
+// however the model behaved. Each carries the exercise's real last summary.
+function guaranteeFixed(
+  rows: ProgrammeRow[],
+  seen: Set<string>,
+  input: ProgrammerInput
+): ProgrammeRow[] {
+  const day = input.plan.routineDay;
+  if (!day) return rows;
+  const byKey = new Map(input.exercises.map(e => [e.key, e]));
+  const out = [...rows];
+
+  const appendMissing = (names: string[], anchor: boolean) => {
+    for (const name of names) {
+      const key = exerciseKey(name);
+      if (!key || seen.has(key)) continue;
+      const known = byKey.get(key);
+      if (!known) continue; // buildProgrammerInput guarantees it, but stay safe
+      seen.add(key);
+      const hasHistory = known.lastSummary !== 'no history';
+      out.push({
+        name: known.name,
+        key,
+        kind: anchor ? 'core' : inferKind(known.name),
+        toFailure: false,
+        target: fallbackTarget(known),
+        rationale: hasHistory
+          ? `Fixed ${anchor ? 'anchor' : 'staple'} — last time ${known.lastSummary}.`
+          : `Fixed ${anchor ? 'anchor' : 'staple'} — no history yet, log a baseline.`,
+        lastSummary: known.lastSummary,
+      });
+    }
+  };
+
+  appendMissing(day.anchors, true);
+  appendMissing(day.staples, false);
+  return out;
+}
+
+// The kind of a fixed exercise the model dropped, inferred from its name for the
+// checklist's grouping and badges. Anchors are always 'core'; staples fall here.
+function inferKind(name: string): ExerciseKind {
+  if (isCardioName(name)) return 'cardio';
+  if (isHoldName(name)) return 'hold';
+  return 'core';
+}
+
+// A deterministic target for a dropped fixed exercise, taken from its most
+// recent logged session so the row is never blank. Empty when there is no
+// history to seed from (a brand-new anchor/staple).
+function fallbackTarget(e: ProgrammerExercise): ProgrammeTarget {
+  const last = e.recent[e.recent.length - 1];
+  if (!last) return {};
+  return cleanTarget({
+    sets: last.sets,
+    reps: last.reps,
+    holdSeconds: last.holdSeconds,
+    weightKg: last.weightKg,
+    durationMinutes: last.durationMinutes,
+    distanceKm: last.distanceKm,
+    perSide: last.perSide,
+  });
 }
 
 // Exactly one to-failure marker, on the last safe row. Clears every model-set

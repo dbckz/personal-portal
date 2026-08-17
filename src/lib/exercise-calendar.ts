@@ -22,7 +22,6 @@ import {
   updateCalendarEvent,
 } from './google-calendar';
 import { parsePlannedTitle, parseTimedExerciseTitle } from './exercise-parse';
-import { hasPrescribedExercises, parsePrescription } from './exercise-prescription';
 import { getEnabledGoogleIntegrations } from './integration-storage';
 import {
   attachCalendarEvent,
@@ -30,8 +29,9 @@ import {
   deleteSession,
   updateSession,
   upsertSessionByImportKey,
+  type CreateSessionInput,
 } from './storage/exercise';
-import type { ExerciseSession } from '@/types/life';
+import type { ExerciseSession, ParsedPlannedSession } from '@/types/life';
 
 const IMPORT_PREFIX = 'gcal:';
 
@@ -178,6 +178,43 @@ export function planTimedEnrichments(
   return out;
 }
 
+// A planned all-day event, reduced to what the upsert needs.
+export interface PlannedAllDayEvent {
+  id: string;
+  startDate: string;
+  summary: string;
+}
+
+// Build the upsert for one planned all-day event. The calendar is TIMING-ONLY
+// now: the event's DESCRIPTION is ignored — session content comes from the
+// weekly routine plus history, not hand-written descriptions. For a future or
+// today session we pass an empty `planDescription`, which makes the upsert clear
+// any `prescription`/`prescriptionNote` left over from the old description-
+// parsing sync. A PAST session omits `planDescription`, so the upsert leaves its
+// stored prescription untouched — harmless history.
+export function buildPlannedUpsert(
+  event: PlannedAllDayEvent,
+  parsed: ParsedPlannedSession,
+  calendarId: string,
+  today: string
+): { importKey: string; input: CreateSessionInput } {
+  const isFutureOrToday = event.startDate >= today;
+  const input: CreateSessionInput = {
+    date: event.startDate,
+    type: parsed.type,
+    label: parsed.title,
+    components: parsed.components,
+    ...(parsed.targetDistanceKm ? { targetDistanceKm: parsed.targetDistanceKm } : {}),
+    ...(isFutureOrToday ? { planDescription: '' } : {}),
+    planned: true,
+    completed: false,
+    googleEventId: event.id,
+    googleCalendarId: calendarId,
+    source: 'calendar',
+  };
+  return { importKey: `${IMPORT_PREFIX}${event.id}`, input };
+}
+
 // Read planned sessions out of the calendar for a date window.
 //
 // The all-day events ARE the plan: "🏋️ Push (shoulders) + Run (2 km)" becomes a
@@ -204,6 +241,7 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
   );
 
   const allDay = events.filter(e => !!e.startDate);
+  const today = format(new Date(), 'yyyy-MM-dd');
   let created = 0;
   let updated = 0;
   const seen = new Set<string>();
@@ -213,29 +251,15 @@ export async function pullPlannedSessions(from: Date, to: Date): Promise<PullRes
     const parsed = parsePlannedTitle(event.summary);
     if (!parsed) continue;
 
-    const importKey = `${IMPORT_PREFIX}${event.id}`;
+    const { importKey, input } = buildPlannedUpsert(
+      { id: event.id, startDate: event.startDate!, summary: event.summary },
+      parsed,
+      target.calendarId,
+      today
+    );
     seen.add(importKey);
 
-    // The event's description carries the full prescription (what to do, with
-    // rep/hold ranges). Always pass the raw text — even '' — so a re-sync writes
-    // an added prescription and clears one deleted at the Google end.
-    const prescription = parsePrescription(event.description);
-
-    const result = await upsertSessionByImportKey(importKey, {
-      date: event.startDate!,
-      type: parsed.type,
-      label: parsed.title,
-      components: parsed.components,
-      ...(parsed.targetDistanceKm ? { targetDistanceKm: parsed.targetDistanceKm } : {}),
-      planDescription: event.description ?? '',
-      ...(hasPrescribedExercises(prescription.sections) ? { prescription: prescription.sections } : {}),
-      ...(prescription.sessionNote ? { prescriptionNote: prescription.sessionNote } : {}),
-      planned: true,
-      completed: false,
-      googleEventId: event.id,
-      googleCalendarId: target.calendarId,
-      source: 'calendar',
-    });
+    const result = await upsertSessionByImportKey(importKey, input);
     plannedSessions.push(result.session);
     if (result.created) created++;
     else updated++;

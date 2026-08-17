@@ -270,12 +270,13 @@ export interface ExerciseSession {
   // The plan's parts, as written on the calendar: ['Push (shoulders)', 'Run'].
   components?: string[];
   targetDistanceKm?: number;
-  // A planned session's calendar event can carry a full PRESCRIPTION in its
-  // description — sectioned lists of exactly what to do, with rep/hold ranges.
-  // `planDescription` is the raw text (so a re-sync can tell whether it changed);
-  // `prescription` is the parsed sections; `prescriptionNote` is the leading
-  // free-text line. All absent on a plan whose event has no description, which
-  // behaves exactly as before.
+  // LEGACY: planned sessions used to inherit their content from a PRESCRIPTION
+  // hand-written in the calendar event's description (`planDescription` = raw
+  // text, `prescription` = parsed sections, `prescriptionNote` = leading line).
+  // The calendar is timing-only now and descriptions are ignored — session
+  // content comes from the weekly routine plus history (see exercise-programmer).
+  // These fields are retained only because past/completed sessions in storage
+  // still carry them; new syncs clear them from future planned sessions.
   planDescription?: string;
   prescription?: PrescribedSection[];
   prescriptionNote?: string;

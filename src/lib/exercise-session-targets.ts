@@ -19,27 +19,24 @@
 // fast and offline-tolerant, so it takes whatever is cached at that moment —
 // mirroring exactly what the checklist would have been showing.
 
-import { buildProgressions } from '@/lib/exercise-progression';
-import {
-  buildPrescribedTargets,
-  buildSessionTargets,
-  type ExerciseTarget,
-} from '@/lib/exercise-targets';
-import { hasPrescribedExercises } from '@/lib/exercise-prescription';
+import { buildProgressions, exerciseKey } from '@/lib/exercise-progression';
+import { buildSessionTargets, type ExerciseTarget } from '@/lib/exercise-targets';
+import { normalizeExerciseName } from '@/lib/exercise-names';
 import {
   buildProgrammerInput,
   programmeHash,
   programmeRowToTarget,
-  type ProgrammeRow,
   type ProgrammerGoal,
   type ProgrammerInput,
+  type ProgrammerRoutineDay,
 } from '@/lib/exercise-programmer';
+import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
 import { getCachedProgramme } from '@/lib/storage/exercise-programmes';
 import { queryGoals } from '@/lib/storage/goals';
 import { resolveEvidenceForGoals } from '@/lib/goal-evidence';
 import { computeProgress } from '@/lib/goal-progress';
 import { describeMilestone } from '@/lib/goal-plan';
-import type { ExerciseSession, Goal, GoalProgress } from '@/types/life';
+import type { ExerciseSession, Goal, GoalProgress, WeeklyRoutineDay } from '@/types/life';
 
 export interface ResolvedSessionTargets {
   // Today's planned session, if one exists — the source of the label and
@@ -75,12 +72,13 @@ export async function resolveSessionTargets(
   // hash, so both routes must resolve them to look up the same cache entry.
   const goals = await buildProgrammerGoals(date);
 
-  const prescription = plan?.prescription;
-  const prescribed = hasPrescribedExercises(prescription);
+  // The routine day for this date, distilled with rotation context. Drives the
+  // AI programme (anchors/staples fixed, accessories rotated) and the hash.
+  const routineDay = await resolveRoutineDay(date, sessions);
 
   const input = buildProgrammerInput(
     progressions,
-    { label: plan?.label, components, ...(prescribed ? { prescription } : {}) },
+    { label: plan?.label, components, ...(routineDay ? { routineDay } : {}) },
     date,
     totalSessions,
     goals
@@ -88,40 +86,94 @@ export async function resolveSessionTargets(
   const hash = programmeHash(input);
   const cached = getCachedProgramme(date, hash);
 
-  // A prescription fixes the exercise list, order and scheme: the deterministic
-  // targets ARE the prescribed exercises, and a cached AI programme only refines
-  // their loads and rationales (never their membership or order).
-  if (prescribed) {
-    const deterministic = buildPrescribedTargets(prescription!, progressions);
-    const targets = cached ? overlayProgramme(deterministic, cached) : deterministic;
-    return { plan, components, targets, source: cached ? 'ai' : 'fallback', input, hash };
-  }
-
   if (cached) {
     return { plan, components, targets: cached.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 
+  // The deterministic fallback for a cache miss is unchanged: history-driven
+  // targets for the plan's components. (Routine anchors/staples with history
+  // already surface here through component selection; ones with no history yet
+  // are not represented in this fallback — only in the AI path, which guarantees
+  // them. Left as-is because building no-history targets here is not cheap.)
   const targets = buildSessionTargets(progressions, components);
   return { plan, components, targets, source: 'fallback', input, hash };
 }
 
-// Lay a cached AI programme over the deterministic prescribed targets: for each
-// prescribed exercise (order and scheme fixed), take the model's chosen load and
-// rationale when it programmed that exercise, else keep the deterministic one.
-// AI rows naming anything not prescribed are ignored, and any prescribed
-// exercise the model skipped keeps its deterministic target — so the list is
-// always exactly the prescription.
-function overlayProgramme(prescribed: ExerciseTarget[], rows: ProgrammeRow[]): ExerciseTarget[] {
-  const byKey = new Map(rows.map(r => [r.key, r]));
-  return prescribed.map(target => {
-    const row = byKey.get(target.key);
-    if (!row) return target;
-    return {
-      ...target,
-      ...(row.target.weightKg !== undefined ? { weightKg: row.target.weightKg } : {}),
-      ...(row.rationale ? { rationale: row.rationale } : {}),
-    };
-  });
+// The distilled routine day for a date: the weekly-routine entry for that
+// weekday, its anchors/staples, plus the accessories logged in the most recent
+// session(s) of the same routine day as rotation context. Best-effort: a failure
+// loading the routine must never stop the session's targets, so it degrades to
+// no routine day (the programme then behaves as an ad-hoc plan).
+async function resolveRoutineDay(
+  date: string,
+  sessions: ExerciseSession[]
+): Promise<ProgrammerRoutineDay | undefined> {
+  try {
+    const routine = await getWeeklyRoutine();
+    const dayOfWeek = new Date(`${date}T12:00:00`).getDay();
+    const day = routine.find(d => d.dayOfWeek === dayOfWeek);
+    return day ? distillRoutineDay(day, sessions, date) : undefined;
+  } catch (error) {
+    console.error('Failed to load the weekly routine for the programmer:', error);
+    return undefined;
+  }
+}
+
+function distillRoutineDay(
+  day: WeeklyRoutineDay,
+  sessions: ExerciseSession[],
+  date: string
+): ProgrammerRoutineDay {
+  const anchors = day.anchors ?? [];
+  const staples = day.staples ?? [];
+  const fixedKeys = new Set([...anchors, ...staples].map(exerciseKey));
+  const recentAccessories = day.rest
+    ? []
+    : recentAccessoriesForDay(day, sessions, date, fixedKeys);
+  return {
+    title: day.title,
+    ...(day.note ? { note: day.note } : {}),
+    anchors,
+    staples,
+    ...(day.rest ? { rest: true } : {}),
+    ...(recentAccessories.length ? { recentAccessories } : {}),
+  };
+}
+
+// The accessories (exercises that are neither anchors nor staples) logged in the
+// most recent one or two completed sessions of this same routine day, matched by
+// weekday or by the routine title appearing in the session label. Normalised and
+// de-duplicated, most-recent first.
+function recentAccessoriesForDay(
+  day: WeeklyRoutineDay,
+  sessions: ExerciseSession[],
+  date: string,
+  fixedKeys: Set<string>
+): string[] {
+  const title = day.title.trim().toLowerCase();
+  const matching = sessions
+    .filter(
+      s =>
+        s.completed &&
+        s.exercises?.length &&
+        s.date < date &&
+        (new Date(`${s.date}T12:00:00`).getDay() === day.dayOfWeek ||
+          (!!title && !!s.label && s.label.toLowerCase().includes(title)))
+    )
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 2);
+
+  const accessories: string[] = [];
+  const seen = new Set<string>();
+  for (const session of matching) {
+    for (const entry of session.exercises ?? []) {
+      const key = exerciseKey(entry.name);
+      if (!key || fixedKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      accessories.push(normalizeExerciseName(entry.name));
+    }
+  }
+  return accessories;
 }
 
 // The active Exercise-section goals, each resolved to its current pace and next

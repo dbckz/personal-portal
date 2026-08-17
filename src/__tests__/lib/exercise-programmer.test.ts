@@ -15,9 +15,9 @@ import {
   validateProgramme,
   type ProgrammerInput,
 } from '@/lib/exercise-programmer';
+import type { ProgrammerRoutineDay } from '@/lib/exercise-programmer';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from '@/lib/exercise-progression';
 import { getCachedProgramme, saveCachedProgramme } from '@/lib/storage/exercise-programmes';
-import { parsePrescription } from '@/lib/exercise-prescription';
 import { __resetDbForTests } from '@/lib/storage/db';
 
 function progression(
@@ -256,58 +256,93 @@ describe('active goals in the programme', () => {
   });
 });
 
-describe('a prescription constrains the programmer', () => {
-  const { sections } = parsePrescription(
-    'Anchors:\n- Converging chest press machine: 3 x 8–12\n- Cable shrugs: 2 x 15'
-  );
+describe('the weekly routine drives the programmer', () => {
+  // A push day: one anchor already in history, one anchor never logged, and a
+  // component that selects the vocabulary the model rotates accessories from.
+  function pushRoutine(over: Partial<ProgrammerRoutineDay> = {}): ProgrammerRoutineDay {
+    return {
+      title: 'Push (chest & arms)',
+      note: 'Push A.',
+      anchors: ['Converging chest press machine', 'Incline dumbbell press'],
+      staples: [],
+      ...over,
+    };
+  }
 
-  it('feeds the model exactly the prescribed exercises, in order, history or not', () => {
-    const built = buildProgrammerInput(
+  function routineInput(day: ProgrammerRoutineDay): ProgrammerInput {
+    return buildProgrammerInput(
       pushProgressions(),
-      { label: 'Pull', components: ['Pull'], prescription: sections },
+      { label: 'Push', components: ['Push (chest & arms)'], routineDay: day },
       '2026-08-06',
       6
     );
-    // Only the two prescribed exercises — the treadmill run and tricep pushdown
-    // from history are NOT offered.
-    expect(built.exercises.map(e => e.name)).toEqual(['Converging chest press machine', 'Cable shrugs']);
-    // The prescribed lift with no history is still included so the model loads it.
-    const shrugs = built.exercises.find(e => e.key === exerciseKey('Cable shrugs'))!;
-    expect(shrugs.frequency).toBe(0);
-    expect(shrugs.lastSummary).toBe('no history');
+  }
+
+  it('includes the fixed anchors and the history vocabulary, anchors with no history stubbed', () => {
+    const built = routineInput(pushRoutine());
+    const names = built.exercises.map(e => e.name);
+    // The history vocabulary (the press, from selection) plus the never-logged
+    // anchor, appended as a frequency-0 stub.
+    expect(names).toContain('Converging chest press machine');
+    expect(names).toContain('Incline dumbbell press');
+    const stub = built.exercises.find(e => e.key === exerciseKey('Incline dumbbell press'))!;
+    expect(stub.frequency).toBe(0);
+    expect(stub.lastSummary).toBe('no history');
   });
 
-  it('writes a loads-only prompt that fixes the list, order and scheme', () => {
-    const built = buildProgrammerInput(
-      pushProgressions(),
-      { label: 'Pull', components: ['Pull'], prescription: sections },
-      '2026-08-06',
-      6
-    );
-    const prompt = buildProgrammerPrompt(built);
-    expect(prompt).toMatch(/ALREADY FIXED/);
-    expect(prompt).toMatch(/Do NOT add, remove, reorder or substitute/i);
-    expect(prompt).toContain('prescribed 3 x 8–12');
-    expect(prompt).toContain('Anchors:');
+  it('includes staples as fixed exercises', () => {
+    const built = routineInput(pushRoutine({ staples: ['Dead bug'] }));
+    expect(built.exercises.map(e => e.key)).toContain(exerciseKey('Dead bug'));
   });
 
-  it('folds the prescription into the hash so an edited plan regenerates', () => {
-    const base = buildProgrammerInput(
-      pushProgressions(),
-      { label: 'Pull', components: ['Pull'], prescription: sections },
+  it('generates nothing on a rest day', () => {
+    const built = routineInput(pushRoutine({ rest: true, anchors: [], staples: [] }));
+    expect(built.exercises).toEqual([]);
+  });
+
+  it('folds the routine day into the hash so an edited routine regenerates', () => {
+    const base = programmeHash(routineInput(pushRoutine()));
+    const edited = programmeHash(routineInput(pushRoutine({ anchors: ['Converging chest press machine'] })));
+    expect(edited).not.toBe(base);
+    // A changed note is an edit too.
+    const noteEdit = programmeHash(routineInput(pushRoutine({ note: 'Push A — heavier.' })));
+    expect(noteEdit).not.toBe(base);
+  });
+
+  it('marks anchors and staples REQUIRED in the prompt and carries rotation context', () => {
+    const prompt = buildProgrammerPrompt(
+      routineInput(pushRoutine({ recentAccessories: ['Cable tricep pushdown', 'Lateral raise'] }))
+    );
+    expect(prompt).toMatch(/REQUIRED anchors/);
+    expect(prompt).toContain('Converging chest press machine, Incline dumbbell press');
+    expect(prompt).toMatch(/3–5 accessories/);
+    expect(prompt).toMatch(/most recent session\(s\) of this day: Cable tricep pushdown, Lateral raise/);
+    expect(prompt).toMatch(/vary the accessories week to week/i);
+  });
+
+  it('guarantees anchors and staples the model dropped, appended with a fallback target', () => {
+    const day = pushRoutine({ anchors: ['Converging chest press machine'], staples: ['Dead bug'] });
+    const withStaple = buildProgrammerInput(
+      [
+        ...pushProgressions(),
+        progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
+      ],
+      { label: 'Push', components: ['Push (chest & arms)'], routineDay: day },
       '2026-08-06',
       6
     );
-    const edited = parsePrescription(
-      'Anchors:\n- Converging chest press machine: 3 x 6–10\n- Cable shrugs: 2 x 15'
-    ).sections;
-    const moved = buildProgrammerInput(
-      pushProgressions(),
-      { label: 'Pull', components: ['Pull'], prescription: edited },
-      '2026-08-06',
-      6
+    // The model returns ONLY the tricep pushdown, dropping the anchor and staple.
+    const rows = validateProgramme(
+      [{ name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } }],
+      withStaple
     );
-    expect(programmeHash(moved)).not.toBe(programmeHash(base));
+    const names = rows.map(r => r.name);
+    expect(names).toContain('Converging chest press machine');
+    expect(names).toContain('Dead bug');
+    // The dropped anchor is tagged core and carries a fallback target from history.
+    const anchor = rows.find(r => r.name === 'Converging chest press machine')!;
+    expect(anchor.kind).toBe('core');
+    expect(anchor.target).toEqual({ sets: 3, reps: 8, weightKg: 34 });
   });
 });
 

@@ -5,9 +5,13 @@
  * exercise event on the calendar, without ever creating a session from one. The
  * matching and overwrite rules are pure, so they are exercised directly here.
  */
-import { planTimedEnrichments, type TimedExerciseEvent } from '@/lib/exercise-calendar';
+import {
+  buildPlannedUpsert,
+  planTimedEnrichments,
+  type TimedExerciseEvent,
+} from '@/lib/exercise-calendar';
 import { parseTimedExerciseTitle } from '@/lib/exercise-parse';
-import type { ExerciseSession } from '@/types/life';
+import type { ExerciseSession, ParsedPlannedSession } from '@/types/life';
 
 type Plan = Pick<ExerciseSession, 'id' | 'date' | 'type' | 'durationMinutes' | 'durationSource'>;
 
@@ -35,6 +39,45 @@ describe('parseTimedExerciseTitle', () => {
   it('ignores anything without an exercise emoji prefix', () => {
     expect(parseTimedExerciseTitle('Gym')).toBeNull();
     expect(parseTimedExerciseTitle('Team standup')).toBeNull();
+  });
+});
+
+describe('buildPlannedUpsert — timing-only sync', () => {
+  const parsed: ParsedPlannedSession = {
+    title: 'Push (chest & arms)',
+    components: ['Push (chest & arms)'],
+    type: 'strength',
+  };
+  const event = { id: 'evt1', startDate: '2026-08-10', summary: '🏋️ Push (chest & arms)' };
+
+  it('never parses a prescription from the description', () => {
+    const { input } = buildPlannedUpsert(event, parsed, 'primary', '2026-08-01');
+    expect(input.prescription).toBeUndefined();
+    expect(input.prescriptionNote).toBeUndefined();
+  });
+
+  it('clears an old prescription on a future/today session by passing an empty planDescription', () => {
+    const { input } = buildPlannedUpsert(event, parsed, 'primary', '2026-08-01');
+    // '' (not undefined) makes the upsert reconcile and delete any stored
+    // prescription/prescriptionNote from the future planned session.
+    expect(input.planDescription).toBe('');
+  });
+
+  it('leaves a past session untouched by omitting planDescription', () => {
+    const { input } = buildPlannedUpsert(event, parsed, 'primary', '2026-08-20');
+    // No planDescription → the upsert skips reconciliation, so a past session
+    // keeps its stored prescription as harmless history.
+    expect(input.planDescription).toBeUndefined();
+  });
+
+  it('carries the timing fields the calendar still owns', () => {
+    const { importKey, input } = buildPlannedUpsert(event, parsed, 'primary', '2026-08-01');
+    expect(importKey).toBe('gcal:evt1');
+    expect(input.date).toBe('2026-08-10');
+    expect(input.label).toBe('Push (chest & arms)');
+    expect(input.components).toEqual(['Push (chest & arms)']);
+    expect(input.planned).toBe(true);
+    expect(input.source).toBe('calendar');
   });
 });
 
