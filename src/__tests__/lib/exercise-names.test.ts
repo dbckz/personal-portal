@@ -73,6 +73,13 @@ describe('normalizeExerciseName', () => {
     expect(normalizeExerciseName('Pectoral fly machine')).toBe('Pec fly');
   });
 
+  it('merges the pec deck into the pec fly (same machine, forward-facing)', () => {
+    expect(normalizeExerciseName('Pec deck')).toBe('Pec fly');
+    expect(normalizeExerciseName('pec deck')).toBe('Pec fly');
+    // The reverse movement stays a separate exercise.
+    expect(normalizeExerciseName('Reverse pec deck')).toBe('Reverse pec deck');
+  });
+
   it('merges the rear delt machine into the reverse pec deck', () => {
     expect(normalizeExerciseName('Rear delt machine')).toBe('Reverse pec deck');
     expect(normalizeExerciseName('Reverse pec deck machine')).toBe('Reverse pec deck');

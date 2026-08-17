@@ -49,6 +49,11 @@ export const EXERCISE_NAME_ALIASES: Record<string, string> = {
   'Leg extension machines': 'Leg extension',
   'Seated leg curl machines': 'Seated leg curl',
   'Pectoral fly machine': 'Pec fly',
+  // The pec deck IS the pectoral fly machine (Dave confirmed the merge,
+  // 17 Aug 2026), so prescriptions saying "Pec deck" pick up the Pec fly
+  // history. The forward-facing movement only — "Reverse pec deck" stays its
+  // own exercise.
+  'Pec deck': 'Pec fly',
   'Reverse pec deck machine': 'Reverse pec deck',
   // A rear delt machine is the same reverse-pec-deck movement (run backwards),
   // so it merges into that one history rather than being logged separately.
