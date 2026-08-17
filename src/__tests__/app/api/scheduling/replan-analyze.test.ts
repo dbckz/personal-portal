@@ -90,6 +90,8 @@ function setContext(
     candidateTasks?: any[];
     existingScheduledCounts?: Record<string, number>;
     config?: WorkflowConfig;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    quotas?: any[];
   } = {}
 ) {
   mockGather.mockResolvedValue({
@@ -106,7 +108,7 @@ function setContext(
     asanaNameByGid: over.asanaNameByGid ?? new Map(),
     candidateTasks: over.candidateTasks ?? [],
     existingScheduledCounts: over.existingScheduledCounts ?? {},
-    quotas: [],
+    quotas: over.quotas ?? [],
     config: over.config ?? CONFIG,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
@@ -729,5 +731,45 @@ describe('replan analyze — task backfill wiring', () => {
 
     const full = await analyzeFull();
     expect(full.backfill).toEqual([]);
+  });
+
+  // The quota-less General Todos catch-all is never auto-placed: its candidates are
+  // returned as `todoCandidates` and the leftover space as `freeSlots`, for the
+  // user to fill by hand.
+  it('does not auto-place General Todos — returns todoCandidates + freeSlots instead', async () => {
+    const TODO_CONFIG: WorkflowConfig = {
+      taskQuotas: {
+        Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-11:00'] },
+        'General Todos': { targetLength: '30min', preferredTimes: [] }, // no weeklyCount
+      },
+      typeMapping: { Deep: ['deep'], 'General Todos': ['todo'] },
+      scheduling: {
+        bufferBetweenTasks: '0min',
+        workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        workingHours: { start: '09:00', end: '17:00' },
+      },
+      lastUpdated: '2026-07-12T00:00:00.000Z',
+    };
+    mockScheduled.mockResolvedValue([]);
+    setContext({
+      config: TODO_CONFIG,
+      quotas: [
+        { category: 'Deep', weeklyCount: 2, targetLength: '1h', types: ['deep'] },
+        { category: 'General Todos', weeklyCount: undefined, targetLength: '30min', types: ['todo'] },
+      ],
+      candidateTasks: [{ gid: 'todo1', title: 'Reply to X', typeSignals: ['todo'] }],
+      existingScheduledCounts: { Deep: 2 }, // Deep met; the rest is free space
+    });
+
+    const full = await analyzeFull();
+    // No auto-placed todo block.
+    expect(full.backfill.some((b: ProposedBlock) => b.category === 'General Todos')).toBe(false);
+    // The todo pool is handed to the user to pick from.
+    expect(full.todoCandidates.map((t: { gid?: string }) => t.gid)).toEqual(['todo1']);
+    expect(full.todoCandidates[0].category).toBe('General Todos');
+    // Free space is reported for him to fill.
+    expect(Array.isArray(full.freeSlots)).toBe(true);
+    expect(full.freeSlots.length).toBeGreaterThanOrEqual(1);
+    expect(full.freeSlots.every((s: { durationMinutes: number }) => s.durationMinutes === 30)).toBe(true);
   });
 });

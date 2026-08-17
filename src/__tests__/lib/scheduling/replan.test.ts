@@ -68,6 +68,7 @@ function run(o: {
   config?: WorkflowConfig;
   existingRitualTitlesByDate?: Record<string, Set<string>>;
   candidateTasks?: CandidateTask[];
+  deepWorkWeekTasks?: CandidateTask[];
   existingScheduledCounts?: Record<string, number>;
   existingCategoryCountsByDate?: Record<string, Record<string, number>>;
 }) {
@@ -79,6 +80,7 @@ function run(o: {
     otherBusy: o.otherBusy ?? [],
     existingRitualTitlesByDate: o.existingRitualTitlesByDate,
     candidateTasks: o.candidateTasks,
+    deepWorkWeekTasks: o.deepWorkWeekTasks,
     existingScheduledCounts: o.existingScheduledCounts,
     existingCategoryCountsByDate: o.existingCategoryCountsByDate,
   });
@@ -819,11 +821,11 @@ describe('planReplan - task backfill', () => {
     expect(first!.task?.gid).toBe('a1');
   });
 
-  // Quota-less General Todos backfill into whatever working-hours space is left
-  // after the quota'd categories have taken their slots — surfaced as individually
-  // tickable blocks in the review so Dave still chooses per one.
-  it('backfills quota-less General Todos into leftover space, after the quota\'d categories', () => {
-    const { backfill } = run({
+  // Quota-less General Todos are NEVER auto-placed: the planner must not pick which
+  // todos to do. Instead the leftover working-hours space is returned as freeSlots
+  // for the user to fill by hand, and no Todos block appears in backfill.
+  it('never auto-places quota-less General Todos — returns free slots instead', () => {
+    const { backfill, freeSlots } = run({
       blocks: [],
       config: makeConfig({
         quotas: {
@@ -835,12 +837,19 @@ describe('planReplan - task backfill', () => {
         cand({ gid: 't1', signal: 'todo' }),
         cand({ gid: 't2', signal: 'todo' }),
       ],
-      existingScheduledCounts: { Deep: 2 }, // Deep met; leftover space fills with todos
+      existingScheduledCounts: { Deep: 2 }, // Deep met; the rest is free space
       now: WED_8AM,
     });
-    const todos = backfill.filter(b => b.category === 'Todos');
-    expect(todos.length).toBeGreaterThanOrEqual(1);
-    expect(todos.map(b => b.task?.gid).sort()).toEqual(['t1', 't2']);
+    expect(backfill.some(b => b.category === 'Todos')).toBe(false);
+    // Free space is reported at the catch-all category's 30-min granularity.
+    expect(freeSlots.length).toBeGreaterThanOrEqual(1);
+    expect(freeSlots.every(s => s.durationMinutes === 30)).toBe(true);
+    // Every free slot is at/after now and never in the past.
+    for (const s of freeSlots) {
+      const [y, mo, d] = s.date.split('-').map(Number);
+      const [h, m] = s.start.split(':').map(Number);
+      expect(new Date(y, mo - 1, d, h, m).getTime()).toBeGreaterThanOrEqual(WED_8AM.getTime());
+    }
   });
 
   // Deep work leads every remaining working morning: a mid-week replan proposes a
@@ -938,5 +947,88 @@ describe('planReplan - task backfill', () => {
       const [h, m] = b.start.split(':').map(Number);
       expect(new Date(y, mo - 1, d, h, m).getTime()).toBeGreaterThanOrEqual(NOW.getTime());
     }
+  });
+});
+
+describe('planReplan - deep-work rotation (backfill)', () => {
+  // A daily deep-work category: one block per remaining working morning.
+  function dailyDeepConfig(): WorkflowConfig {
+    const config = makeConfig({
+      quotas: {
+        'Writing/Deep Work': {
+          weeklyCount: 3,
+          targetLength: '1h',
+          daily: true,
+          preferredTimes: ['09:00-11:00'],
+        },
+      },
+      scheduling: {
+        workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        workingHours: { start: '09:00', end: '17:00' },
+      },
+    });
+    config.typeMapping = { 'Writing/Deep Work': ['deep'] };
+    return config;
+  }
+
+  // Remaining mornings (Wed/Thu/Fri) rotate ONLY the week's already-selected
+  // deep-work tasks — never a task from the general candidate pool.
+  it('rotates only the week-selected deep-work tasks, never a pool candidate', () => {
+    const { backfill } = run({
+      blocks: [],
+      config: dailyDeepConfig(),
+      candidateTasks: [cand({ gid: 'pool', signal: 'deep', title: 'Pool task' })],
+      deepWorkWeekTasks: [
+        cand({ gid: 't1', signal: 'deep', title: 'T1' }),
+        cand({ gid: 't2', signal: 'deep', title: 'T2' }),
+      ],
+      existingScheduledCounts: {},
+      now: WED_8AM, // remaining working days: Wed, Thu, Fri
+    });
+    const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
+    expect(deep.map(b => b.date)).toEqual(['2026-07-15', '2026-07-16', '2026-07-17']);
+    // Rotation cycles t1, t2, t1 across the three mornings.
+    expect(deep.map(b => b.task?.gid)).toEqual(['t1', 't2', 't1']);
+    // The general-pool deep-work task never enters the schedule.
+    expect(backfill.some(b => b.task?.gid === 'pool')).toBe(false);
+  });
+
+  // An empty rotation (all the week's deep-work tasks are done, or none were
+  // selected) yields RESERVED deep-work blocks — never a new pool task.
+  it('reserves the mornings when the rotation is empty', () => {
+    const { backfill } = run({
+      blocks: [],
+      config: dailyDeepConfig(),
+      candidateTasks: [cand({ gid: 'pool', signal: 'deep', title: 'Pool task' })],
+      deepWorkWeekTasks: [],
+      existingScheduledCounts: {},
+      now: WED_8AM,
+    });
+    const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(3);
+    expect(deep.every(b => !b.task)).toBe(true); // reserved, task-less
+    expect(backfill.some(b => b.task?.gid === 'pool')).toBe(false);
+  });
+
+  // The rotation continues from where the week already is: two mornings already
+  // hold deep-work blocks, so the seed offsets which task leads the next one.
+  it('continues the rotation past the week\'s existing deep-work blocks', () => {
+    const { backfill } = run({
+      blocks: [],
+      config: dailyDeepConfig(),
+      candidateTasks: [cand({ gid: 'pool', signal: 'deep', title: 'Pool task' })],
+      deepWorkWeekTasks: [
+        cand({ gid: 't1', signal: 'deep', title: 'T1' }),
+        cand({ gid: 't2', signal: 'deep', title: 'T2' }),
+        cand({ gid: 't3', signal: 'deep', title: 'T3' }),
+      ],
+      // Mon + Tue already had deep-work blocks (t1, t2) — count them so the
+      // rotation resumes at t3 on Wednesday.
+      existingScheduledCounts: { 'Writing/Deep Work': 2 },
+      now: WED_8AM,
+    });
+    const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
+    // Seed 2 → Wed t3, Thu t1, Fri t2.
+    expect(deep.map(b => b.task?.gid)).toEqual(['t3', 't1', 't2']);
   });
 });

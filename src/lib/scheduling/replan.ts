@@ -28,7 +28,7 @@
 // non-deep-work categories with no configured preferredTimes (deep work keeps
 // mornings). Blocks that fit nowhere are returned as `unplaceable`.
 
-import { classifyBlockCategoryWithCatchAll, type CapacityQuota } from '@/lib/capacity';
+import { classifyBlockCategoryWithCatchAll, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 import {
@@ -47,6 +47,7 @@ import {
   type BusyMs,
   type Window,
   type WorkingDay,
+  type WorkRun,
 } from './engine';
 import {
   newBookiesPlacementIsValid,
@@ -282,6 +283,14 @@ export interface ReplanInput {
   // morning priority included), then any leftover space with quota-less General
   // Todos blocks, exactly like the full plan does. Omit to skip backfill.
   candidateTasks?: CandidateTask[];
+  // The week's already-selected deep-work tasks, taken from this week's EXISTING
+  // deep-work blocks (deduped by task id, done ones dropped). Mid-week the planner
+  // only ADDS deep-work BLOCKS and rotates these across the new mornings — it never
+  // introduces a NEW deep-work task from `candidateTasks`. Empty (all done / none
+  // selected) → new mornings get reserved deep-work blocks. Deep-work-category
+  // tasks are stripped from `candidateTasks` before backfill so none can slip in
+  // through any other path. Omit to keep the pre-rotation behaviour.
+  deepWorkWeekTasks?: CandidateTask[];
   // Per-category count of blocks ALREADY scheduled this week (kept + moved + done +
   // ended). Reduces each category's remaining quota so backfill only proposes the
   // shortfall. Defaults to none (treat every quota as unmet) when omitted.
@@ -375,6 +384,16 @@ export interface ReplanReviewBlock {
   tasks: ReplanReviewTask[];
 }
 
+// A concrete free slot in the remaining week's working hours (after everything
+// else has been placed), at the quota-less catch-all category's block length. The
+// review lists these as "free space remaining" and lets the user TICK General
+// Todos to fill them — the planner never auto-picks which todos to schedule.
+export interface ReplanFreeSlot {
+  date: string; // yyyy-MM-dd
+  start: string; // HH:mm
+  durationMinutes: number;
+}
+
 export interface ReplanResult {
   kept: ReplanKept[];
   moves: ReplanMove[];
@@ -387,7 +406,14 @@ export interface ReplanResult {
   // category's remaining weekly-quota shortfall (the freed slots from removed
   // rituals naturally count as free). Empty when no candidateTasks were supplied or
   // nothing fit. Task/reserved/grouped blocks only — never overflow (evening) ones.
+  // The quota-less catch-all (General Todos) is NOT auto-filled here: its free time
+  // is reported as `freeSlots` for the user to fill by hand instead.
   backfill: ProposedBlock[];
+  // Free working-hours slots left after everything else is placed, at the catch-all
+  // category's block length — the "free space remaining" the user fills by ticking
+  // General Todos himself. Empty when no catch-all category is configured, no
+  // candidateTasks were supplied, or no free time is left. Capped at FREE_SLOTS_CAP.
+  freeSlots: ReplanFreeSlot[];
   // Break blocks that now conflict with a meeting → delete (no fixed home).
   deletions: ReplanDeletion[];
   // Future ritual blocks to remove: retired-ritual blocks and mis-placed
@@ -723,23 +749,27 @@ export function planReplan(input: ReplanInput): ReplanResult {
     placementBusy = [...placementBusy, ...dailyAdditions.map(proposedBlockToBusyInterval)];
   }
 
-  // 2. Task backfill: fill each category's remaining weekly-quota shortfall into
-  // the free time that's left, with the same quota-driven, deep-work-morning-first
-  // placement the full plan uses. `existingScheduledCounts` (kept + moved + done +
-  // ended blocks) reduces the shortfall so a met quota adds nothing; candidateTasks
-  // already exclude anything scheduled this week or completed. Evening-overflow
-  // blocks are dropped — backfill only fills working-hours free time.
+  // 2. Task backfill: fill each QUOTA'D category's remaining weekly-quota shortfall
+  // into the free time that's left, with the same quota-driven, deep-work-morning-
+  // first placement the full plan uses. `existingScheduledCounts` (kept + moved +
+  // done + ended blocks) reduces the shortfall so a met quota adds nothing;
+  // candidateTasks already exclude anything scheduled this week or completed.
+  // Evening-overflow blocks are dropped — backfill only fills working-hours time.
   //
-  // Quota-less categories (General Todos) backfill too: after the quota'd
-  // categories have taken their slots, any working-hours free time left is filled
-  // with additional General Todos blocks (proposeBlocks orders quota-less
-  // categories LAST, so filler never steals a morning from deep work etc., and
-  // places one block per selected todo, stopping when the free time runs out).
-  // They surface as individually tickable checkboxes in the replan review, so
-  // Dave still gets to add or drop each one. maxTasksPerDay is NOT enforced by
-  // proposeBlocks (only the spread heuristic fans blocks across days), so a very
-  // large todo pool can pile several onto one day.
+  // Two categories are deliberately EXCLUDED from the auto-backfill candidate pool:
+  //  * Deep work — its tasks are already chosen (they back the week's existing
+  //    deep-work blocks); the daily deep-work placement inside proposeBlocks only
+  //    ADDS blocks and ROTATES `deepWorkTasksOverride`, never a new pool task.
+  //  * The quota-less catch-all (General Todos) — the planner must NOT pick which
+  //    todos to do. Its free time is reported as `freeSlots` for the user to fill
+  //    by ticking todos himself (see below), so it never gets auto-placed blocks.
   let backfill: ProposedBlock[] = [];
+  let freeSlots: ReplanFreeSlot[] = [];
+  // The catch-all category's block length, set when backfill runs and a catch-all
+  // category exists — the granularity of the free-slot listing computed at the very
+  // end (after the weekly work rituals have also taken their slots). Null → no
+  // free-space listing (no catch-all category, or backfill was skipped).
+  let freeSlotMinutes: number | null = null;
   const backfillQuotas: CapacityQuota[] = Object.entries(config.taskQuotas ?? {}).map(
     ([category, quota]) => ({
       category,
@@ -748,14 +778,29 @@ export function planReplan(input: ReplanInput): ReplanResult {
       types: config.typeMapping?.[category] ?? [],
     })
   );
-  const backfillCandidates = (input.candidateTasks ?? []).filter(
-    t => classifyBlockCategoryWithCatchAll(t.typeSignals, backfillQuotas) !== null
+  // Quota-less catch-all categories (e.g. General Todos): no weeklyCount and no
+  // daily/scaleToTasks override. Their block length drives the free-slot listing.
+  const catchAllCategories = new Set(
+    Object.entries(config.taskQuotas ?? {})
+      .filter(([, q]) => !q.daily && !q.scaleToTasks && (q.weeklyCount ?? 0) <= 0)
+      .map(([category]) => category)
   );
-  if (backfillCandidates.length > 0) {
+  // Backfill runs whenever candidateTasks were supplied (omitting them skips the
+  // whole backfill step, as before). Deep-work and catch-all tasks are stripped
+  // from the pool; deep work rides `deepWorkTasksOverride`, the catch-all rides
+  // `freeSlots`.
+  if ((input.candidateTasks ?? []).length > 0) {
+    const backfillCandidates = (input.candidateTasks ?? []).filter(t => {
+      const cat = classifyBlockCategoryWithCatchAll(t.typeSignals, backfillQuotas);
+      return cat !== null && !isDeepWork(cat) && !catchAllCategories.has(cat);
+    });
     backfill = proposeBlocks({
       config,
       busyIntervals: placementBusy,
       candidateTasks: backfillCandidates,
+      // Rotate ONLY the week's already-selected deep-work tasks across the new
+      // mornings; an empty override yields reserved deep-work blocks.
+      deepWorkTasksOverride: input.deepWorkWeekTasks ?? [],
       existingScheduledCounts: input.existingScheduledCounts ?? {},
       existingCategoryCountsByDate: input.existingCategoryCountsByDate,
       weekStart,
@@ -763,6 +808,13 @@ export function planReplan(input: ReplanInput): ReplanResult {
       outOfOfficeDates: input.outOfOfficeDates,
     }).filter(b => !b.overflow);
     placementBusy = [...placementBusy, ...backfill.map(proposedBlockToBusyInterval)];
+
+    // Note the catch-all category's block length so the free-space listing can be
+    // computed once everything else (weekly rituals included) is placed.
+    const catchAllCategory = [...catchAllCategories][0];
+    if (catchAllCategory) {
+      freeSlotMinutes = parseTargetLength(config.taskQuotas[catchAllCategory]?.targetLength) || 30;
+    }
   }
 
   // 3. Weekly work rituals last, so deep-work backfill has already claimed the
@@ -781,7 +833,58 @@ export function planReplan(input: ReplanInput): ReplanResult {
 
   const additions: ProposedBlock[] = [...dailyAdditions, ...weeklyAdditions];
 
-  return { kept, moves, unplaceable, stale, additions, backfill, deletions, removals, overflowConfigured: ofWindows.length > 0 };
+  // Free space remaining: with everything else now placed — kept + moves + ritual
+  // additions (daily AND weekly) + the deep-work / quota'd backfill — list the
+  // working-hours slots still free, at the catch-all category's block length, for
+  // the user to fill with General Todos by hand.
+  if (freeSlotMinutes !== null) {
+    const finalBusy: BusyMs[] = [...placementBusy, ...weeklyAdditions.map(proposedBlockToBusyInterval)].map(
+      i => ({ start: i.start.getTime(), end: i.end.getTime(), isBreak: i.isBreak })
+    );
+    freeSlots = buildFreeSlots(workingDays, finalBusy, workRun, nowMs, freeSlotMinutes, FREE_SLOTS_CAP);
+  }
+
+  return { kept, moves, unplaceable, stale, additions, backfill, freeSlots, deletions, removals, overflowConfigured: ofWindows.length > 0 };
+}
+
+// The most free slots to list in "free space remaining" — enough to fill a light
+// week without turning the section into noise.
+const FREE_SLOTS_CAP = 12;
+
+// List the working-hours slots still free after everything else is placed, each
+// `slotMinutes` long, earliest first, up to `cap`. Slots are found greedily
+// against the final busy set with the run-length cap dropped (overlap is the only
+// bar — matching the relaxed fallback real placement would use to fill a gap), so
+// the listing reflects the genuinely usable free space. Each found slot is added
+// to the local busy set so successive slots never overlap.
+function buildFreeSlots(
+  workingDays: WorkingDay[],
+  busy: BusyMs[],
+  workRun: WorkRun,
+  nowMs: number,
+  slotMinutes: number,
+  cap: number
+): ReplanFreeSlot[] {
+  const relaxed: WorkRun = { maxMinutes: Infinity, bufferMinutes: workRun.bufferMinutes };
+  const windows: Window[] = workingDays
+    .map(day => ({
+      date: day.date,
+      dateStr: day.dateStr,
+      startMs: day.whStartMs,
+      endMs: day.whEndMs,
+      preferred: false,
+      bestTimeMatch: false,
+    }))
+    .sort((a, b) => a.startMs - b.startMs);
+  const localBusy: BusyMs[] = [...busy];
+  const slots: ReplanFreeSlot[] = [];
+  while (slots.length < cap) {
+    const slot = findSlot(windows, slotMinutes, relaxed, localBusy, nowMs);
+    if (!slot) break;
+    slots.push({ date: slot.dateStr, start: timeStr(slot.startMs), durationMinutes: slotMinutes });
+    localBusy.push({ start: slot.startMs, end: slot.endMs });
+  }
+  return slots;
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers

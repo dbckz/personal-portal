@@ -129,4 +129,12 @@ export interface ProposeBlocksInput {
   // working days entirely (no blocks, rituals or spread) and shrink weekly quotas
   // proportionally. Derived from the calendar in gather; absent → none.
   outOfOfficeDates?: Set<string>;
+  // REPLAN ONLY: the exact deep-work tasks to rotate across the daily deep-work
+  // mornings, overriding the tasks bucketed from `candidateTasks`. Mid-week the
+  // week's deep-work tasks are already chosen (they back the existing deep-work
+  // blocks), so the replan only adds BLOCKS and rotates these — it never draws a
+  // NEW deep-work task from the general pool. An empty array means "no task to
+  // rotate" → the mornings get reserved deep-work blocks. Absent in the wizard
+  // path, which keeps rotating its selected deep-work candidates as before.
+  deepWorkTasksOverride?: CandidateTask[];
 }

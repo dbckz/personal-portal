@@ -91,3 +91,59 @@ describe('useReplanActions — drop payload assembly', () => {
     expect(args[7]).toEqual([{ taskIds: ['g1'], googleEventId: 'evt-x' }]);
   });
 });
+
+// Free space remaining: nothing is scheduled until the user ticks a todo. Ticked
+// todos fill the free slots (earliest first) and ride the backfill confirm path.
+const FREE_SPACE_DATA: ReplanAnalyzeResponse = {
+  weekStart: '2026-07-20',
+  weekEnd: '2026-07-26',
+  kept: [],
+  moves: [],
+  stale: [],
+  additions: [],
+  deletions: [],
+  unplaceable: [],
+  backfill: [],
+  freeSlots: [
+    { date: '2026-07-22', start: '09:00', durationMinutes: 30 },
+    { date: '2026-07-22', start: '09:30', durationMinutes: 30 },
+  ],
+  todoCandidates: [
+    { gid: 'todo1', title: 'Reply to X', category: 'General Todos' },
+    { gid: 'todo2', title: 'File the form', category: 'General Todos' },
+  ],
+};
+
+describe('useReplanActions — free-space todo selection', () => {
+  it('schedules nothing until a todo is ticked', () => {
+    const { result } = renderHook(() => useReplanActions(FREE_SPACE_DATA));
+    expect(result.current.actionCount).toBe(0);
+  });
+
+  it('assigns a ticked todo to the earliest free slot via the backfill payload', async () => {
+    const { result } = renderHook(() => useReplanActions(FREE_SPACE_DATA));
+
+    act(() => {
+      result.current.toggleTodo('todo1');
+    });
+    expect(result.current.actionCount).toBe(1);
+
+    await act(async () => {
+      await result.current.confirm();
+    });
+
+    // Backfill is the last positional argument (17th, index 16).
+    const args = confirmReplan.mock.calls[0];
+    expect(args[16]).toEqual([
+      {
+        id: 'todo-2026-07-22-09:00-todo1',
+        category: 'General Todos',
+        task: { gid: 'todo1', adhocId: undefined, title: 'Reply to X', integrationId: undefined },
+        date: '2026-07-22',
+        start: '09:00',
+        durationMinutes: 30,
+        reason: 'General Todos block — selected to fill free space.',
+      },
+    ]);
+  });
+});

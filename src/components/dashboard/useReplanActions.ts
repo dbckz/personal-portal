@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult, type ReplanAdditionResult, type ReplanBackfillResult } from '@/lib/api';
+import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult, type ReplanAdditionResult, type ReplanBackfillResult, type ReplanTodoCandidate } from '@/lib/api';
+import type { ProposedBlock } from '@/lib/scheduling/types';
 
 // Per-missed-row action: reschedule to the proposed slot, or mark done.
 export type MoveMode = 'reschedule' | 'done';
@@ -29,6 +30,10 @@ export type CarryMode = 'carry' | 'backlog' | 'done' | 'mustDo' | 'delegate';
 export const carryTaskKey = (googleEventId: string, taskId: string) =>
   `${googleEventId}::${taskId}`;
 
+// Stable id for a General-Todos candidate (Asana gid or ad-hoc id).
+export const todoCandidateKey = (t: Pick<ReplanTodoCandidate, 'gid' | 'adhocId'>) =>
+  t.gid ?? t.adhocId ?? '';
+
 // Shared state + confirm logic for the replan "plan view" (moves / stale /
 // additions / deletions / unplaceable / kept). Extracted from ReplanWeekModal so
 // the daily-review flow can reuse the exact same review + confirm behaviour.
@@ -46,6 +51,9 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
   const [backfillIncluded, setBackfillIncluded] = useState<Set<string>>(new Set());
   const [backfillResults, setBackfillResults] = useState<Record<string, ReplanBackfillResult>>({});
+  // General Todos the user TICKED to fill the free slots. Default empty — his
+  // explicit selection is the whole point; the planner never auto-picks todos.
+  const [selectedTodoIds, setSelectedTodoIds] = useState<Set<string>>(new Set());
   const [deletionIncluded, setDeletionIncluded] = useState<Set<string>>(new Set());
   // Retired-ritual / mis-placed-new-bookies blocks to remove. Handled server-side
   // exactly like deletions (delete the event + ritual record), so they ride the
@@ -86,6 +94,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setAdditionResults({});
     setBackfillIncluded(new Set((data.backfill ?? []).map(b => b.id)));
     setBackfillResults({});
+    setSelectedTodoIds(new Set()); // nothing ticked by default — the user chooses
     setDeletionIncluded(new Set((data.deletions ?? []).map(d => d.googleEventId)));
     setRemovalIncluded(new Set((data.removals ?? []).map(r => r.googleEventId)));
     setShowUnchanged(false);
@@ -108,6 +117,28 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   );
   const additions = useMemo(() => data?.additions ?? [], [data]);
   const backfill = useMemo(() => data?.backfill ?? [], [data]);
+  const freeSlots = useMemo(() => data?.freeSlots ?? [], [data]);
+  const todoCandidates = useMemo(() => data?.todoCandidates ?? [], [data]);
+
+  // Assign the ticked todos to the free slots, earliest slot first, in the order
+  // the candidates are listed. More ticks than slots → the surplus stay unassigned
+  // (nothing is scheduled for them); fewer → the spare slots stay free. Each pair
+  // becomes a task block the confirm creates via the normal backfill path.
+  const todoBackfillBlocks = useMemo<ProposedBlock[]>(() => {
+    const picked = todoCandidates.filter(t => selectedTodoIds.has(todoCandidateKey(t)));
+    return picked.slice(0, freeSlots.length).map((t, i) => {
+      const slot = freeSlots[i];
+      return {
+        id: `todo-${slot.date}-${slot.start}-${todoCandidateKey(t)}`,
+        category: t.category,
+        task: { gid: t.gid, adhocId: t.adhocId, title: t.title, integrationId: t.integrationId },
+        date: slot.date,
+        start: slot.start,
+        durationMinutes: slot.durationMinutes,
+        reason: `${t.category} block — selected to fill free space.`,
+      };
+    });
+  }, [todoCandidates, selectedTodoIds, freeSlots]);
   const deletions = useMemo(() => data?.deletions ?? [], [data]);
   const removals = useMemo(() => data?.removals ?? [], [data]);
 
@@ -255,7 +286,9 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
-    const backfillBlocks = backfill.filter(b => backfillIncluded.has(b.id));
+    // Auto-backfill blocks the user kept, plus the todo blocks he assigned to the
+    // free slots — both ride the same task-block confirm path.
+    const backfillBlocks = [...backfill.filter(b => backfillIncluded.has(b.id)), ...todoBackfillBlocks];
     // Removals are applied via the same server path as deletions (delete the event
     // + its ritual record), so they are folded into the deletion payload.
     const deletionBlocks = [
@@ -263,7 +296,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       ...removals.filter(r => removalIncluded.has(r.googleEventId)),
     ].map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
     return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, deletions, deletionIncluded, removals, removalIncluded]);
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -298,6 +331,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
 
   const toggleBackfill = useCallback((id: string) =>
     setBackfillIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    }), []);
+
+  const toggleTodo = useCallback((id: string) =>
+    setSelectedTodoIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -405,6 +446,13 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     backfill,
     backfillIncluded,
     backfillResults,
+    // Free space remaining: the slots, the todo pool, the user's ticks, and the
+    // resulting slot assignments (for status + display).
+    freeSlots,
+    todoCandidates,
+    selectedTodoIds,
+    toggleTodo,
+    todoBackfillBlocks,
     deletionIncluded,
     removalIncluded,
     showUnchanged,

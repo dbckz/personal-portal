@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { format } from 'date-fns';
 
-import { classifyBlockCategory } from '@/lib/capacity';
+import { classifyBlockCategory, classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
+import { isDeepWork } from '@/lib/scheduling/engine';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import { mergeCarryBlocks, planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
 import { isEndOfWeekReview, countMissedWorkingDays } from '@/lib/scheduling/end-of-week';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
-import type { BusyInterval } from '@/lib/scheduling/types';
+import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
 import {
   getScheduledAsanaTasks,
   getAdHocTasks,
@@ -481,6 +482,54 @@ export async function POST(request: NextRequest) {
     // Busy intervals from everything that is NOT an app block (real meetings).
     const otherBusy = eventsToBusyIntervals(ctx.weekEvents.filter(e => !appEventIds.has(e.id)));
 
+    // The week's already-selected deep-work tasks: the tasks behind this week's
+    // EXISTING deep-work blocks (grouped Asana containers / ad-hoc), whatever their
+    // state (kept, moved, done or ended). Mid-week the planner only ADDS deep-work
+    // blocks and rotates these across the new mornings — it never introduces a new
+    // deep-work task from the general pool. Deduped by task id (first-seen order);
+    // tasks already complete are dropped so a finished one doesn't reappear on a
+    // later morning.
+    const deepWorkWeekTasks: CandidateTask[] = [];
+    const seenDeepWorkTaskIds = new Set<string>();
+    for (const b of blocks) {
+      if (!isDeepWork(b.category)) continue;
+      for (const t of carryTasksByEvent.get(b.googleEventId) ?? []) {
+        if (t.done) continue; // finished work never rotates back onto a morning
+        const id = t.gid ?? t.adhocId ?? t.id;
+        if (!id || seenDeepWorkTaskIds.has(id)) continue;
+        seenDeepWorkTaskIds.add(id);
+        deepWorkWeekTasks.push({
+          gid: t.gid,
+          adhocId: t.adhocId,
+          title: t.title,
+          integrationId: t.integrationId,
+          // typeSignals are unused on the rotation override (it bypasses the
+          // category classifier), so an empty list is fine.
+          typeSignals: [],
+        });
+      }
+    }
+
+    // The unscheduled General-Todos candidates — the quota-less catch-all pool the
+    // user goes and picks from to fill the week's free space. The planner never
+    // auto-picks these; the review lists them with the free slots for manual
+    // selection.
+    const catchAllCategories = new Set(
+      Object.entries(ctx.config.taskQuotas ?? {})
+        .filter(([, q]) => !q.daily && !q.scaleToTasks && (q.weeklyCount ?? 0) <= 0)
+        .map(([category]) => category)
+    );
+    const todoCandidates = (ctx.candidateTasks ?? [])
+      .map(t => ({ t, category: classifyBlockCategoryWithCatchAll(t.typeSignals, ctx.quotas) }))
+      .filter(({ category }) => category !== null && catchAllCategories.has(category))
+      .map(({ t, category }) => ({
+        gid: t.gid,
+        adhocId: t.adhocId,
+        title: t.title,
+        integrationId: t.integrationId,
+        category: category!,
+      }));
+
     const result = planReplan({
       config: ctx.config,
       weekStart: ctx.weekStart,
@@ -497,6 +546,9 @@ export async function POST(request: NextRequest) {
       // week or completed; existingScheduledCounts (kept + moved + done + ended)
       // reduces each quota so a met category adds nothing.
       candidateTasks: ctx.candidateTasks,
+      // The week's already-chosen deep-work tasks to rotate across new mornings —
+      // the backfill never draws a NEW deep-work task from candidateTasks.
+      deepWorkWeekTasks,
       existingScheduledCounts: ctx.existingScheduledCounts,
       existingCategoryCountsByDate: ctx.existingCategoryCountsByDate,
     });
@@ -691,6 +743,9 @@ export async function POST(request: NextRequest) {
       unplaceable,
       tomorrowBlocks,
       reviewBlocks,
+      // The unscheduled General-Todos pool the user picks from to fill `freeSlots`
+      // (from planReplan). freeSlots rides through in `...result`.
+      todoCandidates,
     });
   } catch (error) {
     console.error('Error analyzing mid-week replan:', error);

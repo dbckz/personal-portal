@@ -4,7 +4,7 @@ import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
 import type {
   ReviewAdoptInput,
   ReviewReplacementInput,
@@ -269,6 +269,15 @@ export interface ReplanTomorrowBlock {
   taskIds: string[];
 }
 
+// One unscheduled General-Todos candidate the user can tick to fill a free slot.
+export interface ReplanTodoCandidate {
+  gid?: string;
+  adhocId?: string;
+  title: string;
+  integrationId?: string;
+  category: string;
+}
+
 export interface ReplanAnalyzeResponse {
   weekStart: string;
   weekEnd: string;
@@ -282,6 +291,12 @@ export interface ReplanAnalyzeResponse {
   // freed by removed rituals included) to fill each category's unmet weekly quota.
   // Absent on older responses — treat as [].
   backfill?: ProposedBlock[];
+  // Free working-hours slots left after everything else is placed, for the user to
+  // fill by ticking General Todos himself. Absent on older responses — treat as [].
+  freeSlots?: ReplanFreeSlot[];
+  // The unscheduled General-Todos pool the user picks from to fill `freeSlots`. The
+  // planner never auto-picks these. Absent on older responses — treat as [].
+  todoCandidates?: ReplanTodoCandidate[];
   // Conflicted break blocks to delete (a break has no fixed home to move to).
   deletions: ReplanDeletion[];
   // Future ritual blocks to remove: retired rituals (Side projects / Learning /

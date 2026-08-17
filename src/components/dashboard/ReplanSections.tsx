@@ -1,12 +1,12 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus, Clock } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
 import type { ReplanCarryTask } from '@/lib/scheduling/replan';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
 import type { CarryMode, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
-import { carryTaskKey } from './useReplanActions';
+import { carryTaskKey, todoCandidateKey } from './useReplanActions';
 
 // Shared render of the replan "plan view": moves / stale / missing rituals /
 // break deletions / couldn't-fit / unchanged. State + confirm live in the
@@ -34,6 +34,11 @@ export function ReplanSections({
     backfill,
     backfillIncluded,
     backfillResults,
+    freeSlots,
+    todoCandidates,
+    selectedTodoIds,
+    toggleTodo,
+    todoBackfillBlocks,
     deletionIncluded,
     removalIncluded,
     showUnchanged,
@@ -173,6 +178,12 @@ export function ReplanSections({
       </li>
     );
   };
+
+  // Which free slot each ticked todo landed in (by task id), so a ticked row can
+  // show its assigned slot, and its create status once confirmed.
+  const todoSlotByKey = new Map(
+    todoBackfillBlocks.map(b => [b.task?.gid ?? b.task?.adhocId ?? '', b])
+  );
 
   return (
     <div className="space-y-6">
@@ -363,6 +374,86 @@ export function ReplanSections({
             New task blocks ({backfill.length})
           </h3>
           <ul className="space-y-2">{backfill.map(backfillRow)}</ul>
+        </div>
+      )}
+
+      {/* Free space remaining — pick General Todos to fill it (nothing auto-picked) */}
+      {freeSlots.length > 0 && todoCandidates.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-slate-500" />
+            Free space remaining ({freeSlots.length})
+          </h3>
+          <p className="mb-2 text-xs text-gray-400">
+            {freeSlots.length} free {formatDuration(freeSlots[0].durationMinutes)} slot
+            {freeSlots.length === 1 ? '' : 's'} left. Tick the todos to fill them — nothing&apos;s
+            scheduled unless you choose. Ticks fill the earliest slots first.
+          </p>
+          {/* The free slots themselves, so it's clear where ticks will land. */}
+          <ul className="mb-2 flex flex-wrap gap-1.5">
+            {freeSlots.map((s, i) => (
+              <li
+                key={`${s.date}-${s.start}-${i}`}
+                className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+              >
+                {slotLabel(s.date, s.start)}
+              </li>
+            ))}
+          </ul>
+          <ul className="space-y-2">
+            {todoCandidates.map(t => {
+              const key = todoCandidateKey(t);
+              const isIn = selectedTodoIds.has(key);
+              const assigned = todoSlotByKey.get(key);
+              const result = assigned ? backfillResults[assigned.id] : undefined;
+              const color = categoryColor(t.category);
+              return (
+                <li
+                  key={key}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggleTodo(key)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {t.category}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">{t.title}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {isIn && assigned ? (
+                        <span className="font-medium text-slate-600">{slotLabel(assigned.date, assigned.start)}</span>
+                      ) : isIn ? (
+                        <span className="text-amber-600">No free slot left — won&apos;t be scheduled</span>
+                      ) : (
+                        <span className="text-gray-400">Not scheduled</span>
+                      )}
+                    </div>
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -884,6 +975,8 @@ export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
     (data.stale?.length ?? 0) > 0 ||
     (data.additions?.length ?? 0) > 0 ||
     (data.backfill?.length ?? 0) > 0 ||
+    // Free space to fill by hand (only when there are todos to fill it with).
+    ((data.freeSlots?.length ?? 0) > 0 && (data.todoCandidates?.length ?? 0) > 0) ||
     (data.deletions?.length ?? 0) > 0 ||
     (data.removals?.length ?? 0) > 0
   );

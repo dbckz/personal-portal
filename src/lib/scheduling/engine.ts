@@ -1050,9 +1050,18 @@ export function proposeBlocks(
   const placeDeepWorkDaily = (category: string): void => {
     const categoryDuration = categoryDurationFor(category);
     const preferredWindows = preferredWindowsFor(category);
-    const categoryTasks = tasksByCategory.get(category) ?? [];
+    // REPLAN override: rotate ONLY the week's already-selected deep-work tasks,
+    // never new candidates from the pool. An empty override means the mornings
+    // get reserved deep-work blocks. The wizard passes no override and keeps
+    // rotating its selected deep-work candidates.
+    const overrideTasks = input.deepWorkTasksOverride;
+    const categoryTasks = overrideTasks ?? tasksByCategory.get(category) ?? [];
     const catCount = catCountByCategory.get(category)!;
-    let rotation = 0;
+    // Continue the rotation from where the week already is: seed it with the deep-
+    // work blocks already scheduled this week so a mid-week replan carries on the
+    // sequence rather than restarting it. Only the replan (override) path seeds —
+    // the wizard starts a fresh plan from 0.
+    let rotation = overrideTasks ? input.existingScheduledCounts[category] ?? 0 : 0;
     for (const wd of workingDays) {
       if ((catCount[wd.dateStr] ?? 0) > 0) continue; // this morning already has deep work
       let morningWindows = deepWorkMorningWindows(preferredWindows, [wd]);
