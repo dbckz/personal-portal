@@ -819,6 +819,28 @@ describe('planReplan - task backfill', () => {
     expect(first!.task?.gid).toBe('a1');
   });
 
+  // A category with no weeklyCount (General Todos) has no defined shortfall, so
+  // an automatic mid-week top-up must never schedule its whole pool into every
+  // free gap. Quota-less work is picked by hand in the plan wizard instead.
+  it('never backfills a quota-less category', () => {
+    const { backfill } = run({
+      blocks: [],
+      config: makeConfig({
+        quotas: {
+          Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-11:00'] },
+          Todos: { targetLength: '30min', preferredTimes: [] }, // no weeklyCount
+        },
+      }),
+      candidateTasks: [
+        cand({ gid: 't1', signal: 'todo' }),
+        cand({ gid: 't2', signal: 'todo' }),
+      ],
+      existingScheduledCounts: { Deep: 2 }, // Deep met; only quota-less todos left
+      now: WED_8AM,
+    });
+    expect(backfill).toHaveLength(0);
+  });
+
   it('proposes no backfill for a category whose quota is already met', () => {
     const { backfill } = run({
       blocks: [],

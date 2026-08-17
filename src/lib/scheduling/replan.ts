@@ -28,6 +28,7 @@
 // non-deep-work categories with no configured preferredTimes (deep work keeps
 // mornings). Blocks that fit nowhere are returned as `unplaceable`.
 
+import { classifyBlockCategoryWithCatchAll, type CapacityQuota } from '@/lib/capacity';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 import {
@@ -727,12 +728,30 @@ export function planReplan(input: ReplanInput): ReplanResult {
   // ended blocks) reduces the shortfall so a met quota adds nothing; candidateTasks
   // already exclude anything scheduled this week or completed. Evening-overflow
   // blocks are dropped — backfill only fills working-hours free time.
+  //
+  // Only categories WITH a configured weeklyCount backfill automatically: a
+  // quota-less category (General Todos) has no defined shortfall, and filling
+  // every free gap with the whole todo pool is exactly what an automatic top-up
+  // must not do. Quota-less work is scheduled where Dave picks it himself — the
+  // plan wizard's tasks step.
   let backfill: ProposedBlock[] = [];
-  if (input.candidateTasks && input.candidateTasks.length > 0) {
+  const backfillQuotas: CapacityQuota[] = Object.entries(config.taskQuotas ?? {}).map(
+    ([category, quota]) => ({
+      category,
+      weeklyCount: quota.weeklyCount,
+      targetLength: quota.targetLength,
+      types: config.typeMapping?.[category] ?? [],
+    })
+  );
+  const quotaCandidates = (input.candidateTasks ?? []).filter(t => {
+    const category = classifyBlockCategoryWithCatchAll(t.typeSignals, backfillQuotas);
+    return category !== null && config.taskQuotas?.[category]?.weeklyCount !== undefined;
+  });
+  if (quotaCandidates.length > 0) {
     backfill = proposeBlocks({
       config,
       busyIntervals: placementBusy,
-      candidateTasks: input.candidateTasks,
+      candidateTasks: quotaCandidates,
       existingScheduledCounts: input.existingScheduledCounts ?? {},
       existingCategoryCountsByDate: input.existingCategoryCountsByDate,
       weekStart,
