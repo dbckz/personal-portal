@@ -29,10 +29,25 @@ describe('normalizeExerciseName', () => {
     expect(normalizeExerciseName('kb swing')).toBe('KB swing');
   });
 
-  it('only uppercases db/kb as whole words, not inside other words', () => {
-    // No word "db"/"kb" here, so nothing to change.
-    expect(normalizeExerciseName('Dumbbell press')).toBe('Dumbbell press');
+  it('maps standalone dumbbell/kettlebell tokens to DB/KB', () => {
+    // Dave logs by hand as "DB"; the written prescription spells it out. Both
+    // must land on the same canonical name so history matches.
+    expect(normalizeExerciseName('Flat dumbbell press')).toBe('Flat DB press');
+    expect(normalizeExerciseName('Seated dumbbell shoulder press')).toBe(
+      'Seated DB shoulder press'
+    );
+    expect(normalizeExerciseName('kettlebell swing')).toBe('KB swing');
+  });
+
+  it('only maps db/kb/dumbbell/kettlebell as whole words, not inside other words', () => {
+    // No standalone equipment word here, so nothing to change.
     expect(normalizeExerciseName('Deadbug')).toBe('Deadbug');
+    expect(normalizeExerciseName('Dumbbelly thing')).toBe('Dumbbelly thing');
+  });
+
+  it('folds the one-off "Inclined" spelling onto the incline DB press', () => {
+    expect(normalizeExerciseName('Inclined dumbbell press')).toBe('Incline DB press');
+    expect(normalizeExerciseName('Inclined DB press')).toBe('Incline DB press');
   });
 
   it('applies every alias in the exported map', () => {
@@ -105,6 +120,9 @@ describe('normalizeExerciseName', () => {
       'Pectoral fly machine', 'Plank', 'Pulldown', 'Rear delt machine', 'Reverse lunges',
       'Reverse pec deck machine', 'Run', 'Seated db shoulder press', 'Seated leg curl machines',
       'Side plank', 'Standing calf raise (no step)', 'Treadmill', 'Treadmill run',
+      // The spelled-out equipment forms that now map to DB/KB.
+      'Flat dumbbell press', 'Seated dumbbell shoulder press', 'Incline dumbbell press',
+      'Inclined dumbbell press', 'kettlebell swing',
       // Plus every canonical output, which must be a fixed point.
       ...Object.values(EXERCISE_NAME_ALIASES),
     ];

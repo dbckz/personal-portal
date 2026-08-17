@@ -7,7 +7,8 @@
 //
 // The rule has three mechanical steps and then an explicit alias table:
 //   1. collapse whitespace and capitalise the first letter;
-//   2. uppercase the standalone tokens `db`→`DB` and `kb`→`KB` anywhere;
+//   2. map the standalone equipment tokens to their short form anywhere:
+//      `db`/`dumbbell`→`DB` and `kb`/`kettlebell`→`KB` (any case);
 //   3. apply the ALIAS map for known variants.
 //
 // There is deliberately NO general "strip the equipment word" rule. Equipment
@@ -67,17 +68,22 @@ export const EXERCISE_NAME_ALIASES: Record<string, string> = {
   'Cable rows': 'Cable row',
   'Reverse lunges': 'Reverse lunge',
   'Neutral grip pullups': 'Neutral-grip pull-up',
+
+  // A one-off "Inclined" spelling from the 3 Aug 2026 log — the movement is the
+  // incline DB press. (Key is in post-step-2 form: "dumbbell" is already "DB".)
+  'Inclined DB press': 'Incline DB press',
 };
 
-// Uppercase standalone equipment tokens (db→DB, kb→KB) wherever they appear,
-// leaving every other word untouched.
+// Map standalone equipment tokens to their short form wherever they appear
+// (db/dumbbell→DB, kb/kettlebell→KB, any case), leaving every other word
+// untouched.
 function upperEquipmentTokens(name: string): string {
   return name
     .split(' ')
     .map(token => {
       const lower = token.toLowerCase();
-      if (lower === 'db') return 'DB';
-      if (lower === 'kb') return 'KB';
+      if (lower === 'db' || lower === 'dumbbell') return 'DB';
+      if (lower === 'kb' || lower === 'kettlebell') return 'KB';
       return token;
     })
     .join(' ');

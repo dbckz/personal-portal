@@ -18,10 +18,13 @@
 //   Core (proper session, ~15–20 min):
 //   - Side plank: 3 x 30–45 sec each side
 //
-// The parse is best-effort and NEVER destructive: a line whose scheme can't be
-// read is still kept (as a name-only item), because a dropped exercise is worse
-// than one with no numbers. The whole thing is pure — no I/O — so the sync can
-// run it on every pull and the recommender can reason over its output.
+// The parse is best-effort and NEVER destructive: a BULLET line whose scheme
+// can't be read is still kept (as a name-only item), because a dropped exercise
+// is worse than one with no numbers. A non-bullet free-text line inside a
+// section is NOT an exercise, though — it is prose (an effort note, a reminder)
+// and is folded into the section's note instead. The whole thing is pure — no
+// I/O — so the sync can run it on every pull and the recommender can reason over
+// its output.
 
 // One prescribed exercise. Any of the volume measures may be absent (a line with
 // no readable scheme keeps only its name). Rep and hold targets are RANGES —
@@ -187,12 +190,14 @@ export function parsePrescription(description: string | undefined): ParsedPrescr
       continue;
     }
 
-    // Free text: part of the leading preamble before any section, else a
-    // name-only item kept inside the current section (never dropped).
+    // Free text: part of the leading preamble before any section, else prose
+    // inside the current section (an effort note, a reminder). It is NOT an
+    // exercise — fold it into the section's note (joining onto any existing note
+    // with '; ') rather than inventing a name-only item.
     if (!current) {
       preamble.push(line);
     } else {
-      current.exercises.push({ name: line, ...(current.isAnchor ? { isAnchor: true } : {}) });
+      current.note = current.note ? `${current.note}; ${line}` : line;
     }
   }
 

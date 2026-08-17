@@ -3,8 +3,9 @@
  *
  * Parsing a planned session's prescription out of its calendar description:
  * sections, per-exercise schemes (rep and hold ranges, "each side"),
- * parenthetical notes, anchor detection, and the leading session note. Junk and
- * scheme-less lines must be kept, never dropped.
+ * parenthetical notes, anchor detection, and the leading session note. A
+ * scheme-less BULLET line must be kept (never dropped); a non-bullet free-text
+ * line inside a section is folded into the section note, not made an exercise.
  */
 import {
   hasPrescribedExercises,
@@ -108,9 +109,25 @@ describe('parsePrescription — edge cases', () => {
     });
   });
 
-  it('keeps a scheme-less junk line as a name-only item', () => {
+  it('keeps a scheme-less junk BULLET line as a name-only item', () => {
     const parsed = parsePrescription('Warm-up:\n- Just move around and get loose');
     expect(parsed.sections[0].exercises[0]).toEqual({ name: 'Just move around and get loose' });
+  });
+
+  it('folds a non-bullet free-text trailer into the section note, not an exercise', () => {
+    const parsed = parsePrescription(
+      'Core:\n- Side plank: 3 x 30–45 sec each side\nEffort: 2–3 reps in reserve, building to 1–2.'
+    );
+    const core = parsed.sections[0];
+    expect(core.exercises.map(e => e.name)).toEqual(['Side plank']);
+    expect(core.note).toBe('Effort: 2–3 reps in reserve, building to 1–2.');
+  });
+
+  it('joins a section aside and a trailing free-text line with a semicolon', () => {
+    const parsed = parsePrescription(
+      'Core (proper session):\n- Side plank: 3 x 30\nEffort: keep it strict.'
+    );
+    expect(parsed.sections[0].note).toBe('proper session; Effort: keep it strict.');
   });
 
   it('accepts • and * bullet markers', () => {
