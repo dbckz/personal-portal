@@ -491,6 +491,14 @@ export async function POST(request: NextRequest) {
       // remaining working day missing a ritual gets an addition proposed.
       existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(ctx.weekEvents),
       outOfOfficeDates: ctx.outOfOfficeDates,
+      // Task backfill: fill the remaining week's free time (including the slots
+      // freed by removed rituals) with additional task blocks for each category's
+      // unmet weekly quota. candidateTasks already exclude anything scheduled this
+      // week or completed; existingScheduledCounts (kept + moved + done + ended)
+      // reduces each quota so a met category adds nothing.
+      candidateTasks: ctx.candidateTasks,
+      existingScheduledCounts: ctx.existingScheduledCounts,
+      existingCategoryCountsByDate: ctx.existingCategoryCountsByDate,
     });
 
     // --- Prep additions for early-next-week meetings ------------------------
@@ -528,6 +536,7 @@ export async function POST(request: NextRequest) {
         ...result.kept.map(k => toBusy(k.date, k.start, k.durationMinutes)),
         ...result.moves.map(m => toBusy(m.newDate, m.newStart, m.durationMinutes)),
         ...result.additions.map(a => toBusy(a.date, a.start, a.durationMinutes)),
+        ...result.backfill.map(b => toBusy(b.date, b.start, b.durationMinutes)),
       ];
       prepAdditions = proposePrepBlocks({
         meetings: nextWeekPrepMeetings,

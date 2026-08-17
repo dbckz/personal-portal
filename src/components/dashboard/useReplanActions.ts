@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult, type ReplanAdditionResult } from '@/lib/api';
+import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult, type ReplanAdditionResult, type ReplanBackfillResult } from '@/lib/api';
 
 // Per-missed-row action: reschedule to the proposed slot, or mark done.
 export type MoveMode = 'reschedule' | 'done';
@@ -44,6 +44,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   const [carryMode, setCarryMode] = useState<Record<string, CarryMode>>({});
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
+  const [backfillIncluded, setBackfillIncluded] = useState<Set<string>>(new Set());
+  const [backfillResults, setBackfillResults] = useState<Record<string, ReplanBackfillResult>>({});
   const [deletionIncluded, setDeletionIncluded] = useState<Set<string>>(new Set());
   // Retired-ritual / mis-placed-new-bookies blocks to remove. Handled server-side
   // exactly like deletions (delete the event + ritual record), so they ride the
@@ -82,6 +84,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     );
     setAdditionIncluded(new Set((data.additions ?? []).map(a => a.id)));
     setAdditionResults({});
+    setBackfillIncluded(new Set((data.backfill ?? []).map(b => b.id)));
+    setBackfillResults({});
     setDeletionIncluded(new Set((data.deletions ?? []).map(d => d.googleEventId)));
     setRemovalIncluded(new Set((data.removals ?? []).map(r => r.googleEventId)));
     setShowUnchanged(false);
@@ -103,11 +107,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     [carryBlocks]
   );
   const additions = useMemo(() => data?.additions ?? [], [data]);
+  const backfill = useMemo(() => data?.backfill ?? [], [data]);
   const deletions = useMemo(() => data?.deletions ?? [], [data]);
   const removals = useMemo(() => data?.removals ?? [], [data]);
 
   const hasResults =
-    Object.keys(results).length > 0 || Object.keys(additionResults).length > 0;
+    Object.keys(results).length > 0 ||
+    Object.keys(additionResults).length > 0 ||
+    Object.keys(backfillResults).length > 0;
 
   // Partition the confirm payload from the per-row choices.
   const payload = useMemo(() => {
@@ -248,14 +255,15 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
+    const backfillBlocks = backfill.filter(b => backfillIncluded.has(b.id));
     // Removals are applied via the same server path as deletions (delete the event
     // + its ritual record), so they are folded into the deletion payload.
     const deletionBlocks = [
       ...deletions.filter(d => deletionIncluded.has(d.googleEventId)),
       ...removals.filter(r => removalIncluded.has(r.googleEventId)),
     ].map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, deletionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded, removals, removalIncluded]);
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks };
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, deletions, deletionIncluded, removals, removalIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -269,6 +277,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.completeAsana.length +
     payload.displace.length +
     payload.additionBlocks.length +
+    payload.backfillBlocks.length +
     payload.deletionBlocks.length;
 
   const toggle = useCallback((id: string) =>
@@ -281,6 +290,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
 
   const toggleAddition = useCallback((id: string) =>
     setAdditionIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    }), []);
+
+  const toggleBackfill = useCallback((id: string) =>
+    setBackfillIncluded(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -308,7 +325,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes } = await api.confirmReplan(
+      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes, backfillResults: bfRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
@@ -324,7 +341,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         undefined, // started — daily-review only
         undefined, // replacements — daily-review only
         payload.delegate.length > 0 ? payload.delegate : undefined,
-        payload.drop.length > 0 ? payload.drop : undefined
+        payload.drop.length > 0 ? payload.drop : undefined,
+        payload.backfillBlocks.length > 0 ? payload.backfillBlocks : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -355,7 +373,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       const addMap: Record<string, ReplanAdditionResult> = {};
       for (const r of addRes ?? []) addMap[r.id] = r;
       setAdditionResults(addMap);
-      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? [])].some(r => r.success)) onApplied?.();
+      const bfMap: Record<string, ReplanBackfillResult> = {};
+      for (const r of bfRes ?? []) bfMap[r.id] = r;
+      setBackfillResults(bfMap);
+      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? []), ...(bfRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
@@ -381,12 +402,16 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setCarryMode,
     additionIncluded,
     additionResults,
+    backfill,
+    backfillIncluded,
+    backfillResults,
     deletionIncluded,
     removalIncluded,
     showUnchanged,
     setShowUnchanged,
     toggle,
     toggleAddition,
+    toggleBackfill,
     toggleDeletion,
     toggleRemoval,
     // results / status

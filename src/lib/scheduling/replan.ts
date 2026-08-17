@@ -40,6 +40,7 @@ import {
   MORNING_PREP_EXCLUSION_MINUTES,
   parseTimeOfDay,
   preferredWindowsForCategory,
+  proposeBlocks,
   resolveWorkingWindow,
   timeStr,
   type BusyMs,
@@ -48,10 +49,11 @@ import {
 } from './engine';
 import {
   newBookiesPlacementIsValid,
+  proposedBlockToBusyInterval,
   proposeRitualBlocks,
   RETIRED_RITUAL_TITLES,
 } from './rituals';
-import type { BusyInterval, ProposedBlock } from './types';
+import type { BusyInterval, CandidateTask, ProposedBlock } from './types';
 
 // An app-created block on this week's calendar. `startMs`/`endMs` are its actual
 // interval (matched from the calendar event where possible, else derived from
@@ -271,6 +273,20 @@ export interface ReplanInput {
   existingRitualTitlesByDate?: Record<string, Set<string>>;
   // Out-of-office dates (yyyy-MM-dd) to drop from working days when re-slotting.
   outOfOfficeDates?: Set<string>;
+  // --- Task backfill inputs (optional) ---
+  // Unscheduled candidate tasks (Asana + ad-hoc, already excluding anything
+  // scheduled this week or completed — same pool the propose route places from).
+  // When present, planReplan fills the remaining week's free time with additional
+  // task blocks for each category's remaining weekly-quota shortfall, exactly like
+  // the full plan does (deep-work morning priority included). Omit to skip backfill.
+  candidateTasks?: CandidateTask[];
+  // Per-category count of blocks ALREADY scheduled this week (kept + moved + done +
+  // ended). Reduces each category's remaining quota so backfill only proposes the
+  // shortfall. Defaults to none (treat every quota as unmet) when omitted.
+  existingScheduledCounts?: Record<string, number>;
+  // Per-date, per-category count of blocks already on the calendar this week, to
+  // seed the spread heuristic (see proposeBlocks). Optional.
+  existingCategoryCountsByDate?: Record<string, Record<string, number>>;
 }
 
 // A future ritual block to REMOVE from the calendar (delete the event + its
@@ -365,6 +381,11 @@ export interface ReplanResult {
   // Missing rituals to ADD on remaining working days (new events, no existing
   // googleEventId). Empty when no ritual titles context was supplied.
   additions: ProposedBlock[];
+  // Additional TASK blocks placed into the remaining week's free time to fill each
+  // category's remaining weekly-quota shortfall (the freed slots from removed
+  // rituals naturally count as free). Empty when no candidateTasks were supplied or
+  // nothing fit. Task/reserved/grouped blocks only — never overflow (evening) ones.
+  backfill: ProposedBlock[];
   // Break blocks that now conflict with a meeting → delete (no fixed home).
   deletions: ReplanDeletion[];
   // Future ritual blocks to remove: retired-ritual blocks and mis-placed
@@ -650,25 +671,29 @@ export function planReplan(input: ReplanInput): ReplanResult {
     }
   }
 
-  // --- Additions: fill missing rituals on remaining working days ---
-  // Reuse the pure ritual placer against the FINAL busy set (non-app intervals +
-  // kept blocks + placed moves), deduped by the live ritual titles per date, so
-  // any remaining working day without a ritual event gets one proposed. Exercise
-  // is priority one: its whole-day fallback (in proposeRitualBlocks) applies here
-  // too, so it lands on every day with a free hour.
-  let additions: ProposedBlock[] = [];
+  // --- Additions + task backfill (remaining free time) ---
+  // Mirror the propose route's ordering: DAILY rituals → TASK backfill → WEEKLY
+  // work rituals. Daily rituals (lunch/exercise/emails) structure the day; task
+  // backfill then fills the remaining quota shortfall (deep work claims the
+  // mornings first, exactly as in the full plan); weekly work rituals fit around
+  // whatever deep work left. Each pass runs against the busy set the previous one
+  // left, so nothing collides. The freed slots from removed rituals are naturally
+  // free in this busy set (removed blocks never entered it).
+  const toInterval = (b: BusyMs): BusyInterval => ({
+    start: new Date(b.start),
+    end: new Date(b.end),
+    ...(b.isBreak ? { isBreak: true } : {}),
+  });
+  let placementBusy: BusyInterval[] = busy.map(toInterval);
+
+  // Strip the titles of blocks we're REMOVING from the per-date ritual dedupe set,
+  // so a removed ritual can be re-proposed as an addition — specifically a
+  // mis-placed 🎰 New bookies block, which is then re-placed correctly in the
+  // evening. Retired-ritual titles are never proposed regardless, so stripping
+  // them is harmless. Clone so the caller's map is untouched.
+  let ritualTitlesByDate: Record<string, Set<string>> | undefined;
   if (input.existingRitualTitlesByDate) {
-    const additionBusy: BusyInterval[] = busy.map(b => ({
-      start: new Date(b.start),
-      end: new Date(b.end),
-      ...(b.isBreak ? { isBreak: true } : {}),
-    }));
-    // Strip the titles of blocks we're REMOVING from the per-date ritual dedupe
-    // set, so a removed ritual can be re-proposed as an addition — specifically a
-    // mis-placed 🎰 New bookies block, which is then re-placed correctly in the
-    // evening. Retired-ritual titles are never proposed regardless, so stripping
-    // them is harmless. Clone so the caller's map is untouched.
-    const ritualTitlesByDate: Record<string, Set<string>> = {};
+    ritualTitlesByDate = {};
     for (const [date, set] of Object.entries(input.existingRitualTitlesByDate)) {
       ritualTitlesByDate[date] = new Set(set);
     }
@@ -676,20 +701,64 @@ export function planReplan(input: ReplanInput): ReplanResult {
       const set = ritualTitlesByDate[removal.oldDate];
       if (set) for (const title of removal.titles) set.delete(title.trim());
     }
-    // No `walkDays` here: the 🚶 walk is opt-in per day (chosen in the plan
-    // wizard), so replan never resurrects a walk on a day that has none. An
-    // already-scheduled walk that now conflicts is still re-slotted above (its
-    // ritualKind uses the walk window); this only governs NEW additions.
-    additions = proposeRitualBlocks({
+  }
+
+  // 1. Daily ritual additions. No `walkDays` here: the 🚶 walk is opt-in per day
+  // (chosen in the plan wizard), so replan never resurrects a walk on a day that
+  // has none. An already-scheduled walk that now conflicts is still re-slotted
+  // above; this only governs NEW additions. Exercise is priority one: its
+  // whole-day fallback applies here too, so it lands on every day with a free hour.
+  let dailyAdditions: ProposedBlock[] = [];
+  if (ritualTitlesByDate) {
+    dailyAdditions = proposeRitualBlocks({
       config,
-      busyIntervals: additionBusy,
+      busyIntervals: placementBusy,
       weekStart,
       now,
       existingRitualTitlesByDate: ritualTitlesByDate,
+      phase: 'daily',
+    });
+    placementBusy = [...placementBusy, ...dailyAdditions.map(proposedBlockToBusyInterval)];
+  }
+
+  // 2. Task backfill: fill each category's remaining weekly-quota shortfall into
+  // the free time that's left, with the same quota-driven, deep-work-morning-first
+  // placement the full plan uses. `existingScheduledCounts` (kept + moved + done +
+  // ended blocks) reduces the shortfall so a met quota adds nothing; candidateTasks
+  // already exclude anything scheduled this week or completed. Evening-overflow
+  // blocks are dropped — backfill only fills working-hours free time.
+  let backfill: ProposedBlock[] = [];
+  if (input.candidateTasks && input.candidateTasks.length > 0) {
+    backfill = proposeBlocks({
+      config,
+      busyIntervals: placementBusy,
+      candidateTasks: input.candidateTasks,
+      existingScheduledCounts: input.existingScheduledCounts ?? {},
+      existingCategoryCountsByDate: input.existingCategoryCountsByDate,
+      weekStart,
+      now,
+      outOfOfficeDates: input.outOfOfficeDates,
+    }).filter(b => !b.overflow);
+    placementBusy = [...placementBusy, ...backfill.map(proposedBlockToBusyInterval)];
+  }
+
+  // 3. Weekly work rituals last, so deep-work backfill has already claimed the
+  // mornings and these fit around it (afternoon-preferred with a morning fallback).
+  let weeklyAdditions: ProposedBlock[] = [];
+  if (ritualTitlesByDate) {
+    weeklyAdditions = proposeRitualBlocks({
+      config,
+      busyIntervals: placementBusy,
+      weekStart,
+      now,
+      existingRitualTitlesByDate: ritualTitlesByDate,
+      phase: 'weekly',
     });
   }
 
-  return { kept, moves, unplaceable, stale, additions, deletions, removals, overflowConfigured: ofWindows.length > 0 };
+  const additions: ProposedBlock[] = [...dailyAdditions, ...weeklyAdditions];
+
+  return { kept, moves, unplaceable, stale, additions, backfill, deletions, removals, overflowConfigured: ofWindows.length > 0 };
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers

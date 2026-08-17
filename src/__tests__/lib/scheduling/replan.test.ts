@@ -4,6 +4,7 @@
  * timezone-independent.
  */
 import { planReplan, type ReplanBlock } from '@/lib/scheduling/replan';
+import type { CandidateTask } from '@/lib/scheduling/types';
 import {
   CONSULTING_TITLE,
   LEARNING_TITLE,
@@ -66,6 +67,9 @@ function run(o: {
   now: Date;
   config?: WorkflowConfig;
   existingRitualTitlesByDate?: Record<string, Set<string>>;
+  candidateTasks?: CandidateTask[];
+  existingScheduledCounts?: Record<string, number>;
+  existingCategoryCountsByDate?: Record<string, Record<string, number>>;
 }) {
   return planReplan({
     config: o.config ?? makeConfig(),
@@ -74,7 +78,15 @@ function run(o: {
     blocks: o.blocks,
     otherBusy: o.otherBusy ?? [],
     existingRitualTitlesByDate: o.existingRitualTitlesByDate,
+    candidateTasks: o.candidateTasks,
+    existingScheduledCounts: o.existingScheduledCounts,
+    existingCategoryCountsByDate: o.existingCategoryCountsByDate,
   });
+}
+
+// A candidate task in a quota category (typeSignals drive classification).
+function cand(o: { gid: string; signal: string; title?: string }): CandidateTask {
+  return { gid: o.gid, title: o.title ?? o.gid, typeSignals: [o.signal] };
 }
 
 const WED_8AM = new Date(2026, 6, 15, 8, 0, 0, 0); // Wednesday 08:00
@@ -775,5 +787,102 @@ describe('planReplan - deep-work morning flex on re-slot (3c)', () => {
     expect(moves[0].newDate).toBe('2026-07-15'); // Wednesday
     expect(moves[0].newStart).toBe('10:15');
     expect(moves[0].durationMinutes).toBe(90); // full duration kept
+  });
+});
+
+describe('planReplan - task backfill', () => {
+  // A retired 💼 Consulting block on Wednesday morning is removed (freeing its
+  // slot). The Deep quota is unmet and a Deep candidate exists, so the freed
+  // 09:00 slot is backfilled with a task block.
+  it('backfills a freed slot with an eligible task block', () => {
+    const { removals, backfill } = run({
+      blocks: [
+        block({
+          googleEventId: 'consult',
+          category: 'Consulting',
+          date: '2026-07-15', // Wednesday, future (now Wed 08:00)
+          start: '09:00',
+          titles: [CONSULTING_TITLE],
+        }),
+      ],
+      candidateTasks: [cand({ gid: 'a1', signal: 'deep', title: 'Write memo' })],
+      existingScheduledCounts: {}, // Deep quota (2) fully unmet
+      now: WED_8AM,
+    });
+    expect(removals).toHaveLength(1); // the consulting block is removed
+    // The freed morning slot is reused by a Deep task block (removed blocks never
+    // enter the busy set, so 09:00 is genuinely free).
+    expect(backfill.length).toBeGreaterThanOrEqual(1);
+    const first = backfill.find(b => b.date === '2026-07-15' && b.start === '09:00');
+    expect(first).toBeDefined();
+    expect(first!.category).toBe('Deep');
+    expect(first!.task?.gid).toBe('a1');
+  });
+
+  it('proposes no backfill for a category whose quota is already met', () => {
+    const { backfill } = run({
+      blocks: [],
+      candidateTasks: [cand({ gid: 'a1', signal: 'deep' })],
+      existingScheduledCounts: { Deep: 2 }, // quota is 2 → nothing remaining
+      now: WED_8AM,
+    });
+    expect(backfill).toHaveLength(0);
+  });
+
+  it('places deep-work backfill in the morning, sliding past a meeting rather than to the afternoon', () => {
+    const config = makeConfig({
+      quotas: {
+        'Writing/Deep Work': { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-11:00'] },
+      },
+    });
+    // typeMapping must map the signal to the deep-work category.
+    config.typeMapping = { 'Writing/Deep Work': ['deep'] };
+    const { backfill } = run({
+      blocks: [],
+      config,
+      candidateTasks: [cand({ gid: 'd1', signal: 'deep' })],
+      existingScheduledCounts: {},
+      // A real meeting blocks 09:00–10:00 on Wednesday; the deep-work morning flex
+      // slides the block to 10:00 (still the morning) instead of the afternoon.
+      otherBusy: [busy(15, 9, 0, 10, 0)],
+      now: WED_8AM,
+    });
+    expect(backfill).toHaveLength(1);
+    expect(backfill[0].category).toBe('Writing/Deep Work');
+    expect(backfill[0].date).toBe('2026-07-15');
+    expect(backfill[0].start).toBe('10:00'); // morning, slid past the meeting
+  });
+
+  it('only proposes tasks in the candidate pool (already-scheduled tasks are excluded upstream)', () => {
+    // Deep quota is 2; one block is already scheduled+counted, so one slot remains.
+    // The candidate pool holds one unscheduled task — the already-scheduled task's
+    // gid is absent (as gather excludes it), so it is never re-proposed.
+    const { backfill } = run({
+      blocks: [],
+      candidateTasks: [cand({ gid: 'fresh', signal: 'deep' })],
+      existingScheduledCounts: { Deep: 1 },
+      now: WED_8AM,
+    });
+    expect(backfill).toHaveLength(1); // only the remaining quota (2 − 1)
+    expect(backfill[0].task?.gid).toBe('fresh');
+    expect(backfill.some(b => b.task?.gid === 'already')).toBe(false);
+  });
+
+  it('never backfills into the past (respects the now-cutoff)', () => {
+    const NOW = new Date(2026, 6, 15, 10, 0, 0, 0); // Wednesday 10:00
+    const { backfill } = run({
+      blocks: [],
+      candidateTasks: [cand({ gid: 'a1', signal: 'deep' })],
+      existingScheduledCounts: {},
+      now: NOW,
+    });
+    expect(backfill.length).toBeGreaterThanOrEqual(1);
+    // Every proposed block starts at/after now — never in the already-past 09:00
+    // slice of the preferred morning window.
+    for (const b of backfill) {
+      const [y, mo, d] = b.date.split('-').map(Number);
+      const [h, m] = b.start.split(':').map(Number);
+      expect(new Date(y, mo - 1, d, h, m).getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+    }
   });
 });

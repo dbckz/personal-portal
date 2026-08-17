@@ -278,6 +278,10 @@ export interface ReplanAnalyzeResponse {
   stale: ReplanStale[];
   // Missing rituals to add on remaining working days (exercise is priority one).
   additions: ProposedBlock[];
+  // Additional task blocks proposed into the remaining week's free time (the slots
+  // freed by removed rituals included) to fill each category's unmet weekly quota.
+  // Absent on older responses — treat as [].
+  backfill?: ProposedBlock[];
   // Conflicted break blocks to delete (a break has no fixed home to move to).
   deletions: ReplanDeletion[];
   // Future ritual blocks to remove: retired rituals (Side projects / Learning /
@@ -354,6 +358,14 @@ export interface ReplanDisplaceResult {
 
 // A created ritual addition, reported back by its proposal id.
 export interface ReplanAdditionResult {
+  id: string;
+  success: boolean;
+  googleEventId?: string;
+  error?: string;
+}
+
+// A created task-backfill block, reported back by its proposal id.
+export interface ReplanBackfillResult {
   id: string;
   success: boolean;
   googleEventId?: string;
@@ -1595,7 +1607,10 @@ export const api = {
     // Unplaceable blocks the user chose to DELETE outright ("I'm not doing this at
     // all"): the server removes the calendar block, clears its local records,
     // deletes each backing Asana task, and records a 'dropped' weekly outcome.
-    drop?: Array<{ googleEventId: string; googleIntegrationId?: string; taskIds: string[] }>
+    drop?: Array<{ googleEventId: string; googleIntegrationId?: string; taskIds: string[] }>,
+    // Task-backfill blocks the user accepted: each is created as a task/reserved/
+    // grouped calendar event + scheduling records, exactly like a weekly-plan block.
+    backfill?: ProposedBlock[]
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1607,6 +1622,7 @@ export const api = {
     displaceResults?: ReplanDisplaceResult[];
     dropResults?: ReplanConfirmResult[];
     additionResults: ReplanAdditionResult[];
+    backfillResults?: ReplanBackfillResult[];
   }> {
     return fetchWithRetry<{
       results: ReplanConfirmResult[];
@@ -1619,6 +1635,7 @@ export const api = {
       displaceResults?: ReplanDisplaceResult[];
       dropResults?: ReplanConfirmResult[];
       additionResults: ReplanAdditionResult[];
+      backfillResults?: ReplanBackfillResult[];
     }>(
       '/api/scheduling/replan/confirm',
       {
@@ -1640,6 +1657,7 @@ export const api = {
           ...(drop && drop.length ? { drop } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
+          ...(backfill && backfill.length ? { backfill } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),
         }),
       }

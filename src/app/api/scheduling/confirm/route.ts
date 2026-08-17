@@ -10,9 +10,6 @@ import {
   getGoogleIntegrationById,
 } from '@/lib/integration-storage';
 import {
-  scheduleAsanaTask,
-  updateAdHocTask,
-  setGoogleEventAttribution,
   addPrepBlock,
   markCarryOversScheduled,
   recordWeeklyTasks,
@@ -24,6 +21,7 @@ import type { ProposedBlock } from '@/lib/scheduling/types';
 import { blockEventDescription, colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
 import { ritualIntegrationIdForBlock } from '@/lib/scheduling/rituals';
+import { buildAsanaEventRouting, createTaskBlockEvent, routeTaskBlock } from '@/lib/scheduling/confirm-task-block';
 
 // An accepted proposal is a ProposedBlock, optionally with a user-edited date /
 // start time.
@@ -109,17 +107,7 @@ export async function POST(request: NextRequest) {
     const config = await getWorkflowConfig();
 
     const asanaIntegrations = await getEnabledAsanaIntegrations();
-    const asanaRouting = new Map(
-      asanaIntegrations
-        .filter(a => a.eventGoogleIntegrationId)
-        .map(a => [
-          a.id,
-          {
-            googleIntegrationId: a.eventGoogleIntegrationId!,
-            transparency: a.eventTransparency ?? 'opaque',
-          },
-        ])
-    );
+    const asanaRouting = buildAsanaEventRouting(asanaIntegrations);
 
     // Cache resolved Google integration + validated credentials, keyed by id, so
     // each integration is loaded and token-refreshed at most once per request.
@@ -164,17 +152,7 @@ export async function POST(request: NextRequest) {
           : fallback;
       }
       if (proposal.kind === 'prep') return fallback;
-      const tasks = Array.isArray(proposal.tasks)
-        ? proposal.tasks
-        : proposal.task
-          ? [proposal.task]
-          : [];
-      if (tasks.length === 0) return fallback;
-      const first = tasks[0].integrationId;
-      if (!first || !tasks.every(t => t.integrationId === first)) return fallback;
-      const routing = asanaRouting.get(first);
-      if (!routing) return fallback;
-      return { googleIntegrationId: routing.googleIntegrationId, transparency: routing.transparency };
+      return routeTaskBlock(proposal, asanaRouting, defaultGoogle!.id);
     };
 
     const results: ConfirmResult[] = [];
@@ -197,25 +175,10 @@ export async function POST(request: NextRequest) {
           });
           continue;
         }
-        const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
         const isPrep = proposal.kind === 'prep';
         // Break blocks are created + tracked exactly like rituals (opaque event +
         // ritualBlocks record), so they route through the shared ritual creator.
         const isRitual = proposal.kind === 'ritual' || proposal.kind === 'break';
-        // A grouped block (e.g. Engagement / Outreach) carries a `tasks` list
-        // instead of a single `task`: one container event titled with the
-        // category, its agenda listed in the description.
-        const isGrouped = Array.isArray(proposal.tasks);
-        const isReserved = !isPrep && !isRitual && !isGrouped && !proposal.task;
-        // All app-created events are titled via the shared module (emoji prefix
-        // by category / prep / ritual, one source of truth).
-        const title = eventTitleForBlock(proposal);
-
-        // Descriptions are built centrally: grouped blocks list their assigned
-        // tasks as a bulleted agenda beneath the reason, and every Asana-backed
-        // task (single or grouped) gets a direct link to its Asana task;
-        // everything else just uses the reason.
-        const description = blockEventDescription(proposal);
 
         // Route this proposal to its target Google integration + availability.
         const route = routeProposal(proposal);
@@ -230,22 +193,23 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const event = await createCalendarEvent(
-          resolved.credentials,
-          googleIntegration.clientId,
-          googleIntegration.clientSecret,
-          title,
-          start,
-          end,
-          description,
-          'default',
-          'primary',
-          { transparency: route.transparency, colorId: colorIdForBlock(proposal) }
-        );
-
         if (isPrep) {
-          // Record the prep block so the planner can dedupe against it, reconcile
-          // it if the user deletes the event, and reason about it during replan.
+          // Prep: create the event, then record the prep block so the planner can
+          // dedupe against it, reconcile it if the user deletes the event, and
+          // reason about it during replan.
+          const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
+          const event = await createCalendarEvent(
+            resolved.credentials,
+            googleIntegration.clientId,
+            googleIntegration.clientSecret,
+            eventTitleForBlock(proposal),
+            start,
+            end,
+            blockEventDescription(proposal),
+            'default',
+            'primary',
+            { transparency: route.transparency, colorId: colorIdForBlock(proposal) }
+          );
           if (proposal.meeting) {
             await addPrepBlock({
               googleEventId: event.id,
@@ -258,91 +222,22 @@ export async function POST(request: NextRequest) {
               durationMinutes: proposal.durationMinutes,
             });
           }
-        } else if (isGrouped) {
-          // Record each listed task as scheduled to the shared container event, so
-          // they show as scheduled and drop out of future candidate pools. The
-          // block's time is split evenly across its members for estimate-vs-actual
-          // evidence (a 90-minute block of 3 tasks → 30m each).
-          const groupedMinutes = Math.round(
-            proposal.durationMinutes / Math.max(1, proposal.tasks!.length)
-          );
-          for (const t of proposal.tasks!) {
-            if (t.gid || t.adhocId) {
-              const taskId = (t.gid ?? t.adhocId)!;
-              scheduledTaskIds.push(taskId);
-              weeklyTasks.push({
-                taskId,
-                category: proposal.category,
-                title: t.title,
-                scheduledMinutes: groupedMinutes,
-                ...(t.integrationId ? { integrationId: t.integrationId } : {}),
-              });
-            }
-            if (t.gid) {
-              await scheduleAsanaTask(
-                t.gid,
-                t.integrationId,
-                proposal.date,
-                proposal.start,
-                proposal.durationMinutes,
-                event.id,
-                googleIntegration.id,
-                t.title
-              );
-              if (t.integrationId) {
-                await setGoogleEventAttribution(event.id, googleIntegration.id, t.integrationId);
-              }
-            } else if (t.adhocId) {
-              await updateAdHocTask(t.adhocId, {
-                dueDate: proposal.date,
-                dueTime: proposal.start,
-                duration: proposal.durationMinutes,
-                googleEventId: event.id,
-                googleIntegrationId: googleIntegration.id,
-              });
-            }
-          }
-        } else if (!isReserved && proposal.task) {
-          const { gid, adhocId, integrationId } = proposal.task;
-          if (gid || adhocId) {
-            const taskId = (gid ?? adhocId)!;
-            scheduledTaskIds.push(taskId);
-            weeklyTasks.push({
-              taskId,
-              category: proposal.category,
-              title: proposal.task.title,
-              scheduledMinutes: proposal.durationMinutes,
-              ...(integrationId ? { integrationId } : {}),
-            });
-          }
-          if (gid) {
-            await scheduleAsanaTask(
-              gid,
-              integrationId,
-              proposal.date,
-              proposal.start,
-              proposal.durationMinutes,
-              event.id,
-              googleIntegration.id,
-              proposal.task.title
-            );
-            // Attribute the Google event to the task's Asana workspace so
-            // client-time tracking counts it.
-            if (integrationId) {
-              await setGoogleEventAttribution(event.id, googleIntegration.id, integrationId);
-            }
-          } else if (adhocId) {
-            await updateAdHocTask(adhocId, {
-              dueDate: proposal.date,
-              dueTime: proposal.start,
-              duration: proposal.durationMinutes,
-              googleEventId: event.id,
-              googleIntegrationId: googleIntegration.id,
-            });
-          }
+          results.push({ id: proposal.id, success: true, googleEventId: event.id });
+          continue;
         }
 
-        results.push({ id: proposal.id, success: true, googleEventId: event.id });
+        // Task / reserved / grouped block: the shared creator makes the event and
+        // stores its scheduling records + weekly-task inputs (reused by the replan
+        // backfill so the two never drift).
+        const applied = await createTaskBlockEvent({
+          proposal,
+          credentials: resolved.credentials,
+          googleIntegration,
+          transparency: route.transparency,
+        });
+        scheduledTaskIds.push(...applied.scheduledTaskIds);
+        weeklyTasks.push(...applied.weeklyTasks);
+        results.push({ id: proposal.id, success: true, googleEventId: applied.eventId });
       } catch (err) {
         console.error(`[Scheduling Confirm] Failed to apply proposal ${proposal.id}:`, err);
         results.push({

@@ -86,6 +86,10 @@ function setContext(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     nextWeekEarlyEvents?: any[];
     nextWeekFirstWorkingDay?: string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    candidateTasks?: any[];
+    existingScheduledCounts?: Record<string, number>;
+    config?: WorkflowConfig;
   } = {}
 ) {
   mockGather.mockResolvedValue({
@@ -100,8 +104,10 @@ function setContext(
       over.nextWeekFirstWorkingDay !== undefined ? over.nextWeekFirstWorkingDay : '2026-07-20',
     asanaCandidates: over.asanaCandidates ?? [],
     asanaNameByGid: over.asanaNameByGid ?? new Map(),
+    candidateTasks: over.candidateTasks ?? [],
+    existingScheduledCounts: over.existingScheduledCounts ?? {},
     quotas: [],
-    config: CONFIG,
+    config: over.config ?? CONFIG,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 }
@@ -687,5 +693,41 @@ describe('replan analyze — prep additions for early-next-week meetings', () =>
 
     const { additions } = await analyze();
     expect(additions.filter(a => a.kind === 'prep')).toHaveLength(0);
+  });
+});
+
+describe('replan analyze — task backfill wiring', () => {
+  const BACKFILL_CONFIG: WorkflowConfig = {
+    taskQuotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-11:00'] } },
+    typeMapping: { Deep: ['deep'] },
+    scheduling: {
+      bufferBetweenTasks: '0min',
+      workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+      workingHours: { start: '09:00', end: '17:00' },
+    },
+    lastUpdated: '2026-07-12T00:00:00.000Z',
+  };
+
+  it('returns backfill task blocks for the unmet quota from the candidate pool', async () => {
+    mockScheduled.mockResolvedValue([]);
+    setContext({
+      config: BACKFILL_CONFIG,
+      candidateTasks: [{ gid: 'a1', title: 'Write memo', typeSignals: ['deep'] }],
+      existingScheduledCounts: {},
+    });
+
+    const full = await analyzeFull();
+    expect(Array.isArray(full.backfill)).toBe(true);
+    expect(full.backfill.length).toBeGreaterThanOrEqual(1);
+    expect(full.backfill[0].category).toBe('Deep');
+    expect(full.backfill[0].task.gid).toBe('a1');
+  });
+
+  it('returns no backfill when the candidate pool is empty', async () => {
+    mockScheduled.mockResolvedValue([]);
+    setContext({ config: BACKFILL_CONFIG, candidateTasks: [], existingScheduledCounts: {} });
+
+    const full = await analyzeFull();
+    expect(full.backfill).toEqual([]);
   });
 });

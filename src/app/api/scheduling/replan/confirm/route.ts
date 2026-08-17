@@ -5,6 +5,7 @@ import { createCalendarEvent, deleteCalendarEvent, ensureValidCredentials, updat
 import { completeTask, deleteTask, refreshAsanaToken } from '@/lib/asana';
 import { blockEventDescription, colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import {
+  getEnabledAsanaIntegrations,
   getEnabledGoogleIntegrations,
   getGoogleIntegrationById,
   getIntegrationById,
@@ -13,6 +14,7 @@ import {
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
 import { ritualIntegrationIdForBlock, isRitualLikeTitle } from '@/lib/scheduling/rituals';
+import { buildAsanaEventRouting, createTaskBlockEvent, routeTaskBlock } from '@/lib/scheduling/confirm-task-block';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import {
   getAdHocTasks,
@@ -39,6 +41,8 @@ import {
   addEventAttributionRule,
   upsertDelegationEntry,
   updateScheduledAsanaTasksByGoogleEvent,
+  recordWeeklyTasks,
+  markCarryOversScheduled,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
 import type {
@@ -220,6 +224,15 @@ interface AdditionResult {
   error?: string;
 }
 
+// One created task-backfill block, reported back by its proposal id. Created +
+// stored exactly like a weekly-plan task block (see confirm-task-block).
+interface BackfillResult {
+  id: string;
+  success: boolean;
+  googleEventId?: string;
+  error?: string;
+}
+
 function toStartEnd(date: string, start: string, durationMinutes: number): { start: Date; end: Date } {
   const [y, mo, d] = date.split('-').map(Number);
   const [h, m] = start.split(':').map(Number);
@@ -373,6 +386,11 @@ export async function POST(request: NextRequest) {
     const additions: ProposedBlock[] = Array.isArray(body?.additions)
       ? body.additions.filter((a: unknown): a is ProposedBlock => !!a && typeof a === 'object')
       : [];
+    // Task-backfill blocks the user accepted: each creates a task/reserved/grouped
+    // calendar event + scheduling records, exactly like the weekly-plan confirm.
+    const backfill: ProposedBlock[] = Array.isArray(body?.backfill)
+      ? body.backfill.filter((b: unknown): b is ProposedBlock => !!b && typeof b === 'object')
+      : [];
     // Conflicted break blocks the user accepted deleting: the calendar event AND
     // its ritual record are removed (a break has no fixed home to move to).
     const deletions: Array<{ googleEventId: string; googleIntegrationId?: string }> = Array.isArray(
@@ -462,6 +480,7 @@ export async function POST(request: NextRequest) {
       dropInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
+      backfill.length === 0 &&
       deletions.length === 0
     ) {
       return NextResponse.json(
@@ -1293,6 +1312,64 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // --- Task backfill: create each accepted task block into the freed/free time ---
+    // Same creation + record-storage the weekly-plan confirm uses (shared helper),
+    // so a backfilled task block is indistinguishable from one the full plan placed:
+    // a Google event, its scheduled-Asana / ad-hoc records, event attribution and
+    // the durable weekly-task record.
+    const backfillResults: BackfillResult[] = [];
+    if (backfill.length > 0) {
+      const asanaRouting = buildAsanaEventRouting(await getEnabledAsanaIntegrations());
+      const backfillScheduledTaskIds: string[] = [];
+      const backfillWeeklyTasks: Parameters<typeof recordWeeklyTasks>[1] = [];
+      for (const block of backfill) {
+        try {
+          const route = routeTaskBlock(block, asanaRouting, defaultGoogle?.id ?? '');
+          const resolved = await resolveGoogle(route.googleIntegrationId);
+          if (!resolved) {
+            backfillResults.push({
+              id: block.id,
+              success: false,
+              error: 'No authenticated Google integration available',
+            });
+            continue;
+          }
+          const applied = await createTaskBlockEvent({
+            proposal: block,
+            credentials: resolved.credentials,
+            googleIntegration: resolved.integration,
+            transparency: route.transparency,
+          });
+          backfillScheduledTaskIds.push(...applied.scheduledTaskIds);
+          backfillWeeklyTasks.push(...applied.weeklyTasks);
+          backfillResults.push({ id: block.id, success: true, googleEventId: applied.eventId });
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to backfill block ${block.id}:`, err);
+          backfillResults.push({
+            id: block.id,
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to create backfill block',
+          });
+        }
+      }
+      // Durable weekly record for the tasks this backfill scheduled into the week,
+      // and stamp their carry-over markers, exactly as the weekly-plan confirm does.
+      if (backfillWeeklyTasks.length > 0) {
+        try {
+          await recordWeeklyTasks(weekStartStr, backfillWeeklyTasks);
+        } catch (err) {
+          console.error('[Replan Confirm] Failed to record backfill weekly stats:', err);
+        }
+      }
+      if (backfillScheduledTaskIds.length > 0) {
+        try {
+          await markCarryOversScheduled(backfillScheduledTaskIds, weekStartStr);
+        } catch (err) {
+          console.error('[Replan Confirm] Failed to stamp backfill carry-over markers:', err);
+        }
+      }
+    }
+
     // One write PER WEEK for the outcomes this confirm settled. Almost always a
     // single group (the current week) — a byte-identical single write to
     // weekStartStr — but a review that crossed the week boundary also writes the
@@ -1315,7 +1392,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, replacementResults, delegateResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, backfillResults, replacementResults, delegateResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

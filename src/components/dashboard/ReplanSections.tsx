@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
 import type { ReplanCarryTask } from '@/lib/scheduling/replan';
@@ -31,6 +31,9 @@ export function ReplanSections({
     setUnplaceableVictim,
     additionIncluded,
     additionResults,
+    backfill,
+    backfillIncluded,
+    backfillResults,
     deletionIncluded,
     removalIncluded,
     showUnchanged,
@@ -41,6 +44,7 @@ export function ReplanSections({
     setCarryMode,
     toggle,
     toggleAddition,
+    toggleBackfill,
     toggleDeletion,
     toggleRemoval,
     results,
@@ -61,6 +65,61 @@ export function ReplanSections({
   // early-next-week meetings. Same toggle/result plumbing, separate sections.
   const ritualAdditions = additions.filter(a => a.kind !== 'prep');
   const prepAdditions = additions.filter(a => a.kind === 'prep');
+
+  // Task-backfill blocks: the tasks (or agenda) placed into freed/free time.
+  const backfillTitles = (b: (typeof backfill)[number]): string[] =>
+    Array.isArray(b.tasks) ? b.tasks.map(t => t.title) : b.task ? [b.task.title] : [];
+
+  const backfillRow = (b: (typeof backfill)[number]) => {
+    const color = categoryColor(b.category);
+    const result = backfillResults[b.id];
+    const isIn = backfillIncluded.has(b.id);
+    return (
+      <li
+        key={b.id}
+        className={`flex items-start gap-3 rounded-lg border p-3 ${
+          isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={isIn}
+          onChange={() => toggleBackfill(b.id)}
+          disabled={hasResults}
+          className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+              {b.category}
+            </span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+              add
+            </span>
+            <span className="text-sm font-medium text-gray-800 truncate">
+              {titleLabel(backfillTitles(b))}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-gray-500">
+            <span className="font-medium text-slate-600">{slotLabel(b.date, b.start)}</span>
+            <span className="ml-1.5 text-gray-400">· {formatDuration(b.durationMinutes)}</span>
+          </div>
+        </div>
+        {result &&
+          (result.success ? (
+            <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle
+              className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+              aria-label={result.error}
+            />
+          ))}
+      </li>
+    );
+  };
 
   const additionRow = (a: (typeof additions)[number]) => {
     const color = categoryColor(a.category);
@@ -293,6 +352,17 @@ export function ReplanSections({
             Prep for next week ({prepAdditions.length})
           </h3>
           <ul className="space-y-2">{prepAdditions.map(additionRow)}</ul>
+        </div>
+      )}
+
+      {/* Backfill — new task blocks for the remaining week's free time */}
+      {backfill.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <ListPlus className="w-3.5 h-3.5 text-orange-500" />
+            New task blocks ({backfill.length})
+          </h3>
+          <ul className="space-y-2">{backfill.map(backfillRow)}</ul>
         </div>
       )}
 
@@ -813,6 +883,7 @@ export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
     data.unplaceable.length > 0 ||
     (data.stale?.length ?? 0) > 0 ||
     (data.additions?.length ?? 0) > 0 ||
+    (data.backfill?.length ?? 0) > 0 ||
     (data.deletions?.length ?? 0) > 0 ||
     (data.removals?.length ?? 0) > 0
   );
