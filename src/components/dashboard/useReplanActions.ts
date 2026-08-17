@@ -45,6 +45,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
   const [deletionIncluded, setDeletionIncluded] = useState<Set<string>>(new Set());
+  // Retired-ritual / mis-placed-new-bookies blocks to remove. Handled server-side
+  // exactly like deletions (delete the event + ritual record), so they ride the
+  // same confirm payload; kept as a separate selection set for a distinct UI label.
+  const [removalIncluded, setRemovalIncluded] = useState<Set<string>>(new Set());
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ReplanConfirmResult>>({});
@@ -79,6 +83,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setAdditionIncluded(new Set((data.additions ?? []).map(a => a.id)));
     setAdditionResults({});
     setDeletionIncluded(new Set((data.deletions ?? []).map(d => d.googleEventId)));
+    setRemovalIncluded(new Set((data.removals ?? []).map(r => r.googleEventId)));
     setShowUnchanged(false);
     setIsConfirming(false);
     setResults({});
@@ -99,6 +104,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   );
   const additions = useMemo(() => data?.additions ?? [], [data]);
   const deletions = useMemo(() => data?.deletions ?? [], [data]);
+  const removals = useMemo(() => data?.removals ?? [], [data]);
 
   const hasResults =
     Object.keys(results).length > 0 || Object.keys(additionResults).length > 0;
@@ -242,11 +248,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
-    const deletionBlocks = deletions
-      .filter(d => deletionIncluded.has(d.googleEventId))
-      .map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
+    // Removals are applied via the same server path as deletions (delete the event
+    // + its ritual record), so they are folded into the deletion payload.
+    const deletionBlocks = [
+      ...deletions.filter(d => deletionIncluded.has(d.googleEventId)),
+      ...removals.filter(r => removalIncluded.has(r.googleEventId)),
+    ].map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
     return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, deletionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded]);
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded, removals, removalIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -280,6 +289,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
 
   const toggleDeletion = useCallback((id: string) =>
     setDeletionIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    }), []);
+
+  const toggleRemoval = useCallback((id: string) =>
+    setRemovalIncluded(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -365,11 +382,13 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     additionIncluded,
     additionResults,
     deletionIncluded,
+    removalIncluded,
     showUnchanged,
     setShowUnchanged,
     toggle,
     toggleAddition,
     toggleDeletion,
+    toggleRemoval,
     // results / status
     results,
     hasResults,

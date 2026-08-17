@@ -4,7 +4,7 @@ import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
 import type {
   ReviewAdoptInput,
   ReviewReplacementInput,
@@ -280,6 +280,9 @@ export interface ReplanAnalyzeResponse {
   additions: ProposedBlock[];
   // Conflicted break blocks to delete (a break has no fixed home to move to).
   deletions: ReplanDeletion[];
+  // Future ritual blocks to remove: retired rituals (Side projects / Learning /
+  // Consulting) and mis-placed 🎰 New bookies blocks. Absent on older responses.
+  removals?: ReplanRemoval[];
   // Whether an evening-overflow window exists this week. When true but an
   // unplaceable block has no overflowOption, the window filled up. Absent on
   // older responses — treat as false.

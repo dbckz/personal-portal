@@ -433,6 +433,80 @@ describe('proposeBlocks - preferred windows outside working hours', () => {
   });
 });
 
+describe('proposeBlocks - deep-work morning flex (3c)', () => {
+  // Deep work must keep its morning claim when a meeting partially blocks the
+  // preferred 09:00–11:00 window: slide later (treating the morning as up to
+  // ~12:00), then shrink to a 60-min floor to fit the largest morning gap; only a
+  // gap under 60 min sends it out of the morning.
+  const deepConfig = (targetLength: string) =>
+    makeConfig({
+      quotas: { 'Writing/Deep Work': { weeklyCount: 1, targetLength, preferredTimes: ['09:00-11:00'] } },
+      typeMapping: { 'Writing/Deep Work': ['writing'] },
+      scheduling: { workingDays: ['Monday'], workingHours: { start: '09:00', end: '17:00' } },
+    });
+  const at = (h: number, m: number) => new Date(2026, 6, 13, h, m);
+
+  it('slides the start later within the morning around a meeting (full duration kept)', () => {
+    // Meeting 08:30–10:00. A 90-min block can no longer start at 09:00, but the
+    // morning still holds it: the earliest run-rule-valid start is 10:15 (a 15-min
+    // buffer after the meeting), NOT an afternoon fallback.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepConfig('90min'),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['writing'] })],
+        busyIntervals: [{ start: at(8, 30), end: at(10, 0) }],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.start).toBe('10:15');
+    expect(deep.durationMinutes).toBe(90); // full duration, just slid later
+  });
+
+  it('shrinks to the largest morning gap when the full duration will not fit', () => {
+    // Meeting 08:30–10:45 leaves only 10:45–12:00 (75 min) in the morning. A 90-min
+    // block shrinks to 75 min to fill that gap rather than leaving the morning.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepConfig('90min'),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['writing'] })],
+        busyIntervals: [{ start: at(8, 30), end: at(10, 45) }],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.start).toBe('10:45');
+    expect(deep.durationMinutes).toBe(75); // shortened to fit the 75-min gap
+    expect(deep.trimmedFromMinutes).toBe(90);
+  });
+
+  it('falls through to normal placement when the morning gap is under 60 min', () => {
+    // Meeting 08:30–11:30 leaves only 30 min of morning — below the 60-min floor —
+    // so the block keeps its full duration and lands via normal placement (after
+    // the meeting, past the morning), not shrunk into a sub-60 sliver.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepConfig('90min'),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['writing'] })],
+        busyIntervals: [{ start: at(8, 30), end: at(11, 30) }],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.durationMinutes).toBe(90); // not shrunk
+    expect(deep.start).toBe('11:45'); // fresh run after the meeting
+  });
+
+  it('still places at 09:00 when the morning is free (no regression)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepConfig('90min'),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['writing'] })],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.start).toBe('09:00');
+    expect(deep.durationMinutes).toBe(90);
+  });
+});
+
 describe('proposeBlocks - week boundary', () => {
   it('never proposes a block outside the 7-day week', () => {
     const weekEnd = dateStr(new Date(2026, 6, 19)); // Sunday

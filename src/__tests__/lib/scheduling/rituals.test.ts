@@ -28,6 +28,8 @@ import {
   NEW_BOOKIES_TITLE,
   READING_TITLE,
   LEARNING_TITLE,
+  RETIRED_RITUAL_TITLES,
+  newBookiesPlacementIsValid,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -55,6 +57,7 @@ function run(input: {
   existingRitualTitlesByDate?: Record<string, Set<string>>;
   walkDays?: string[];
   now?: Date;
+  phase?: 'all' | 'daily' | 'weekly';
 }) {
   return proposeRitualBlocks({
     config: makeConfig(input.scheduling),
@@ -63,6 +66,7 @@ function run(input: {
     now: input.now ?? WEEK_START,
     existingRitualTitlesByDate: input.existingRitualTitlesByDate ?? {},
     walkDays: input.walkDays,
+    phase: input.phase,
   });
 }
 
@@ -621,63 +625,135 @@ describe('walk ritual (daily, break)', () => {
   });
 });
 
-describe('weekly WORK singles (consulting / side projects / new bookies / reading / learning)', () => {
-  const week = {
-    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-    workingHours: { start: '08:30', end: '19:00' },
-  };
+const FULL_WEEK = {
+  workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+  workingHours: { start: '08:30', end: '19:00' },
+};
 
-  const singles = [
-    { title: CONSULTING_TITLE, category: 'Consulting', kind: 'consulting', minutes: 60 },
-    { title: SIDE_PROJECTS_TITLE, category: 'Side projects', kind: 'sideProjects', minutes: 90 },
-    { title: NEW_BOOKIES_TITLE, category: 'New bookies', kind: 'newBookies', minutes: 30 },
-    { title: READING_TITLE, category: 'Reading', kind: 'reading', minutes: 60 },
-    { title: LEARNING_TITLE, category: 'Learning', kind: 'learning', minutes: 60 },
-  ] as const;
-
-  it('resolves each to its own kind and a weekly cadence', () => {
-    for (const s of singles) {
-      expect(ritualKindForTitle(s.title)).toBe(s.kind);
-      expect(ritualCadenceForTitle(s.title)).toBe('weekly');
-      expect(isBreakTitle(s.title)).toBe(false); // work, not a break
-      expect(isRitualTitle(s.title)).toBe(true);
+describe('retired rituals (side projects / learning / consulting)', () => {
+  it('never proposes a retired ritual', () => {
+    const blocks = run({ scheduling: FULL_WEEK });
+    for (const title of [CONSULTING_TITLE, SIDE_PROJECTS_TITLE, LEARNING_TITLE]) {
+      expect(blocks.find(b => b.title === title)).toBeUndefined();
     }
   });
 
-  it('places each ONCE for the week at its own duration', () => {
-    const blocks = run({ scheduling: week });
-    for (const s of singles) {
-      const placed = blocks.filter(b => b.title === s.title);
-      expect(placed).toHaveLength(1);
-      expect(placed[0].kind).toBe('ritual');
-      expect(placed[0].category).toBe(s.category);
-      expect(placed[0].durationMinutes).toBe(s.minutes);
-    }
+  it('lists them in RETIRED_RITUAL_TITLES but still recognises them as rituals', () => {
+    expect([...RETIRED_RITUAL_TITLES]).toEqual([
+      CONSULTING_TITLE,
+      SIDE_PROJECTS_TITLE,
+      LEARNING_TITLE,
+    ]);
+    for (const t of RETIRED_RITUAL_TITLES) expect(isRitualTitle(t)).toBe(true);
+  });
+});
+
+describe('🎰 New bookies (evening, Mon/Fri, outside working hours)', () => {
+  it('resolves to its own kind and a weekly cadence, not a break', () => {
+    expect(ritualKindForTitle(NEW_BOOKIES_TITLE)).toBe('newBookies');
+    expect(ritualCadenceForTitle(NEW_BOOKIES_TITLE)).toBe('weekly');
+    expect(isBreakTitle(NEW_BOOKIES_TITLE)).toBe(false);
+    expect(isRitualTitle(NEW_BOOKIES_TITLE)).toBe(true);
   });
 
-  it('spreads the singles across distinct days rather than piling onto Monday', () => {
-    const blocks = run({ scheduling: week });
-    const days = singles.map(s => blocks.find(b => b.title === s.title)!.date);
-    // Five singles, five working days → each lands on a different day.
-    expect(new Set(days).size).toBe(days.length);
+  it('validates placement: Monday/Friday >= 18:00 only', () => {
+    expect(newBookiesPlacementIsValid('2026-07-13', '18:00')).toBe(true); // Monday
+    expect(newBookiesPlacementIsValid('2026-07-17', '19:30')).toBe(true); // Friday
+    expect(newBookiesPlacementIsValid('2026-07-13', '17:45')).toBe(false); // before 18:00
+    expect(newBookiesPlacementIsValid('2026-07-13', '09:30')).toBe(false); // working hours
+    expect(newBookiesPlacementIsValid('2026-07-15', '18:00')).toBe(false); // Wednesday
   });
 
-  it('dedupes a single by title across the whole week (present any day → skip)', () => {
+  it('places once, Monday preferred, in the 18:00–22:00 evening window', () => {
+    const blocks = run({ scheduling: FULL_WEEK });
+    const nb = blocks.filter(b => b.title === NEW_BOOKIES_TITLE);
+    expect(nb).toHaveLength(1);
+    expect(nb[0].date).toBe('2026-07-13'); // Monday
+    expect(nb[0].durationMinutes).toBe(30);
+    expect(newBookiesPlacementIsValid(nb[0].date, nb[0].start)).toBe(true);
+  });
+
+  it('never places inside working hours (09:00–17:00)', () => {
+    const blocks = run({ scheduling: FULL_WEEK });
+    const nb = blocks.find(b => b.title === NEW_BOOKIES_TITLE)!;
+    const hour = Number(nb.start.split(':')[0]);
+    expect(hour).toBeGreaterThanOrEqual(18);
+  });
+
+  it('falls back to Friday when Monday is already past', () => {
+    // now = Tuesday, so Monday has dropped out of the working days entirely.
+    const blocks = run({ scheduling: FULL_WEEK, now: new Date(2026, 6, 14, 9, 0) });
+    const nb = blocks.find(b => b.title === NEW_BOOKIES_TITLE)!;
+    expect(nb.date).toBe('2026-07-17'); // Friday
+  });
+
+  it('falls back to Friday when Monday evening is full', () => {
     const blocks = run({
-      scheduling: week,
-      existingRitualTitlesByDate: { '2026-07-15': new Set([CONSULTING_TITLE]) },
+      scheduling: FULL_WEEK,
+      busyIntervals: [busy(18, 0, 22, 0)], // Monday 18:00–22:00 blocked
     });
-    expect(blocks.find(b => b.title === CONSULTING_TITLE)).toBeUndefined();
-    // The others are unaffected.
-    expect(blocks.find(b => b.title === READING_TITLE)).toBeDefined();
+    const nb = blocks.find(b => b.title === NEW_BOOKIES_TITLE)!;
+    expect(nb.date).toBe('2026-07-17'); // Friday
   });
 
-  it('routes the singles to the emails calendar setting by default, per-kind overridable', () => {
+  it('dedupes across the whole week (present any day → skip)', () => {
+    const blocks = run({
+      scheduling: FULL_WEEK,
+      existingRitualTitlesByDate: { '2026-07-15': new Set([NEW_BOOKIES_TITLE]) },
+    });
+    expect(blocks.find(b => b.title === NEW_BOOKIES_TITLE)).toBeUndefined();
+  });
+});
+
+describe('📖 Reading weekly single', () => {
+  it('resolves to its own kind and a weekly cadence, not a break', () => {
+    expect(ritualKindForTitle(READING_TITLE)).toBe('reading');
+    expect(ritualCadenceForTitle(READING_TITLE)).toBe('weekly');
+    expect(isBreakTitle(READING_TITLE)).toBe(false);
+  });
+
+  it('places once for the week, in the afternoon (>= 12:00), 60 min', () => {
+    const blocks = run({ scheduling: FULL_WEEK });
+    const reading = blocks.filter(b => b.title === READING_TITLE);
+    expect(reading).toHaveLength(1);
+    expect(reading[0].durationMinutes).toBe(60);
+    expect(reading[0].start >= '12:00').toBe(true);
+  });
+
+  it('dedupes by title across the whole week (present any day → skip)', () => {
+    const blocks = run({
+      scheduling: FULL_WEEK,
+      existingRitualTitlesByDate: { '2026-07-15': new Set([READING_TITLE]) },
+    });
+    expect(blocks.find(b => b.title === READING_TITLE)).toBeUndefined();
+  });
+
+  it('routes to the emails calendar by default, per-kind overridable', () => {
     const scheduling = {
       ritualCalendars: { emails: 'om', reading: 'reading-cal' },
     } as WorkflowConfig['scheduling'];
-    expect(ritualIntegrationIdForKind(scheduling, 'consulting')).toBe('om');
-    expect(ritualIntegrationIdForKind(scheduling, 'learning')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'newBookies')).toBe('om');
     expect(ritualIntegrationIdForKind(scheduling, 'reading')).toBe('reading-cal');
+  });
+});
+
+describe('ritual placement phases', () => {
+  it("phase 'daily' places only the per-day rituals, no weekly ones", () => {
+    const blocks = run({ scheduling: FULL_WEEK, phase: 'daily' });
+    expect(blocks.some(b => b.title === LUNCH_TITLE)).toBe(true);
+    expect(blocks.some(b => b.title === EXERCISE_TITLE)).toBe(true);
+    expect(blocks.some(b => b.title === EMAILS_TITLE)).toBe(true);
+    for (const t of [KINDLE_TITLE, GROOMING_TITLE, RETRO_TITLE, NEW_BOOKIES_TITLE, READING_TITLE]) {
+      expect(blocks.some(b => b.title === t)).toBe(false);
+    }
+  });
+
+  it("phase 'weekly' places only the weekly rituals, no per-day ones", () => {
+    const blocks = run({ scheduling: FULL_WEEK, phase: 'weekly' });
+    expect(blocks.some(b => b.title === LUNCH_TITLE)).toBe(false);
+    expect(blocks.some(b => b.title === EXERCISE_TITLE)).toBe(false);
+    expect(blocks.some(b => b.title === EMAILS_TITLE)).toBe(false);
+    expect(blocks.some(b => b.title === READING_TITLE)).toBe(true);
+    expect(blocks.some(b => b.title === NEW_BOOKIES_TITLE)).toBe(true);
   });
 });

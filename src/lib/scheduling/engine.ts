@@ -396,6 +396,65 @@ export function isDeepWork(category: string): boolean {
   return normalize(category) === normalize('Writing/Deep Work');
 }
 
+// --- Deep-work morning flex ------------------------------------------------
+// Deep work has first claim on the mornings. When its preferred morning window is
+// PARTIALLY blocked (e.g. a real 08:30–10:00 meeting), the block must NOT abandon
+// the morning — it should:
+//   (i)  slide its start later, treating the morning as running to ~12:00 (not
+//        just the literal 09:00–11:00 preference), then
+//   (ii) if the full duration still fits nowhere in the morning, shorten in
+//        15-min steps down to a 60-min floor to fill the largest free morning gap.
+// Only when even a 60-min block won't fit the morning does the caller fall back to
+// the normal window logic. Deterministic; scoped to the deep-work category.
+export const DEEP_WORK_MORNING_END: TimeOfDay = { h: 12, m: 0 };
+export const DEEP_WORK_MORNING_FLOOR_MINUTES = 60;
+
+// The deep-work morning search windows: each configured preferred window that
+// STARTS before noon, with its end extended to at least noon so a slid/shrunk
+// block can still land in the morning. Empty when the category has no morning
+// preferred window (the caller then just uses normal placement).
+export function deepWorkMorningWindows(
+  preferredWindows: Array<[TimeOfDay, TimeOfDay]>,
+  workingDays: WorkingDay[]
+): Window[] {
+  const morningPrefs = preferredWindows.filter(([start]) => start.h < DEEP_WORK_MORNING_END.h);
+  if (morningPrefs.length === 0) return [];
+  const windows: Window[] = [];
+  for (const day of workingDays) {
+    for (const [start, end] of morningPrefs) {
+      const startMs = msAt(day.date, start);
+      // Extend the end to at least noon so a meeting-shortened morning still has
+      // room for the block to slide/shrink into.
+      const endMs = Math.max(msAt(day.date, end), msAt(day.date, DEEP_WORK_MORNING_END));
+      if (endMs <= startMs) continue;
+      windows.push({ date: day.date, dateStr: day.dateStr, startMs, endMs, preferred: true, bestTimeMatch: false });
+    }
+  }
+  return windows.sort((a, b) => a.startMs - b.startMs);
+}
+
+// Place a deep-work block in the morning, preferring the LARGEST duration that
+// fits: full duration first (strict run rule, then relaxed cap-ignored to abut a
+// meeting), then shrunk in 15-min steps down to the 60-min floor (strict, then
+// relaxed) to fill the largest free morning gap. `search(duration, workRun)` runs
+// the slot search over the morning windows. Returns null when even a 60-min block
+// won't fit, so the caller falls back to normal placement.
+export function findDeepWorkMorningPlacement(
+  search: (duration: number, workRun: WorkRun) => ReturnType<typeof findSlot>,
+  duration: number,
+  workRun: WorkRun
+): FlexSlot | null {
+  const relaxed: WorkRun = { maxMinutes: Infinity, bufferMinutes: workRun.bufferMinutes };
+  const floor = Math.min(duration, DEEP_WORK_MORNING_FLOOR_MINUTES);
+  for (let dur = duration; dur >= floor; dur -= FLEX_STEP_MINUTES) {
+    for (const wr of [workRun, relaxed]) {
+      const slot = search(dur, wr);
+      if (slot) return { slot, duration: dur, trimmedMinutes: duration - dur };
+    }
+  }
+  return null;
+}
+
 // Preferred-time search windows for a category: its explicit `preferredTimes` if
 // configured; otherwise a default afternoon window (12:00 → working-hours end)
 // for non-deep-work categories, so they try afternoons before falling back to
@@ -1057,13 +1116,28 @@ export function proposeBlocks(
         (taskId && input.durationOverridesByTask?.[taskId]) || categoryDuration;
 
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
+      // Deep work owns the mornings: try the morning-flex placement FIRST (slide
+      // later within the morning, then shrink to a 60-min floor to fit the largest
+      // morning gap around a meeting), before the normal windows. Only when even a
+      // 60-min block won't fit the morning does it fall through to normal placement.
+      let placement: FlexSlot | null = null;
+      if (isDeepWork(category)) {
+        const morningWindows = deepWorkMorningWindows(preferredWindows, workingDays);
+        if (morningWindows.length > 0) {
+          placement = findDeepWorkMorningPlacement(
+            (dur, wr) => findLeveledSlot(catCount, morningWindows, dur, wr),
+            duration,
+            workRun
+          );
+        }
+      }
       // Soft run rule. This loop only ever runs for NON-grouped categories (grouped
       // ones return early above), so NOTHING here is trimmable: a single-task block
       // (Blogs, General Todos, ad-hoc) keeps its exact stated length, and so does a
       // non-grouped reserved filler block. Only grouped/container blocks trim (see
       // the grouped branch). canShrink=false → tiers a + c only (full strict, then
       // full cap-ignored), never the 15-min shrink.
-      const placement = findFlexibleSlot(
+      placement ??= findFlexibleSlot(
         (dur, wr) => findLeveledSlot(catCount, windows, dur, wr),
         duration,
         workRun,
@@ -1092,11 +1166,16 @@ export function proposeBlocks(
         break;
       }
 
-      // Nothing in this (non-grouped) loop is trimmed, so placedDuration is always
-      // the full requested length.
-      const { slot, duration: placedDuration } = placement;
+      // Only deep-work morning-flex trims a block in this (non-grouped) loop
+      // (shorten to fit a meeting-shortened morning); every other block keeps its
+      // full requested length, so trimmedMinutes is 0 and placedDuration is full.
+      const { slot, duration: placedDuration, trimmedMinutes } = placement;
       const start = timeStr(slot.startMs);
       const blockId = `${slot.dateStr}-${start}-${category}`;
+      const trimNote =
+        trimmedMinutes > 0 ? ` Shortened ${trimmedMinutes} min to fit the morning.` : '';
+      const trimField =
+        trimmedMinutes > 0 ? { trimmedFromMinutes: placedDuration + trimmedMinutes } : {};
 
       if (task) {
         usedTaskIds.add(taskId!);
@@ -1112,7 +1191,8 @@ export function proposeBlocks(
           date: slot.dateStr,
           start,
           durationMinutes: placedDuration,
-          reason: buildReason(category, slot.preferred, task),
+          reason: buildReason(category, slot.preferred, task) + trimNote,
+          ...trimField,
         });
       } else {
         proposals.push({
@@ -1121,7 +1201,10 @@ export function proposeBlocks(
           date: slot.dateStr,
           start,
           durationMinutes: placedDuration,
-          reason: `Reserved ${category} time — quota not yet met and no matching task available.`,
+          reason:
+            `Reserved ${category} time — quota not yet met and no matching task available.` +
+            trimNote,
+          ...trimField,
         });
       }
 

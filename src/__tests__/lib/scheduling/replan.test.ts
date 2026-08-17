@@ -4,6 +4,13 @@
  * timezone-independent.
  */
 import { planReplan, type ReplanBlock } from '@/lib/scheduling/replan';
+import {
+  CONSULTING_TITLE,
+  LEARNING_TITLE,
+  NEW_BOOKIES_TITLE,
+  SIDE_PROJECTS_TITLE,
+  newBookiesPlacementIsValid,
+} from '@/lib/scheduling/rituals';
 import type { BusyInterval } from '@/lib/scheduling/types';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
@@ -58,6 +65,7 @@ function run(o: {
   otherBusy?: BusyInterval[];
   now: Date;
   config?: WorkflowConfig;
+  existingRitualTitlesByDate?: Record<string, Set<string>>;
 }) {
   return planReplan({
     config: o.config ?? makeConfig(),
@@ -65,6 +73,7 @@ function run(o: {
     now: o.now,
     blocks: o.blocks,
     otherBusy: o.otherBusy ?? [],
+    existingRitualTitlesByDate: o.existingRitualTitlesByDate,
   });
 }
 
@@ -652,5 +661,119 @@ describe('planReplan - missing-ritual additions', () => {
       otherBusy: [],
     });
     expect(noContext.additions).toEqual([]);
+  });
+});
+
+describe('planReplan - retired ritual + mis-placed new-bookies removals', () => {
+  // A ritual block built like the analyze route builds them (ritualKind + titles).
+  const ritual = (o: {
+    googleEventId: string;
+    date: string;
+    start: string;
+    durationMinutes?: number;
+    ritualKind: ReplanBlock['ritualKind'];
+    title: string;
+  }): ReplanBlock =>
+    block({
+      googleEventId: o.googleEventId,
+      date: o.date,
+      start: o.start,
+      durationMinutes: o.durationMinutes ?? 30,
+      category: 'Ritual',
+      titles: [o.title],
+      ritualKind: o.ritualKind,
+    });
+
+  it('proposes REMOVAL of a future retired-ritual block (never kept or moved)', () => {
+    // Consulting/Side projects/Learning are retired; a future block gets removed.
+    const { removals, kept, moves } = run({
+      blocks: [
+        ritual({ googleEventId: 'c', date: '2026-07-17', start: '14:00', durationMinutes: 60, ritualKind: 'consulting', title: CONSULTING_TITLE }),
+        ritual({ googleEventId: 's', date: '2026-07-16', start: '15:00', durationMinutes: 90, ritualKind: 'sideProjects', title: SIDE_PROJECTS_TITLE }),
+        ritual({ googleEventId: 'l', date: '2026-07-17', start: '13:00', durationMinutes: 60, ritualKind: 'learning', title: LEARNING_TITLE }),
+      ],
+      now: WED_8AM,
+    });
+    expect(removals.map(r => r.googleEventId).sort()).toEqual(['c', 'l', 's']);
+    expect(removals.every(r => r.reason === 'retired')).toBe(true);
+    expect(kept).toHaveLength(0);
+    expect(moves).toHaveLength(0);
+  });
+
+  it('leaves a PAST retired-ritual block alone (only future ones are removed)', () => {
+    const { removals, kept } = run({
+      blocks: [
+        ritual({ googleEventId: 'c', date: '2026-07-13', start: '14:00', ritualKind: 'consulting', title: CONSULTING_TITLE }), // Monday, past
+      ],
+      now: WED_8AM,
+    });
+    expect(removals).toHaveLength(0);
+    expect(kept).toHaveLength(1); // a past ritual is kept as history
+  });
+
+  it('removes a mis-placed future new-bookies block and re-places it in the evening', () => {
+    // A new-bookies block sitting inside working hours on a Wednesday breaks the
+    // rule (Mon/Fri evening only) → removed as mis-placed and re-added on Friday.
+    const misplacedDate = '2026-07-15'; // Wednesday
+    const { removals, additions } = planReplan({
+      config: makeConfig(),
+      weekStart: WEEK_START,
+      now: WED_8AM,
+      blocks: [
+        ritual({ googleEventId: 'nb', date: misplacedDate, start: '14:00', ritualKind: 'newBookies', title: NEW_BOOKIES_TITLE }),
+      ],
+      otherBusy: [],
+      existingRitualTitlesByDate: { [misplacedDate]: new Set([NEW_BOOKIES_TITLE]) },
+    });
+    expect(removals).toHaveLength(1);
+    expect(removals[0].googleEventId).toBe('nb');
+    expect(removals[0].reason).toBe('misplaced');
+    // Re-placed validly (Friday evening, since Monday is already past).
+    const readded = additions.find(a => a.title === NEW_BOOKIES_TITLE)!;
+    expect(readded).toBeDefined();
+    expect(newBookiesPlacementIsValid(readded.date, readded.start)).toBe(true);
+    expect(readded.date).toBe('2026-07-17'); // Friday
+  });
+
+  it('keeps a correctly-placed future new-bookies block (no removal)', () => {
+    const { removals, kept } = run({
+      blocks: [
+        ritual({ googleEventId: 'nb', date: '2026-07-17', start: '18:00', ritualKind: 'newBookies', title: NEW_BOOKIES_TITLE }), // Friday evening
+      ],
+      now: WED_8AM,
+    });
+    expect(removals).toHaveLength(0);
+    expect(kept.map(k => k.googleEventId)).toContain('nb');
+  });
+});
+
+describe('planReplan - deep-work morning flex on re-slot (3c)', () => {
+  const deepConfig = makeConfig({
+    quotas: {
+      'Writing/Deep Work': { weeklyCount: 2, targetLength: '90min', preferredTimes: ['09:00-11:00'] },
+    },
+  });
+
+  it('slides a re-slotted deep-work block later in the morning around a meeting', () => {
+    // A missed deep-work block re-slots to Wednesday; a 08:30–10:00 meeting there
+    // pushes it to 10:15 (still the morning) rather than out of it.
+    const { moves } = run({
+      config: deepConfig,
+      blocks: [
+        block({
+          googleEventId: 'd',
+          date: '2026-07-13', // Monday, missed
+          start: '09:00',
+          durationMinutes: 90,
+          category: 'Writing/Deep Work',
+        }),
+      ],
+      otherBusy: [busy(15, 8, 30, 10, 0)], // Wednesday 08:30–10:00
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(1);
+    expect(moves[0].newDate).toBe('2026-07-15'); // Wednesday
+    expect(moves[0].newStart).toBe('10:15');
+    expect(moves[0].durationMinutes).toBe(90); // full duration kept
   });
 });

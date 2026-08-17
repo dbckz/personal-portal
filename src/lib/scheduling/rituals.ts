@@ -51,11 +51,19 @@ export const DELEGATION_REVIEW_TITLE = '🤖 Delegation review';
 // Like lunch/exercise it splits work runs and never counts as worked time.
 export const WALK_TITLE = '🚶 Walk';
 // WEEKLY x1 WORK-type rituals (placed once per week, deduped by title across the
-// whole week, spread across distinct days where free slots allow).
-export const CONSULTING_TITLE = '💼 Consulting';
-export const SIDE_PROJECTS_TITLE = '🛠️ Side projects';
+// whole week). 📖 Reading is an afternoon-preferred single; 🎰 New bookies is
+// placed in the EVENING (Mon/Fri, >= 18:00, outside working hours) by its own
+// helper — see the new-bookies section in proposeRitualBlocks.
 export const NEW_BOOKIES_TITLE = '🎰 New bookies';
 export const READING_TITLE = '📖 Reading';
+// RETIRED rituals — no longer proposed. Kept as constants (and listed in
+// RETIRED_RITUAL_TITLES below) purely so reset / reconcile / replan sweeps still
+// recognise any blocks left on the calendar from when these were active.
+// 🛠️ Side projects is dropped for good; 🎓 Learning and 💼 Consulting are parked
+// "for now" (learning may be reintroduced later), so the concepts are kept rather
+// than deleted.
+export const CONSULTING_TITLE = '💼 Consulting';
+export const SIDE_PROJECTS_TITLE = '🛠️ Side projects';
 export const LEARNING_TITLE = '🎓 Learning';
 // Explicit break events placed after each ~2h work run (see breaks.ts). Tracked
 // in the ritualBlocks store like the daily rituals so reconcile / reset / replan
@@ -76,6 +84,16 @@ export const RITUAL_TITLES: readonly string[] = [
   READING_TITLE,
   LEARNING_TITLE,
   BREAK_TITLE,
+];
+
+// Rituals that are no longer proposed but may still exist on the calendar from
+// when they were active. Sweeps (reset / reconcile) recognise them via
+// RITUAL_TITLES; the replan flow additionally proposes any not-yet-ended block
+// with one of these titles for REMOVAL (see planReplan).
+export const RETIRED_RITUAL_TITLES: readonly string[] = [
+  CONSULTING_TITLE,
+  SIDE_PROJECTS_TITLE,
+  LEARNING_TITLE,
 ];
 
 // The ritual/break kinds. Lunch + exercise + break are BREAKS (split work runs);
@@ -220,6 +238,20 @@ export function ritualKindForTitle(title: string): RitualKind {
   return 'emails';
 }
 
+// A future 🎰 New bookies block is validly placed ONLY on a Monday or Friday
+// evening (start >= 18:00, i.e. outside working hours). Any other day, or any
+// start before 18:00 (inside working hours), is invalid — the replan flow removes
+// such a block and re-places it per the evening rule. `date` is yyyy-MM-dd and
+// `start` is HH:mm (local).
+export const NEW_BOOKIES_EVENING_HOUR = 18;
+export function newBookiesPlacementIsValid(date: string, start: string): boolean {
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h] = start.split(':').map(Number);
+  const weekday = new Date(y, mo - 1, d).getDay(); // 0=Sun … 6=Sat
+  const isMondayOrFriday = weekday === 1 || weekday === 5;
+  return isMondayOrFriday && h >= NEW_BOOKIES_EVENING_HOUR;
+}
+
 // Per-kind ritual calendar routing. Exercise (and the break events, which are
 // also green/non-work and belong on the same personal calendar) resolve to the
 // exercise calendar; lunch + emails resolve to their own calendar, falling back
@@ -239,8 +271,9 @@ export function ritualIntegrationIdForKind(
   if (kind === 'lunch') return cals?.lunch ?? legacy;
   if (kind === 'emails') return cals?.emails ?? legacy;
   // The WORK-type rituals (kindle / grooming / retro / delegation review /
-  // consulting / side projects / new bookies / reading / learning) default to
-  // the emails calendar setting (→ OM), still per-kind configurable.
+  // new bookies / reading — plus the retired consulting / side projects / learning
+  // kinds, still routed here for any old blocks) default to the emails calendar
+  // setting (→ OM), still per-kind configurable.
   return cals?.[kind] ?? cals?.emails ?? legacy;
 }
 
@@ -261,13 +294,16 @@ const GROOMING_DURATION_MINUTES = 60;
 const RETRO_DURATION_MINUTES = 60;
 const DELEGATION_REVIEW_DURATION_MINUTES = 30;
 const WALK_DURATION_MINUTES = 45;
-const CONSULTING_DURATION_MINUTES = 60;
-const SIDE_PROJECTS_DURATION_MINUTES = 90;
 const NEW_BOOKIES_DURATION_MINUTES = 30;
 const READING_DURATION_MINUTES = 60;
-const LEARNING_DURATION_MINUTES = 60;
-// WORK rituals prefer the afternoon (from this hour) before spilling earlier.
+// WORK rituals PREFER the afternoon (from this hour) with a morning fallback, so
+// deep work — placed first (see the propose route / engine) — keeps first claim
+// on the mornings and the rituals fit around it.
 const WORK_RITUAL_AFTERNOON_HOUR = 12;
+// New bookies sits in the evening: Mon/Fri, 18:00–22:00 window, outside working
+// hours (the work-run rule does not apply there).
+const NEW_BOOKIES_WINDOW_START_HOUR = NEW_BOOKIES_EVENING_HOUR; // 18:00
+const NEW_BOOKIES_WINDOW_END_HOUR = 22; // 22:00
 
 export interface ProposeRitualsInput {
   config: WorkflowConfig;
@@ -284,6 +320,13 @@ export interface ProposeRitualsInput {
   // it is placed ONLY on a listed day that is also a working day. Absent or empty
   // → no walks at all. Every other ritual is unaffected.
   walkDays?: string[];
+  // Which rituals to place. 'daily' places only the per-day rituals
+  // (walk / lunch / exercise / emails); 'weekly' places only the weekly rituals
+  // (kindle / delegation review / grooming / retro / new bookies / reading).
+  // 'all' (the default) places both. The propose route places 'daily' BEFORE task
+  // blocks (so lunch/exercise structure the day) and 'weekly' AFTER them (so deep
+  // work claims the mornings first and the weekly work rituals fit around it).
+  phase?: 'all' | 'daily' | 'weekly';
 }
 
 // Absolute ms for an hour/minute on a working day (local).
@@ -400,6 +443,8 @@ export function placeWeekRituals(params: {
   // default): the prep-candidates route reserves ritual time before walks are
   // picked, so it passes nothing here.
   walkDays?: string[];
+  // Which rituals to place (see ProposeRitualsInput.phase). Defaults to 'all'.
+  phase?: 'all' | 'daily' | 'weekly';
 }): ProposedBlock[] {
   return proposeRitualBlocks({
     config: params.config,
@@ -409,6 +454,7 @@ export function placeWeekRituals(params: {
     existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(params.weekEvents),
     outOfOfficeDates: params.outOfOfficeDates,
     walkDays: params.walkDays,
+    phase: params.phase,
   });
 }
 
@@ -429,9 +475,12 @@ export function proposedBlockToBusyInterval(block: ProposedBlock): BusyInterval 
 
 // Afternoon-preferred (12:00 → working-hours end) + whole-working-day fallback
 // windows across the given days, for the WORK-type rituals (Kindle notes /
-// backlog grooming / retrospective). Mirrors the engine's afternoon default so
-// these land in the afternoon before spilling into the morning; the fallback
-// tier keeps them landing SOMEWHERE on a busy day.
+// delegation review / backlog grooming / reading). Mirrors the engine's afternoon
+// default so these prefer the afternoon; the whole-day fallback tier keeps them
+// landing SOMEWHERE on a busy day. This is intentionally two-tier: deep work is
+// placed FIRST (see the propose route), so by the time these place it has already
+// taken the morning space it needs and any morning fallback used here is space
+// deep work did not want.
 function afternoonWorkWindows(days: WorkingDay[], workingHoursEnd: TimeOfDay): Window[] {
   return buildWindowsForTask(
     undefined,
@@ -494,7 +543,12 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
 
   const proposals: ProposedBlock[] = [];
 
+  const phase = input.phase ?? 'all';
+  const placeDaily = phase !== 'weekly';
+  const placeWeekly = phase !== 'daily';
+
   for (const day of workingDays) {
+    if (!placeDaily) break;
     const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
 
     // --- Walk (break) — mid-morning, ideal 10:30–11:30, widening to 09:30–12:00
@@ -659,6 +713,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   // --- Weekly rituals (placed a fixed number of times across the week, on
   // distinct days, deduped by title). Placed after the daily rituals so they
   // flow around them. ---
+  if (placeWeekly) {
 
   // Kindle notes (work) — WEEKLY x2, 30 min each, afternoon preference: place on
   // up to two DISTINCT working days (earliest-day-first), skipping any day that
@@ -793,92 +848,71 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     }
   }
 
-  // --- Weekly WORK singles (consulting / side projects / new bookies / reading /
-  // learning) — each placed ONCE for the week, afternoon preference, deduped by
-  // title across the whole week. Spread across DISTINCT days where free slots
-  // allow (prefer a day none of these has taken yet) rather than piling onto
-  // Monday. ---
-  {
-    const weeklySingles: Array<{
-      title: string;
-      category: string;
-      durationMinutes: number;
-      idSuffix: string;
-      reason: string;
-    }> = [
-      {
-        title: CONSULTING_TITLE,
-        category: 'Consulting',
-        durationMinutes: CONSULTING_DURATION_MINUTES,
-        idSuffix: 'ritual-consulting',
-        reason: 'Weekly consulting (DBC) time.',
-      },
-      {
-        title: SIDE_PROJECTS_TITLE,
-        category: 'Side projects',
-        durationMinutes: SIDE_PROJECTS_DURATION_MINUTES,
-        idSuffix: 'ritual-side-projects',
-        reason: 'Weekly side-projects time.',
-      },
-      {
-        title: NEW_BOOKIES_TITLE,
+  // --- New bookies (evening) — WEEKLY x1, 30 min, Monday PREFERRED then Friday,
+  // in the 18:00–22:00 window OUTSIDE working hours. This is deliberately not a
+  // working-hours slot: it just avoids busy events on the 15-min grid, and the
+  // work-run rule does NOT apply in the evening. Deduped by title across the week.
+  // Monday first; if Monday's evening is full or already past, fall back to Friday. ---
+  if (!presentAnyDay.has(NEW_BOOKIES_TITLE)) {
+    const newBookiesDurationMs = NEW_BOOKIES_DURATION_MINUTES * MS_PER_MINUTE;
+    // Monday (getDay 1) before Friday (getDay 5); other days never host it.
+    const eveningDays = workingDays
+      .filter(d => d.date.getDay() === 1 || d.date.getDay() === 5)
+      .sort((a, b) => a.date.getDay() - b.date.getDay());
+    for (const day of eveningDays) {
+      const startMs = findFreeSlot(
+        msAtDay(day, NEW_BOOKIES_WINDOW_START_HOUR, 0),
+        msAtDay(day, NEW_BOOKIES_WINDOW_END_HOUR, 0),
+        newBookiesDurationMs,
+        busy,
+        nowMs,
+        false
+      );
+      if (startMs === null) continue;
+      const start = timeStr(startMs);
+      proposals.push({
+        id: `${day.dateStr}-${start}-ritual-new-bookies`,
         category: 'New bookies',
+        kind: 'ritual',
+        title: NEW_BOOKIES_TITLE,
+        date: day.dateStr,
+        start,
         durationMinutes: NEW_BOOKIES_DURATION_MINUTES,
-        idSuffix: 'ritual-new-bookies',
-        reason: 'Weekly new-bookies slot.',
-      },
-      {
-        title: READING_TITLE,
-        category: 'Reading',
-        durationMinutes: READING_DURATION_MINUTES,
-        idSuffix: 'ritual-reading',
-        reason: 'Weekly reading time.',
-      },
-      {
-        title: LEARNING_TITLE,
-        category: 'Learning',
-        durationMinutes: LEARNING_DURATION_MINUTES,
-        idSuffix: 'ritual-learning',
-        reason: 'Weekly learning & development time.',
-      },
-    ];
-    // Days already hosting one of these singles this pass — deprioritised so the
-    // next single lands on a fresh day first.
-    const usedDays = new Set<string>();
-    for (const single of weeklySingles) {
-      if (presentAnyDay.has(single.title)) continue;
-      // Unused days first (chronological), then already-used days (chronological).
-      const dayOrder = [...workingDays].sort((a, b) => {
-        const au = usedDays.has(a.dateStr) ? 1 : 0;
-        const bu = usedDays.has(b.dateStr) ? 1 : 0;
-        return au - bu; // stable sort keeps chronological order within each group
+        reason: 'Weekly new-bookies slot (Mon/Fri evening).',
       });
-      for (const day of dayOrder) {
-        const slot = findSlot(
-          afternoonWorkWindows([day], workingHoursEnd),
-          single.durationMinutes,
-          workRun,
-          busy,
-          nowMs
-        );
-        if (!slot) continue;
-        const start = timeStr(slot.startMs);
-        proposals.push({
-          id: `${slot.dateStr}-${start}-${single.idSuffix}`,
-          category: single.category,
-          kind: 'ritual',
-          title: single.title,
-          date: slot.dateStr,
-          start,
-          durationMinutes: single.durationMinutes,
-          reason: single.reason,
-        });
-        busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
-        usedDays.add(slot.dateStr);
-        break;
-      }
+      // Evening block: still busy, but the work-run rule never applies here.
+      busy.push({ start: startMs, end: startMs + newBookiesDurationMs });
+      break;
     }
   }
+
+  // --- Weekly WORK single (reading) — placed ONCE for the week, afternoon
+  // preference (morning fallback), deduped by title across the whole week. ---
+  if (!presentAnyDay.has(READING_TITLE)) {
+    const slot = findSlot(
+      afternoonWorkWindows(workingDays, workingHoursEnd),
+      READING_DURATION_MINUTES,
+      workRun,
+      busy,
+      nowMs
+    );
+    if (slot) {
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${slot.dateStr}-${start}-ritual-reading`,
+        category: 'Reading',
+        kind: 'ritual',
+        title: READING_TITLE,
+        date: slot.dateStr,
+        start,
+        durationMinutes: READING_DURATION_MINUTES,
+        reason: 'Weekly reading time.',
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+    }
+  }
+
+  } // end placeWeekly
 
   return proposals;
 }

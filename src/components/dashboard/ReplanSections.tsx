@@ -32,6 +32,7 @@ export function ReplanSections({
     additionIncluded,
     additionResults,
     deletionIncluded,
+    removalIncluded,
     showUnchanged,
     setShowUnchanged,
     carryBlocks,
@@ -41,6 +42,7 @@ export function ReplanSections({
     toggle,
     toggleAddition,
     toggleDeletion,
+    toggleRemoval,
     results,
     hasResults,
   } = actions;
@@ -48,6 +50,7 @@ export function ReplanSections({
   const stale = data.stale ?? [];
   const additions = data.additions ?? [];
   const deletions = data.deletions ?? [];
+  const removals = data.removals ?? [];
   const tomorrowBlocks = data.tomorrowBlocks ?? [];
   // End-of-week mode: missed + couldn't-fit task blocks move into the carry-over
   // section, so they are filtered out of their usual sections here.
@@ -330,6 +333,66 @@ export function ReplanSections({
                     <div className="mt-1 text-xs text-gray-500">
                       <span className="line-through">{slotLabel(d.oldDate, d.oldStart)}</span>
                       <span className="ml-1.5 text-gray-400">now clashes with a meeting</span>
+                    </div>
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Retired rituals + mis-placed new-bookies — remove (no new slot) */}
+      {removals.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+            Rituals to remove ({removals.length})
+          </h3>
+          <ul className="space-y-2">
+            {removals.map(r => {
+              const result = results[r.googleEventId];
+              const isIn = removalIncluded.has(r.googleEventId);
+              const label = r.reason === 'retired' ? 'removed (retired)' : 'removed (mis-placed)';
+              const note =
+                r.reason === 'retired'
+                  ? 'this ritual is no longer scheduled'
+                  : 'wrong slot — re-added in the evening (Mon/Fri)';
+              return (
+                <li
+                  key={r.googleEventId}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggleRemoval(r.googleEventId)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
+                        {label}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(r.titles)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      <span className="line-through">{slotLabel(r.oldDate, r.oldStart)}</span>
+                      <span className="ml-1.5 text-gray-400">{note}</span>
                     </div>
                   </div>
                   {result &&
@@ -750,6 +813,7 @@ export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
     data.unplaceable.length > 0 ||
     (data.stale?.length ?? 0) > 0 ||
     (data.additions?.length ?? 0) > 0 ||
-    (data.deletions?.length ?? 0) > 0
+    (data.deletions?.length ?? 0) > 0 ||
+    (data.removals?.length ?? 0) > 0
   );
 }

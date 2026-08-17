@@ -32,8 +32,11 @@ import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 import {
   buildWindowsForTask,
+  deepWorkMorningWindows,
   excludeMorningWindows,
+  findDeepWorkMorningPlacement,
   findSlot,
+  isDeepWork,
   MORNING_PREP_EXCLUSION_MINUTES,
   parseTimeOfDay,
   preferredWindowsForCategory,
@@ -43,7 +46,11 @@ import {
   type Window,
   type WorkingDay,
 } from './engine';
-import { proposeRitualBlocks } from './rituals';
+import {
+  newBookiesPlacementIsValid,
+  proposeRitualBlocks,
+  RETIRED_RITUAL_TITLES,
+} from './rituals';
 import type { BusyInterval, ProposedBlock } from './types';
 
 // An app-created block on this week's calendar. `startMs`/`endMs` are its actual
@@ -266,6 +273,25 @@ export interface ReplanInput {
   outOfOfficeDates?: Set<string>;
 }
 
+// A future ritual block to REMOVE from the calendar (delete the event + its
+// tracking record). Two causes:
+//   * 'retired'   — its title is a retired ritual (Side projects / Learning /
+//                   Consulting), no longer scheduled at all.
+//   * 'misplaced' — a 🎰 New bookies block that breaks the current placement rule
+//                   (wrong day, or before 18:00). It is removed here and a fresh,
+//                   correctly-placed one is proposed as a ritual addition.
+export type ReplanRemovalReason = 'retired' | 'misplaced';
+export interface ReplanRemoval {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  titles: string[];
+  oldDate: string;
+  oldStart: string;
+  durationMinutes: number;
+  reason: ReplanRemovalReason;
+}
+
 // A break block that now conflicts with a meeting. Breaks have no fixed home, so
 // a conflicted future one is DELETED (calendar event + tracking record) rather
 // than re-slotted.
@@ -341,6 +367,9 @@ export interface ReplanResult {
   additions: ProposedBlock[];
   // Break blocks that now conflict with a meeting → delete (no fixed home).
   deletions: ReplanDeletion[];
+  // Future ritual blocks to remove: retired-ritual blocks and mis-placed
+  // 🎰 New bookies blocks (the latter are re-placed via `additions`).
+  removals: ReplanRemoval[];
   // Whether an evening-overflow window exists on any remaining working day. When
   // true but an unplaceable block still has no `overflowOption`, the evening
   // window filled up (earlier blocks reserved its slots) — the UI uses this to
@@ -381,9 +410,23 @@ export function planReplan(input: ReplanInput): ReplanResult {
   const kept: ReplanKept[] = [];
   const toMove: Array<{ block: ReplanBlock; reason: ReplanReason }> = [];
   const deletions: ReplanDeletion[] = [];
+  const removals: ReplanRemoval[] = [];
   // Kept blocks re-enter the busy set for re-slotting; lunch rituals keep their
   // break flag so they split runs rather than count as work.
   const keptBusy: BusyMs[] = [];
+
+  const removalOf = (block: ReplanBlock, reason: ReplanRemovalReason): ReplanRemoval => ({
+    googleEventId: block.googleEventId,
+    googleIntegrationId: block.googleIntegrationId,
+    category: block.category,
+    titles: block.titles,
+    oldDate: block.date,
+    oldStart: block.start,
+    durationMinutes: block.durationMinutes,
+    reason,
+  });
+  // Is this a not-yet-ended block whose title is a retired ritual? (Removed.)
+  const isRetiredTitle = (title: string) => RETIRED_RITUAL_TITLES.includes(title.trim());
 
   const keep = (block: ReplanBlock) => {
     kept.push({
@@ -405,6 +448,25 @@ export function planReplan(input: ReplanInput): ReplanResult {
   );
 
   for (const block of blocks) {
+    const notEnded = block.endMs > nowMs;
+    // Retired-ritual blocks that haven't ended yet are proposed for REMOVAL (the
+    // ritual is gone, so leaving a future block on the calendar is wrong).
+    if (notEnded && block.titles.some(isRetiredTitle)) {
+      removals.push(removalOf(block, 'retired'));
+      continue;
+    }
+    // A future 🎰 New bookies block that breaks the placement rule (wrong day, or
+    // before 18:00) — or that now conflicts with a meeting — is removed and
+    // re-placed as a ritual addition per the evening rule (see additions below).
+    if (notEnded && block.ritualKind === 'newBookies') {
+      const validlyPlaced =
+        newBookiesPlacementIsValid(block.date, block.start) &&
+        !overlapsAny(block.startMs, block.endMs, otherBusyMs);
+      if (!validlyPlaced) {
+        removals.push(removalOf(block, 'misplaced'));
+        continue;
+      }
+    }
     if (block.done) {
       keep(block);
     } else if (block.ritualKind && block.endMs <= nowMs) {
@@ -502,9 +564,41 @@ export function planReplan(input: ReplanInput): ReplanResult {
       windows = excludeMorningWindows(windows, workingDays, MORNING_PREP_EXCLUSION_MINUTES);
       windows = capWindows(windows, block.mustEndBeforeMs);
     }
-    const slot = findSlot(windows, block.durationMinutes, workRun, busy, nowMs);
+    // Deep-work movers keep their morning claim: try the morning-flex placement
+    // first (slide later, then shrink to a 60-min floor to fit around a meeting),
+    // before the normal category windows. Not applied to prep blocks (which have a
+    // mustEndBeforeMs constraint and their own morning exclusion). A shrunk morning
+    // placement carries its reduced duration through to the move.
+    let placedStartMs: number | null = null;
+    let placedDateStr = '';
+    let placedDuration = block.durationMinutes;
+    if (block.mustEndBeforeMs === undefined && isDeepWork(block.category)) {
+      const morningWindows = deepWorkMorningWindows(
+        preferredWindowsForCategory(config, block.category, workingHoursEnd),
+        workingDays
+      );
+      if (morningWindows.length > 0) {
+        const mp = findDeepWorkMorningPlacement(
+          (dur, wr) => findSlot(morningWindows, dur, wr, busy, nowMs),
+          block.durationMinutes,
+          workRun
+        );
+        if (mp) {
+          placedStartMs = mp.slot.startMs;
+          placedDateStr = mp.slot.dateStr;
+          placedDuration = mp.duration;
+        }
+      }
+    }
+    if (placedStartMs === null) {
+      const slot = findSlot(windows, block.durationMinutes, workRun, busy, nowMs);
+      if (slot) {
+        placedStartMs = slot.startMs;
+        placedDateStr = slot.dateStr;
+      }
+    }
 
-    if (!slot) {
+    if (placedStartMs === null) {
       // No fit before the meeting → stale for prep blocks; unplaceable otherwise.
       if (block.mustEndBeforeMs !== undefined) {
         stale.push(staleOf(block, reason));
@@ -530,12 +624,16 @@ export function planReplan(input: ReplanInput): ReplanResult {
       titles: block.titles,
       oldDate: block.date,
       oldStart: block.start,
-      newDate: slot.dateStr,
-      newStart: timeStr(slot.startMs),
-      durationMinutes: block.durationMinutes,
+      newDate: placedDateStr,
+      newStart: timeStr(placedStartMs),
+      durationMinutes: placedDuration,
       reason,
     });
-    busy.push({ start: slot.startMs, end: slot.endMs, isBreak: block.isBreak });
+    busy.push({
+      start: placedStartMs,
+      end: placedStartMs + placedDuration * MS_PER_MINUTE,
+      isBreak: block.isBreak,
+    });
   }
 
   // --- Overflow options: an optional evening slot for each unplaceable block ---
@@ -565,6 +663,19 @@ export function planReplan(input: ReplanInput): ReplanResult {
       end: new Date(b.end),
       ...(b.isBreak ? { isBreak: true } : {}),
     }));
+    // Strip the titles of blocks we're REMOVING from the per-date ritual dedupe
+    // set, so a removed ritual can be re-proposed as an addition — specifically a
+    // mis-placed 🎰 New bookies block, which is then re-placed correctly in the
+    // evening. Retired-ritual titles are never proposed regardless, so stripping
+    // them is harmless. Clone so the caller's map is untouched.
+    const ritualTitlesByDate: Record<string, Set<string>> = {};
+    for (const [date, set] of Object.entries(input.existingRitualTitlesByDate)) {
+      ritualTitlesByDate[date] = new Set(set);
+    }
+    for (const removal of removals) {
+      const set = ritualTitlesByDate[removal.oldDate];
+      if (set) for (const title of removal.titles) set.delete(title.trim());
+    }
     // No `walkDays` here: the 🚶 walk is opt-in per day (chosen in the plan
     // wizard), so replan never resurrects a walk on a day that has none. An
     // already-scheduled walk that now conflicts is still re-slotted above (its
@@ -574,11 +685,11 @@ export function planReplan(input: ReplanInput): ReplanResult {
       busyIntervals: additionBusy,
       weekStart,
       now,
-      existingRitualTitlesByDate: input.existingRitualTitlesByDate,
+      existingRitualTitlesByDate: ritualTitlesByDate,
     });
   }
 
-  return { kept, moves, unplaceable, stale, additions, deletions, overflowConfigured: ofWindows.length > 0 };
+  return { kept, moves, unplaceable, stale, additions, deletions, removals, overflowConfigured: ofWindows.length > 0 };
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers

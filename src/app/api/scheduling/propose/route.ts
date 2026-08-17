@@ -61,16 +61,21 @@ export async function POST(request: NextRequest) {
     }
     const walkDays = rawWalkDays.filter(d => weekDateStrs.has(d));
 
-    // Daily lunch/exercise/emails rituals are placed FIRST (before task
-    // allocation), around the calendar's existing busy time + any accepted prep
-    // blocks, so tasks flow around them. A day that already has a ritual event
+    // DAILY rituals (walk / lunch / exercise / emails) are placed FIRST (before
+    // task allocation), around the calendar's existing busy time + any accepted
+    // prep blocks, so tasks flow around them. A day that already has a ritual event
     // ("🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails") is skipped for that ritual
     // (dedupe by exact title from the week's events). The prep-candidates route
     // places rituals with the SAME helper + inputs BEFORE proposing prep, so prep
     // never steals the exercise slot; the accepted prep it hands back here never
     // overlaps the ritual slots, so this pass re-derives identical placements.
+    //
+    // The WEEKLY WORK rituals (kindle / delegation review / grooming / retro /
+    // new bookies / reading) are placed LATER — AFTER task blocks — so deep work
+    // claims the mornings first and the weekly rituals fit around it (Dave's rule:
+    // deep work has first claim on the mornings, everything else fits around it).
     const prepIntervals = prepBlocks.map(proposedBlockToBusyInterval);
-    const ritualBlocks = placeWeekRituals({
+    const dailyRituals = placeWeekRituals({
       config: ctx.config,
       weekEvents: ctx.weekEvents,
       busyIntervals: [...ctx.busyIntervals, ...prepIntervals],
@@ -78,14 +83,15 @@ export async function POST(request: NextRequest) {
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
       walkDays,
+      phase: 'daily',
     });
 
-    // Accepted prep + placed ritual blocks occupy time before task placement
+    // Accepted prep + placed daily ritual blocks occupy time before task placement
     // (lunch/exercise tagged as breaks, so they split work runs).
     const busyIntervals = [
       ...ctx.busyIntervals,
       ...prepIntervals,
-      ...ritualBlocks.map(proposedBlockToBusyInterval),
+      ...dailyRituals.map(proposedBlockToBusyInterval),
     ];
 
     const priorityIds = new Set(priorityGids);
@@ -145,16 +151,36 @@ export async function POST(request: NextRequest) {
       outOfOfficeDates: ctx.outOfOfficeDates,
     }, unplaceable);
 
+    // WEEKLY WORK rituals placed AFTER task blocks: deep work (placed first inside
+    // proposeBlocks) has already claimed the mornings, so these fit around it —
+    // afternoon-preferred with a morning fallback only for space deep work left.
+    const busyWithTasks = [
+      ...busyIntervals,
+      ...taskBlocks.map(proposedBlockToBusyInterval),
+    ];
+    const weeklyRituals = placeWeekRituals({
+      config: ctx.config,
+      weekEvents: ctx.weekEvents,
+      busyIntervals: busyWithTasks,
+      weekStart: ctx.weekStart,
+      now: ctx.now,
+      outOfOfficeDates: ctx.outOfOfficeDates,
+      walkDays,
+      phase: 'weekly',
+    });
+    const ritualBlocks = [...dailyRituals, ...weeklyRituals];
+
     const { workRun, workingDays, configuredWorkingDaysPerWeek, availableWorkingDaysPerWeek } =
       resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now, ctx.outOfOfficeDates);
 
     // --- Break gaps (post-placement) ---
     // After ALL proposals are placed (rituals + prep + tasks), turn the buffer the
     // work-run rule leaves after each ~2h run into visible "☕ Break" events. Fed
-    // the FINAL busy timeline (calendar busy + prep + rituals + every task block).
+    // the FINAL busy timeline (calendar busy + prep + daily + weekly rituals +
+    // every task block).
     const finalBusyForBreaks = [
-      ...busyIntervals,
-      ...taskBlocks.map(proposedBlockToBusyInterval),
+      ...busyWithTasks,
+      ...weeklyRituals.map(proposedBlockToBusyInterval),
     ];
     const breakBlocks = proposeBreakBlocks({
       workingDays,
@@ -167,13 +193,13 @@ export async function POST(request: NextRequest) {
     const proposals = [...prepBlocks, ...ritualBlocks, ...breakBlocks, ...taskBlocks];
 
     // --- Spare-capacity assessment (computed AFTER all proposals) ---
-    // Busy = calendar busy + accepted prep + placed rituals (already in
-    // busyIntervals) + every proposed task/reserved block + break gaps. Measure the
+    // Busy = calendar busy + accepted prep + daily rituals (in busyWithTasks) +
+    // every proposed task/reserved block + weekly rituals + break gaps. Measure the
     // usable free work time left in the remaining week under the same
     // working-window and work-run model the engine used.
     const spareBusyMs = [
-      ...busyIntervals,
-      ...taskBlocks.map(proposedBlockToBusyInterval),
+      ...busyWithTasks,
+      ...weeklyRituals.map(proposedBlockToBusyInterval),
       ...breakBlocks.map(proposedBlockToBusyInterval),
     ].map(i => ({
       start: i.start.getTime(),
