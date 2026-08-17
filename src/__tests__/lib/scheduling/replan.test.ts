@@ -819,10 +819,10 @@ describe('planReplan - task backfill', () => {
     expect(first!.task?.gid).toBe('a1');
   });
 
-  // A category with no weeklyCount (General Todos) has no defined shortfall, so
-  // an automatic mid-week top-up must never schedule its whole pool into every
-  // free gap. Quota-less work is picked by hand in the plan wizard instead.
-  it('never backfills a quota-less category', () => {
+  // Quota-less General Todos backfill into whatever working-hours space is left
+  // after the quota'd categories have taken their slots — surfaced as individually
+  // tickable blocks in the review so Dave still chooses per one.
+  it('backfills quota-less General Todos into leftover space, after the quota\'d categories', () => {
     const { backfill } = run({
       blocks: [],
       config: makeConfig({
@@ -835,10 +835,42 @@ describe('planReplan - task backfill', () => {
         cand({ gid: 't1', signal: 'todo' }),
         cand({ gid: 't2', signal: 'todo' }),
       ],
-      existingScheduledCounts: { Deep: 2 }, // Deep met; only quota-less todos left
+      existingScheduledCounts: { Deep: 2 }, // Deep met; leftover space fills with todos
       now: WED_8AM,
     });
-    expect(backfill).toHaveLength(0);
+    const todos = backfill.filter(b => b.category === 'Todos');
+    expect(todos.length).toBeGreaterThanOrEqual(1);
+    expect(todos.map(b => b.task?.gid).sort()).toEqual(['t1', 't2']);
+  });
+
+  // Deep work leads every remaining working morning: a mid-week replan proposes a
+  // morning deep-work block for each remaining weekday that hasn't got one.
+  it('backfills a morning deep-work block for each remaining day lacking one (daily deep work)', () => {
+    const config = makeConfig({
+      quotas: {
+        'Writing/Deep Work': {
+          weeklyCount: 3,
+          targetLength: '1.5h',
+          grouped: true,
+          daily: true,
+          preferredTimes: ['08:30-11:00'],
+        },
+      },
+      scheduling: {
+        workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        workingHours: { start: '08:30', end: '17:00' },
+      },
+    });
+    config.typeMapping = { 'Writing/Deep Work': ['deep'] };
+    const { backfill } = run({
+      blocks: [],
+      config,
+      candidateTasks: [cand({ gid: 'd1', signal: 'deep' })],
+      now: WED_8AM, // Wednesday 08:00 → remaining working days Wed, Thu, Fri
+    });
+    const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
+    expect(deep.map(b => b.date).sort()).toEqual(['2026-07-15', '2026-07-16', '2026-07-17']);
+    expect(deep.every(b => b.start >= '08:30' && b.start < '11:00')).toBe(true);
   });
 
   it('proposes no backfill for a category whose quota is already met', () => {

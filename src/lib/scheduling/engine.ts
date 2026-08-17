@@ -800,6 +800,17 @@ export function proposeBlocks(
     // Effective target honours the `daily` / `scaleToTasks` overrides (see
     // effectiveWeeklyCount) before falling back to the fixed weeklyCount.
     const cfg = config.taskQuotas[quota.category];
+    // Deep work leads EVERY working morning (Dave's rule): it is placed
+    // one-block-per-working-day by placeDeepWorkDaily, which skips any day that
+    // already holds a deep-work block (via the per-date spread state seeded from
+    // existingCategoryCountsByDate). Its "remaining" is therefore simply the
+    // number of working days in the plan window — NOT weeklyCount minus a global
+    // existingScheduledCounts total. weeklyCount for deep work counts the TASKS
+    // that rotate across the mornings, capped at selection time, not the blocks.
+    if (isDeepWork(quota.category) && cfg?.daily === true) {
+      if (workingDays.length > 0) remainingByCategory.set(quota.category, workingDays.length);
+      continue;
+    }
     const candidateCountForCat = (tasksByCategory.get(quota.category) ?? []).length;
     const weeklyCount = cfg
       ? effectiveWeeklyCount(cfg, {
@@ -1021,7 +1032,105 @@ export function proposeBlocks(
     return a < b ? -1 : a > b ? 1 : 0;
   });
 
+  // --- Deep-work daily placement -------------------------------------------
+  // Deep work owns the mornings: place ONE block per working day, in the morning,
+  // using the morning-flex placement (slide the start later within the morning,
+  // then shrink in 15-min steps to a 60-min floor to fit around a meeting). The
+  // selected deep-work tasks ROTATE across the mornings — cycling when there are
+  // more mornings than tasks, so a task may recur on several days (e.g. 3 tasks
+  // over 5 mornings: t0 Mon, t1 Tue, t2 Wed, t0 Thu, t1 Fri). A morning with no
+  // selected task (none were picked) gets a reserved deep-work block. A day whose
+  // morning can't fit even a 60-min block is skipped for that day (its morning is
+  // genuinely full — the "good reason" not to schedule deep work). Days that
+  // already hold a deep-work block (seeded into the per-date spread state from
+  // existingCategoryCountsByDate) are left alone, so a mid-week replan only fills
+  // the mornings still lacking one. weeklyCount counts the rotating TASKS, never
+  // the blocks. This runs for the deep-work category with `daily` set (its live
+  // config), taking precedence over the grouped/normal placement below.
+  const placeDeepWorkDaily = (category: string): void => {
+    const categoryDuration = categoryDurationFor(category);
+    const preferredWindows = preferredWindowsFor(category);
+    const categoryTasks = tasksByCategory.get(category) ?? [];
+    const catCount = catCountByCategory.get(category)!;
+    let rotation = 0;
+    for (const wd of workingDays) {
+      if ((catCount[wd.dateStr] ?? 0) > 0) continue; // this morning already has deep work
+      let morningWindows = deepWorkMorningWindows(preferredWindows, [wd]);
+      if (morningWindows.length === 0) {
+        // No configured morning preferred window: fall back to the day's morning
+        // working hours (start → noon) so deep work still leads the morning.
+        const noonMs = new Date(
+          wd.date.getFullYear(), wd.date.getMonth(), wd.date.getDate(), 12, 0, 0, 0
+        ).getTime();
+        if (noonMs > wd.whStartMs) {
+          morningWindows = [{
+            date: wd.date,
+            dateStr: wd.dateStr,
+            startMs: wd.whStartMs,
+            endMs: noonMs,
+            preferred: false,
+            bestTimeMatch: false,
+          }];
+        }
+      }
+      if (morningWindows.length === 0) continue;
+      const placement = findDeepWorkMorningPlacement(
+        (dur, wr) => findSlot(morningWindows, dur, wr, busy, nowMs),
+        categoryDuration,
+        workRun
+      );
+      if (!placement) continue; // even a 60-min block won't fit this morning → skip
+      const { slot, duration: placedDuration, trimmedMinutes } = placement;
+      const start = timeStr(slot.startMs);
+      const trimNote =
+        trimmedMinutes > 0 ? ` Shortened ${trimmedMinutes} min to fit the morning.` : '';
+      const trimField =
+        trimmedMinutes > 0 ? { trimmedFromMinutes: placedDuration + trimmedMinutes } : {};
+      const rotatedTask =
+        categoryTasks.length > 0 ? categoryTasks[rotation % categoryTasks.length] : undefined;
+      rotation += 1;
+      if (rotatedTask) {
+        proposals.push({
+          id: `${slot.dateStr}-${start}-${category}`,
+          category,
+          task: {
+            gid: rotatedTask.gid,
+            adhocId: rotatedTask.adhocId,
+            title: rotatedTask.title,
+            integrationId: rotatedTask.integrationId,
+          },
+          date: slot.dateStr,
+          start,
+          durationMinutes: placedDuration,
+          reason: buildReason(category, slot.preferred, rotatedTask) + trimNote,
+          ...trimField,
+        });
+      } else {
+        proposals.push({
+          id: `${slot.dateStr}-${start}-${category}`,
+          category,
+          date: slot.dateStr,
+          start,
+          durationMinutes: placedDuration,
+          reason:
+            `Reserved ${category} time — deep work leads the morning; no task assigned to this block.` +
+            trimNote,
+          ...trimField,
+        });
+      }
+      busy.push({ start: slot.startMs, end: slot.endMs });
+      catCount[wd.dateStr] = (catCount[wd.dateStr] ?? 0) + 1;
+    }
+  };
+
   const placeCategory = (category: string): void => {
+    // Deep work with the `daily` cadence gets its own morning-led, one-per-day
+    // placement (rotating tasks across the mornings), ahead of the grouped/normal
+    // paths below.
+    if (isDeepWork(category) && config.taskQuotas[category]?.daily === true) {
+      placeDeepWorkDaily(category);
+      return;
+    }
     // Category-level block length: a per-category override, else the parsed
     // targetLength (default 30). Grouped/reserved blocks use this; a single-task
     // block may further override it per task (see below).

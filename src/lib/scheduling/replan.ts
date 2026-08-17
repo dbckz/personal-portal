@@ -278,8 +278,9 @@ export interface ReplanInput {
   // Unscheduled candidate tasks (Asana + ad-hoc, already excluding anything
   // scheduled this week or completed — same pool the propose route places from).
   // When present, planReplan fills the remaining week's free time with additional
-  // task blocks for each category's remaining weekly-quota shortfall, exactly like
-  // the full plan does (deep-work morning priority included). Omit to skip backfill.
+  // task blocks: first each quota'd category's remaining shortfall (deep-work
+  // morning priority included), then any leftover space with quota-less General
+  // Todos blocks, exactly like the full plan does. Omit to skip backfill.
   candidateTasks?: CandidateTask[];
   // Per-category count of blocks ALREADY scheduled this week (kept + moved + done +
   // ended). Reduces each category's remaining quota so backfill only proposes the
@@ -729,11 +730,15 @@ export function planReplan(input: ReplanInput): ReplanResult {
   // already exclude anything scheduled this week or completed. Evening-overflow
   // blocks are dropped — backfill only fills working-hours free time.
   //
-  // Only categories WITH a configured weeklyCount backfill automatically: a
-  // quota-less category (General Todos) has no defined shortfall, and filling
-  // every free gap with the whole todo pool is exactly what an automatic top-up
-  // must not do. Quota-less work is scheduled where Dave picks it himself — the
-  // plan wizard's tasks step.
+  // Quota-less categories (General Todos) backfill too: after the quota'd
+  // categories have taken their slots, any working-hours free time left is filled
+  // with additional General Todos blocks (proposeBlocks orders quota-less
+  // categories LAST, so filler never steals a morning from deep work etc., and
+  // places one block per selected todo, stopping when the free time runs out).
+  // They surface as individually tickable checkboxes in the replan review, so
+  // Dave still gets to add or drop each one. maxTasksPerDay is NOT enforced by
+  // proposeBlocks (only the spread heuristic fans blocks across days), so a very
+  // large todo pool can pile several onto one day.
   let backfill: ProposedBlock[] = [];
   const backfillQuotas: CapacityQuota[] = Object.entries(config.taskQuotas ?? {}).map(
     ([category, quota]) => ({
@@ -743,15 +748,14 @@ export function planReplan(input: ReplanInput): ReplanResult {
       types: config.typeMapping?.[category] ?? [],
     })
   );
-  const quotaCandidates = (input.candidateTasks ?? []).filter(t => {
-    const category = classifyBlockCategoryWithCatchAll(t.typeSignals, backfillQuotas);
-    return category !== null && config.taskQuotas?.[category]?.weeklyCount !== undefined;
-  });
-  if (quotaCandidates.length > 0) {
+  const backfillCandidates = (input.candidateTasks ?? []).filter(
+    t => classifyBlockCategoryWithCatchAll(t.typeSignals, backfillQuotas) !== null
+  );
+  if (backfillCandidates.length > 0) {
     backfill = proposeBlocks({
       config,
       busyIntervals: placementBusy,
-      candidateTasks: quotaCandidates,
+      candidateTasks: backfillCandidates,
       existingScheduledCounts: input.existingScheduledCounts ?? {},
       existingCategoryCountsByDate: input.existingCategoryCountsByDate,
       weekStart,

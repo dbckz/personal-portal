@@ -882,16 +882,60 @@ describe('proposeBlocks - daily categories (one block per working day)', () => {
     expect(new Set(deep.map(p => p.date)).size).toBe(2);
   });
 
-  it('subtracts existing scheduled deep-work blocks from the daily count', () => {
+  it('leaves a morning that already holds a deep-work block alone (per-day, not a global count)', () => {
+    // The daily shortfall is "remaining mornings lacking a deep-work block", so a
+    // day already holding one (seeded per-date) is skipped; the others still fill.
     const proposals = proposeBlocks(
       makeInput({
         config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday'] }),
         candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
-        existingScheduledCounts: { 'Writing/Deep Work': 1 },
+        existingCategoryCountsByDate: { '2026-07-13': { 'Writing/Deep Work': 1 } }, // Monday taken
       })
     );
-    // 3 working days minus 1 already scheduled = 2 new blocks.
-    expect(proposals.filter(p => p.category === 'Writing/Deep Work')).toHaveLength(2);
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(2);
+    expect(deep.map(p => p.date).sort()).toEqual(['2026-07-14', '2026-07-15']); // Tue + Wed
+  });
+
+  it('rotates the selected tasks across the mornings, repeating when there are more mornings than tasks', () => {
+    // 3 tasks over 5 mornings → t0 Mon, t1 Tue, t2 Wed, t0 Thu, t1 Fri.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
+        candidateTasks: ['a', 'b', 'c'].map(g => task({ gid: g, typeSignals: ['deep'] })),
+      })
+    );
+    const deep = proposals
+      .filter(p => p.category === 'Writing/Deep Work')
+      .sort((x, y) => x.date.localeCompare(y.date));
+    // Each morning is a single-task block carrying its rotated task.
+    expect(deep.map(p => p.task?.gid)).toEqual(['a', 'b', 'c', 'a', 'b']);
+  });
+
+  it('fills a morning with a reserved deep-work block when no tasks were selected', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday'] }),
+        candidateTasks: [],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(2);
+    expect(deep.every(p => p.task === undefined && /reserved/i.test(p.reason))).toBe(true);
+  });
+
+  it('skips a day whose morning is genuinely full, placing deep work on the others', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+        // Tuesday's whole morning (08:30–12:00) is booked solid → no 60-min gap.
+        busyIntervals: [{ start: new Date(2026, 6, 14, 8, 30), end: new Date(2026, 6, 14, 12, 0) }],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(4); // Tuesday skipped, the other four mornings kept
+    expect(deep.some(p => p.date === '2026-07-14')).toBe(false);
   });
 });
 
@@ -1041,31 +1085,32 @@ describe('proposeBlocks - soft work-run rule (4-tier search)', () => {
     // Only free gap is the morning 08:30-10:00; the rest of the day is busy from
     // 10:00. A grouped (container) block can't fit strictly at full 90 min
     // (08:30-10:00 abuts the busy block), but trims to 75 min (08:30-09:45, then a
-    // 15-min buffer) and leads the morning. Containers ARE trimmable.
+    // 15-min buffer) and leads the morning. Containers ARE trimmable. (Uses a
+    // grouped Engage category — daily deep work now takes the morning-flex path,
+    // which fills the gap at full 90 rather than the container 15-min trim.)
     const proposals = proposeBlocks(
       makeInput({
         config: makeConfig({
           quotas: {
-            'Writing/Deep Work': {
+            Engage: {
               weeklyCount: 1,
               targetLength: '1.5h',
               grouped: true,
-              daily: true,
               preferredTimes: ['08:30-11:00'],
             },
           },
-          typeMapping: { 'Writing/Deep Work': ['deep'] },
+          typeMapping: { Engage: ['engage'] },
           scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
         }),
-        candidateTasks: [task({ gid: 'd', typeSignals: ['deep'] })],
+        candidateTasks: [task({ gid: 'd', typeSignals: ['engage'] })],
         busyIntervals: [{ start: new Date(2026, 6, 13, 10, 0), end: new Date(2026, 6, 13, 17, 0) }],
       })
     );
-    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
-    expect(deep!.start).toBe('08:30');
-    expect(deep!.durationMinutes).toBe(75); // trimmed one 15-min step
-    expect(deep!.trimmedFromMinutes).toBe(90); // original length surfaced for the UI
-    expect(deep!.reason).toMatch(/trimmed 15 min to fit/i);
+    const engage = proposals.find(p => p.category === 'Engage');
+    expect(engage!.start).toBe('08:30');
+    expect(engage!.durationMinutes).toBe(75); // trimmed one 15-min step
+    expect(engage!.trimmedFromMinutes).toBe(90); // original length surfaced for the UI
+    expect(engage!.reason).toMatch(/trimmed 15 min to fit/i);
   });
 
   it('a SINGLE-task Blogs block is never trimmed: full length via the cap-ignored tier', () => {
