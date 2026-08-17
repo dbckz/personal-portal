@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import { Plus, RefreshCw } from 'lucide-react';
 
@@ -47,6 +47,22 @@ export function ExerciseTab({
   const [actionError, setActionError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
+
+  // Keep the calendar in sync without a tap: fire a throttled auto-sync once on
+  // mount, refreshing the sessions only if it changed something. Non-blocking and
+  // silent on error — the manual Sync button remains for explicit syncs.
+  const autoSyncedRef = useRef(false);
+  useEffect(() => {
+    if (autoSyncedRef.current) return;
+    autoSyncedRef.current = true;
+    api
+      .syncExerciseCalendar({ auto: true })
+      .then(result => {
+        const changed = !result.skipped && Boolean(result.created || result.updated || result.removed);
+        if (changed) onSessionChanged?.();
+      })
+      .catch(err => console.error('Auto exercise calendar sync failed:', err));
+  }, [onSessionChanged]);
 
   const syncFromCalendar = async () => {
     setSyncing(true);

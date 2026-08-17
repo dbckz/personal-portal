@@ -157,6 +157,9 @@ export interface UserData {
   // When the server last rebuilt past days' time records from the calendar.
   // Used to debounce the automatic reconcile the Analysis tab fires on load.
   timeSyncState?: { lastReconciledAt?: string };
+  // When the exercise calendar was last synced (auto or manual). Used to
+  // throttle the automatic sync the Exercise section fires on load.
+  exerciseSyncState?: { lastSyncedAt?: string };
   // Daily-review state: when the review was last completed (so the next review
   // only covers what has finished SINCE then) and the bare calendar-event titles
   // the user has dismissed as "not a task" (so they never resurface in review).
@@ -232,6 +235,7 @@ const DEFAULT_USER_DATA: UserData = {
   weeklyStats: {},
   eventAttributionRules: [],
   timeSyncState: {},
+  exerciseSyncState: {},
   dailyReviewState: {},
   weeklyRoutine: [],
 };
@@ -303,6 +307,7 @@ export async function getUserData(): Promise<UserData> {
         ? { analysisStartDate: parsed.analysisStartDate }
         : {}),
       timeSyncState: parsed.timeSyncState || {},
+      exerciseSyncState: parsed.exerciseSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
       weeklyRoutine: parsed.weeklyRoutine || [],
     };

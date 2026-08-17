@@ -22,15 +22,22 @@ import {
   updateCalendarEvent,
 } from './google-calendar';
 import { parsePlannedTitle, parseTimedExerciseTitle } from './exercise-parse';
+import {
+  DEFAULT_HORIZON_DAYS,
+  planRoutineMaterialisation,
+} from './exercise-routine-materialise';
 import { getEnabledGoogleIntegrations } from './integration-storage';
 import {
   attachCalendarEvent,
+  createSession,
+  getAllSessions,
   getSessionsByImportPrefix,
   deleteSession,
   updateSession,
   upsertSessionByImportKey,
   type CreateSessionInput,
 } from './storage/exercise';
+import { getWeeklyRoutine } from './storage/weekly-routine';
 import type { ExerciseSession, ParsedPlannedSession } from '@/types/life';
 
 const IMPORT_PREFIX = 'gcal:';
@@ -349,6 +356,79 @@ export async function pushPlannedSession(session: ExerciseSession): Promise<Exer
     `${IMPORT_PREFIX}${created.id}`
   );
   return attached ?? session;
+}
+
+// ---------------------------------------------------------------------------
+// Materialise: routine → portal → calendar
+// ---------------------------------------------------------------------------
+
+export interface MaterialiseResult {
+  created: number;
+  updated: number;
+  removed: number;
+}
+
+// Turn the standing weekly routine into dated planned sessions for the days
+// ahead and push them to the calendar, and reconcile future routine-sourced
+// sessions when the routine is edited. The pure planner
+// (planRoutineMaterialisation) decides what to do; this does the I/O.
+//
+// Meant to run right after pullPlannedSessions on the same sync: the pull has
+// already imported any hand-made calendar events for these days, so those dates
+// read as occupied here and the hand-made event wins. A session this creates is
+// pushed with the SAME `gcal:<eventId>` import key the pull computes, so the next
+// pull upserts it in place (keeping source 'routine') rather than duplicating it.
+//
+// Idempotent: a day already carrying a plan produces nothing, and an unchanged
+// routine session is left as-is.
+export async function materialiseRoutineSessions(
+  horizonDays: number = DEFAULT_HORIZON_DAYS
+): Promise<MaterialiseResult> {
+  const routine = await getWeeklyRoutine();
+  const sessions = await getAllSessions();
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const plan = planRoutineMaterialisation(routine, sessions, today, horizonDays);
+
+  let created = 0;
+  for (const shape of plan.create) {
+    const session = await createSession({
+      date: shape.date,
+      type: shape.type,
+      label: shape.label,
+      components: shape.components,
+      ...(shape.targetDistanceKm ? { targetDistanceKm: shape.targetDistanceKm } : {}),
+      planned: true,
+      completed: false,
+      source: 'routine',
+    });
+    await pushPlannedSession(session);
+    created++;
+  }
+
+  let updated = 0;
+  for (const { sessionId, shape } of plan.update) {
+    const next = await updateSession(sessionId, {
+      type: shape.type,
+      label: shape.label,
+      components: shape.components,
+      ...(shape.targetDistanceKm ? { targetDistanceKm: shape.targetDistanceKm } : {}),
+    });
+    if (!next) continue;
+    // Retitle the calendar event to match; pushPlannedSession updates in place
+    // because the session already carries its googleEventId.
+    await pushPlannedSession(next);
+    updated++;
+  }
+
+  let removed = 0;
+  const byId = new Map(sessions.map(s => [s.id, s]));
+  for (const sessionId of plan.remove) {
+    const session = byId.get(sessionId);
+    if (session) await removePlannedEvent(session);
+    if (await deleteSession(sessionId)) removed++;
+  }
+
+  return { created, updated, removed };
 }
 
 // Remove the calendar event backing a planned session. Failure is logged, not

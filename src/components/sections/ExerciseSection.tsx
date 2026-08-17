@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format, parseISO, subDays } from 'date-fns';
 import { Check, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 
@@ -44,6 +44,13 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
 
 const TODAY = () => format(new Date(), 'yyyy-MM-dd');
 
+// Did a sync response actually change any sessions? Used to avoid a needless
+// reload after a throttled/no-op auto sync.
+function syncChangedSomething(result: Awaited<ReturnType<typeof api.syncExerciseCalendar>>): boolean {
+  if (result.skipped) return false;
+  return Boolean(result.created || result.updated || result.removed);
+}
+
 function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
   const [sessions, setSessions] = useState<ExerciseSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,6 +82,22 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Keep the calendar in sync without a button press: fire a throttled auto-sync
+  // once on mount, and refresh the list only if it actually changed something.
+  // Non-blocking and silent on error — the manual button remains for explicit
+  // syncs and error surfacing.
+  const autoSyncedRef = useRef(false);
+  useEffect(() => {
+    if (autoSyncedRef.current) return;
+    autoSyncedRef.current = true;
+    api
+      .syncExerciseCalendar({ auto: true })
+      .then(result => {
+        if (syncChangedSomething(result)) load();
+      })
+      .catch(err => console.error('Auto exercise calendar sync failed:', err));
   }, [load]);
 
   const visible = useMemo(() => {

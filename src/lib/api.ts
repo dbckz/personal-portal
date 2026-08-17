@@ -2010,16 +2010,28 @@ export const api = {
     return fetchWithRetry<{ progressions: ExerciseProgression[] }>('/api/exercise/progression');
   },
 
-  // Pull planned sessions from the personal Google calendar's all-day events.
-  async syncExerciseCalendar(): Promise<{
-    scanned: number;
-    created: number;
-    updated: number;
-    removed: number;
+  // Two-way calendar sync: pull planned sessions from the personal Google
+  // calendar's all-day events, then materialise the days ahead from the weekly
+  // routine and push them back. created/updated/removed sum both halves;
+  // `materialise` breaks out the routine push.
+  // With { auto: true } the server throttles: if a sync ran in the last 6 hours
+  // it returns { skipped: true, lastSyncedAt } and does no work.
+  async syncExerciseCalendar(options?: { auto?: boolean }): Promise<{
+    scanned?: number;
+    created?: number;
+    updated?: number;
+    removed?: number;
+    materialise?: { created: number; updated: number; removed: number };
+    skipped?: boolean;
+    lastSyncedAt?: string;
   }> {
     return fetchWithRetry(
       '/api/exercise/sync-calendar',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options?.auto ? { auto: true } : {}),
+      },
       { maxRetries: 0 }
     );
   },

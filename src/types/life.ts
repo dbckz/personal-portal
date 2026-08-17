@@ -234,8 +234,10 @@ export interface ExerciseEntry {
 }
 
 // Where a session came from, so an import can be re-run without duplicating
-// hand-entered work.
-export type ExerciseSource = 'manual' | 'sheet' | 'calendar' | 'freeform';
+// hand-entered work. 'routine' is a planned session the portal MATERIALISED from
+// the standing weekly routine (see exercise-routine-materialise) and pushed to
+// the calendar, as opposed to 'calendar' — one pulled FROM a hand-made event.
+export type ExerciseSource = 'manual' | 'sheet' | 'calendar' | 'freeform' | 'routine';
 
 // One session, planned or done. A planned session is created ahead of time with
 // completed=false; logging it after the fact flips completed and fills in the
