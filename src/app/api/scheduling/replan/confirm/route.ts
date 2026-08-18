@@ -216,6 +216,19 @@ interface DropResult {
   error?: string;
 }
 
+// One legacy deep-work block to convert in place to a generic container: retitle
+// + re-describe its event, and record the week's deep-work tasks as its shared
+// membership. The slot is untouched.
+interface ConversionInput {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  date: string;
+  start: string;
+  durationMinutes: number;
+  tasks: Array<{ gid?: string; adhocId?: string; title: string; integrationId?: string }>;
+}
+
 // One created ritual addition, reported back by its proposal id.
 interface AdditionResult {
   id: string;
@@ -391,6 +404,35 @@ export async function POST(request: NextRequest) {
     const backfill: ProposedBlock[] = Array.isArray(body?.backfill)
       ? body.backfill.filter((b: unknown): b is ProposedBlock => !!b && typeof b === 'object')
       : [];
+    // Legacy single-task deep-work blocks to CONVERT in place to generic "Deep
+    // work" containers: retitle + re-describe the event and turn the stored record
+    // into container membership. The slot never changes.
+    const conversionInputs: ConversionInput[] = Array.isArray(body?.conversions)
+      ? body.conversions
+          .filter(
+            (c: unknown): c is Record<string, unknown> =>
+              !!c && typeof c === 'object' && typeof (c as { googleEventId?: unknown }).googleEventId === 'string'
+          )
+          .map((c: Record<string, unknown>) => ({
+            googleEventId: c.googleEventId as string,
+            googleIntegrationId: typeof c.googleIntegrationId === 'string' ? c.googleIntegrationId : undefined,
+            category: typeof c.category === 'string' ? c.category : 'Writing/Deep Work',
+            date: typeof c.date === 'string' ? c.date : '',
+            start: typeof c.start === 'string' ? c.start : '',
+            durationMinutes: typeof c.durationMinutes === 'number' ? c.durationMinutes : 0,
+            tasks: Array.isArray(c.tasks)
+              ? (c.tasks as unknown[])
+                  .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
+                  .map(t => ({
+                    gid: typeof t.gid === 'string' ? t.gid : undefined,
+                    adhocId: typeof t.adhocId === 'string' ? t.adhocId : undefined,
+                    title: typeof t.title === 'string' ? t.title : 'Deep work task',
+                    integrationId: typeof t.integrationId === 'string' ? t.integrationId : undefined,
+                  }))
+              : [],
+          }))
+          .filter((c: ConversionInput) => c.date && c.start && c.durationMinutes > 0)
+      : [];
     // Conflicted break blocks the user accepted deleting: the calendar event AND
     // its ritual record are removed (a break has no fixed home to move to).
     const deletions: Array<{ googleEventId: string; googleIntegrationId?: string }> = Array.isArray(
@@ -481,7 +523,8 @@ export async function POST(request: NextRequest) {
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
       backfill.length === 0 &&
-      deletions.length === 0
+      deletions.length === 0 &&
+      conversionInputs.length === 0
     ) {
       return NextResponse.json(
         { error: 'No moves, done markings, dismissals, additions or deletions provided' },
@@ -1047,6 +1090,70 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // --- Conversions: retitle a legacy single-task deep-work block into a
+    // generic "Deep work" container and record its shared membership -----------
+    // The slot never changes. The event's title becomes "✍️ Deep work" and its
+    // description lists the week's deep-work tasks; each week deep-work task that
+    // isn't already scheduled against this event gets a scheduled record here, so
+    // the block reads as a container in the next analyze (and stops being offered
+    // for conversion). Ad-hoc members keep their own home; only Asana-backed
+    // members join the container's records.
+    const conversionResults: MoveResult[] = [];
+    for (const conv of conversionInputs) {
+      try {
+        const resolved = await resolveGoogle(conv.googleIntegrationId);
+        const block: ProposedBlock = {
+          id: conv.googleEventId,
+          category: conv.category,
+          tasks: conv.tasks,
+          date: conv.date,
+          start: conv.start,
+          durationMinutes: conv.durationMinutes,
+          reason: "Deep work leads the morning — the week's deep-work tasks.",
+        };
+        if (resolved) {
+          const { start, end } = toStartEnd(conv.date, conv.start, conv.durationMinutes);
+          await updateCalendarEvent(
+            resolved.credentials,
+            resolved.integration.clientId,
+            resolved.integration.clientSecret,
+            conv.googleEventId,
+            start,
+            end,
+            eventTitleForBlock(block),
+            blockEventDescription(block),
+            'primary',
+            colorIdForBlock(block)
+          );
+        }
+        const already = new Set(
+          scheduledAsana.filter(s => s.googleEventId === conv.googleEventId).map(s => s.asanaTaskId)
+        );
+        for (const t of conv.tasks) {
+          if (t.gid && !already.has(t.gid)) {
+            await scheduleAsanaTask(
+              t.gid,
+              t.integrationId,
+              conv.date,
+              conv.start,
+              conv.durationMinutes,
+              conv.googleEventId,
+              resolved?.integration.id ?? conv.googleIntegrationId,
+              t.title
+            );
+          }
+        }
+        conversionResults.push({ googleEventId: conv.googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to convert deep-work block ${conv.googleEventId}:`, err);
+        conversionResults.push({
+          googleEventId: conv.googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to convert deep-work block',
+        });
+      }
+    }
+
     // --- Displacements: free tomorrow's slot for a "prioritise tomorrow" block ---
     // Delete the victim's calendar event, clear its stored schedule (so the slot
     // is genuinely free and the task returns to the pool), then either defer its
@@ -1392,7 +1499,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, backfillResults, replacementResults, delegateResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, backfillResults, replacementResults, delegateResults, conversionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

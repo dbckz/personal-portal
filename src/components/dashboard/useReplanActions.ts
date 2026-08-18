@@ -59,6 +59,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   // exactly like deletions (delete the event + ritual record), so they ride the
   // same confirm payload; kept as a separate selection set for a distinct UI label.
   const [removalIncluded, setRemovalIncluded] = useState<Set<string>>(new Set());
+  // Legacy single-task deep-work blocks to convert in place to generic "Deep work"
+  // containers. Default all included — pressing Replan should convert this week's
+  // already-planned deep-work blocks in one go.
+  const [conversionIncluded, setConversionIncluded] = useState<Set<string>>(new Set());
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ReplanConfirmResult>>({});
@@ -97,6 +101,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setSelectedTodoIds(new Set()); // nothing ticked by default — the user chooses
     setDeletionIncluded(new Set((data.deletions ?? []).map(d => d.googleEventId)));
     setRemovalIncluded(new Set((data.removals ?? []).map(r => r.googleEventId)));
+    setConversionIncluded(new Set((data.conversions ?? []).map(c => c.googleEventId)));
     setShowUnchanged(false);
     setIsConfirming(false);
     setResults({});
@@ -141,6 +146,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   }, [todoCandidates, selectedTodoIds, freeSlots]);
   const deletions = useMemo(() => data?.deletions ?? [], [data]);
   const removals = useMemo(() => data?.removals ?? [], [data]);
+  const conversions = useMemo(() => data?.conversions ?? [], [data]);
 
   const hasResults =
     Object.keys(results).length > 0 ||
@@ -295,8 +301,11 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       ...deletions.filter(d => deletionIncluded.has(d.googleEventId)),
       ...removals.filter(r => removalIncluded.has(r.googleEventId)),
     ].map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded]);
+    // Legacy deep-work blocks the user kept ticked, converted in place to generic
+    // "Deep work" containers (event retitled + re-described, membership recorded).
+    const conversionBlocks = conversions.filter(c => conversionIncluded.has(c.googleEventId));
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks, conversionBlocks };
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded, conversions, conversionIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -311,7 +320,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.displace.length +
     payload.additionBlocks.length +
     payload.backfillBlocks.length +
-    payload.deletionBlocks.length;
+    payload.deletionBlocks.length +
+    payload.conversionBlocks.length;
 
   const toggle = useCallback((id: string) =>
     setIncluded(prev => {
@@ -361,12 +371,20 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       return next;
     }), []);
 
+  const toggleConversion = useCallback((id: string) =>
+    setConversionIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    }), []);
+
   const confirm = useCallback(async () => {
     if (!data || actionCount === 0) return;
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes, backfillResults: bfRes } = await api.confirmReplan(
+      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes, backfillResults: bfRes, conversionResults: convRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
@@ -383,7 +401,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         undefined, // replacements — daily-review only
         payload.delegate.length > 0 ? payload.delegate : undefined,
         payload.drop.length > 0 ? payload.drop : undefined,
-        payload.backfillBlocks.length > 0 ? payload.backfillBlocks : undefined
+        payload.backfillBlocks.length > 0 ? payload.backfillBlocks : undefined,
+        payload.conversionBlocks.length > 0 ? payload.conversionBlocks : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -410,6 +429,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       for (const r of dropResults ?? []) {
         map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
       }
+      // Fold conversion results in so a converted deep-work row shows a status icon.
+      for (const r of convRes ?? []) {
+        map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
+      }
       setResults(map);
       const addMap: Record<string, ReplanAdditionResult> = {};
       for (const r of addRes ?? []) addMap[r.id] = r;
@@ -417,7 +440,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       const bfMap: Record<string, ReplanBackfillResult> = {};
       for (const r of bfRes ?? []) bfMap[r.id] = r;
       setBackfillResults(bfMap);
-      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? []), ...(bfRes ?? [])].some(r => r.success)) onApplied?.();
+      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? []), ...(bfRes ?? []), ...(convRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
@@ -455,6 +478,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     todoBackfillBlocks,
     deletionIncluded,
     removalIncluded,
+    conversions,
+    conversionIncluded,
     showUnchanged,
     setShowUnchanged,
     toggle,
@@ -462,6 +487,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     toggleBackfill,
     toggleDeletion,
     toggleRemoval,
+    toggleConversion,
     // results / status
     results,
     hasResults,

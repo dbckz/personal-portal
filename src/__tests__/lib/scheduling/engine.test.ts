@@ -897,8 +897,10 @@ describe('proposeBlocks - daily categories (one block per working day)', () => {
     expect(deep.map(p => p.date).sort()).toEqual(['2026-07-14', '2026-07-15']); // Tue + Wed
   });
 
-  it('rotates the selected tasks across the mornings, repeating when there are more mornings than tasks', () => {
-    // 3 tasks over 5 mornings → t0 Mon, t1 Tue, t2 Wed, t0 Thu, t1 Fri.
+  it('lists ALL the selected deep-work tasks on EVERY morning block (generic container, no rotation)', () => {
+    // Dave's rule: every morning is a generic "Deep work" block whose agenda is the
+    // whole week's selected deep-work tasks — the same list on each day, never a
+    // single task pinned to a specific morning.
     const proposals = proposeBlocks(
       makeInput({
         config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
@@ -908,8 +910,11 @@ describe('proposeBlocks - daily categories (one block per working day)', () => {
     const deep = proposals
       .filter(p => p.category === 'Writing/Deep Work')
       .sort((x, y) => x.date.localeCompare(y.date));
-    // Each morning is a single-task block carrying its rotated task.
-    expect(deep.map(p => p.task?.gid)).toEqual(['a', 'b', 'c', 'a', 'b']);
+    // Every block is a container: no single `task`, and the same full agenda.
+    expect(deep.every(p => p.task === undefined)).toBe(true);
+    for (const p of deep) {
+      expect(p.tasks?.map(t => t.gid)).toEqual(['a', 'b', 'c']);
+    }
   });
 
   it('fills a morning with a reserved deep-work block when no tasks were selected', () => {

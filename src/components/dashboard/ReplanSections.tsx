@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus, Clock } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus, Clock, PenLine } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
 import type { ReplanCarryTask } from '@/lib/scheduling/replan';
@@ -41,6 +41,8 @@ export function ReplanSections({
     todoBackfillBlocks,
     deletionIncluded,
     removalIncluded,
+    conversions,
+    conversionIncluded,
     showUnchanged,
     setShowUnchanged,
     carryBlocks,
@@ -52,6 +54,7 @@ export function ReplanSections({
     toggleBackfill,
     toggleDeletion,
     toggleRemoval,
+    toggleConversion,
     results,
     hasResults,
   } = actions;
@@ -572,6 +575,79 @@ export function ReplanSections({
         </div>
       )}
 
+      {/* Convert legacy single-task deep-work blocks into "Deep work" containers */}
+      {conversions.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <PenLine className="w-3.5 h-3.5 text-violet-500" />
+            Convert to Deep work ({conversions.length})
+          </h3>
+          <p className="mb-2 text-xs text-gray-400">
+            These deep-work blocks pin a single task to a time. Convert each to a generic
+            &ldquo;Deep work&rdquo; block listing the week&apos;s deep-work tasks — same slot, no reschedule.
+          </p>
+          <ul className="space-y-2">
+            {conversions.map(c => {
+              const color = categoryColor(c.category);
+              const result = results[c.googleEventId];
+              const isIn = conversionIncluded.has(c.googleEventId);
+              return (
+                <li
+                  key={c.googleEventId}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggleConversion(c.googleEventId)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {c.category}
+                      </span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-100 text-violet-700">
+                        convert
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(c.titles)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                      <span className="line-through">{titleLabel(c.titles)}</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="font-medium text-slate-600">Deep work</span>
+                      <span className="ml-1 text-gray-400">· {slotLabel(c.date, c.start)}</span>
+                    </div>
+                    {c.tasks.length > 0 && (
+                      <p className="mt-0.5 text-[11px] text-gray-400">
+                        lists {c.tasks.length} task{c.tasks.length === 1 ? '' : 's'}: {c.tasks.map(t => t.title).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {/* End of week — carry the leftovers into next week's plan */}
       {carryBlocks.length > 0 && (
         <div>
@@ -978,6 +1054,7 @@ export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
     // Free space to fill by hand (only when there are todos to fill it with).
     ((data.freeSlots?.length ?? 0) > 0 && (data.todoCandidates?.length ?? 0) > 0) ||
     (data.deletions?.length ?? 0) > 0 ||
-    (data.removals?.length ?? 0) > 0
+    (data.removals?.length ?? 0) > 0 ||
+    (data.conversions?.length ?? 0) > 0
   );
 }

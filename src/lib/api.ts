@@ -4,7 +4,7 @@ import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanConversion, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
 import type {
   ReviewAdoptInput,
   ReviewReplacementInput,
@@ -302,6 +302,9 @@ export interface ReplanAnalyzeResponse {
   // Future ritual blocks to remove: retired rituals (Side projects / Learning /
   // Consulting) and mis-placed 🎰 New bookies blocks. Absent on older responses.
   removals?: ReplanRemoval[];
+  // Legacy single-task deep-work blocks to convert in place to generic "Deep work"
+  // containers. Absent on older responses — treat as [].
+  conversions?: ReplanConversion[];
   // Whether an evening-overflow window exists this week. When true but an
   // unplaceable block has no overflowOption, the window filled up. Absent on
   // older responses — treat as false.
@@ -1625,7 +1628,19 @@ export const api = {
     drop?: Array<{ googleEventId: string; googleIntegrationId?: string; taskIds: string[] }>,
     // Task-backfill blocks the user accepted: each is created as a task/reserved/
     // grouped calendar event + scheduling records, exactly like a weekly-plan block.
-    backfill?: ProposedBlock[]
+    backfill?: ProposedBlock[],
+    // Legacy single-task deep-work blocks to convert in place to generic "Deep
+    // work" containers: the event is retitled + re-described and the stored record
+    // becomes container membership. The slot never changes.
+    conversions?: Array<{
+      googleEventId: string;
+      googleIntegrationId?: string;
+      category: string;
+      date: string;
+      start: string;
+      durationMinutes: number;
+      tasks: Array<{ gid?: string; adhocId?: string; title: string; integrationId?: string }>;
+    }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1638,6 +1653,7 @@ export const api = {
     dropResults?: ReplanConfirmResult[];
     additionResults: ReplanAdditionResult[];
     backfillResults?: ReplanBackfillResult[];
+    conversionResults?: ReplanConfirmResult[];
   }> {
     return fetchWithRetry<{
       results: ReplanConfirmResult[];
@@ -1651,6 +1667,7 @@ export const api = {
       dropResults?: ReplanConfirmResult[];
       additionResults: ReplanAdditionResult[];
       backfillResults?: ReplanBackfillResult[];
+      conversionResults?: ReplanConfirmResult[];
     }>(
       '/api/scheduling/replan/confirm',
       {
@@ -1674,6 +1691,7 @@ export const api = {
           ...(additions && additions.length ? { additions } : {}),
           ...(backfill && backfill.length ? { backfill } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),
+          ...(conversions && conversions.length ? { conversions } : {}),
         }),
       }
     );

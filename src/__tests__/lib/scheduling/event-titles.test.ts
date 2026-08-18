@@ -114,8 +114,23 @@ describe('eventTitleForBlock', () => {
   });
 
   it('titles a reserved block (no task) with "<emoji> <category> block"', () => {
-    const block: ProposedBlock = { ...base, category: 'Writing/Deep Work', kind: 'reserved' };
-    expect(eventTitleForBlock(block)).toBe('✍️ Writing/Deep Work block');
+    const block: ProposedBlock = { ...base, category: 'Blogs', kind: 'reserved' };
+    expect(eventTitleForBlock(block)).toBe('📝 Blogs block');
+  });
+
+  it('titles a daily deep-work container "✍️ Deep work" (not the category label)', () => {
+    const block: ProposedBlock = {
+      ...base,
+      category: 'Writing/Deep Work',
+      kind: 'task',
+      tasks: [{ title: 'Write memo' }, { title: 'Draft essay' }],
+    };
+    expect(eventTitleForBlock(block)).toBe('✍️ Deep work');
+  });
+
+  it('titles a reserved deep-work morning "✍️ Deep work" too', () => {
+    const block: ProposedBlock = { ...base, category: 'Writing / Deep Work', kind: 'reserved' };
+    expect(eventTitleForBlock(block)).toBe('✍️ Deep work');
   });
 
   it('titles a prep block "📖 Prep: <meeting>"', () => {

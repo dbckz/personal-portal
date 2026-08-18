@@ -76,6 +76,7 @@ import {
   deleteAdHocTask,
   removeCarryOvers,
   setWeeklyTaskOutcomes,
+  scheduleAsanaTask,
 } from '@/lib/user-data-storage';
 
 const INTEGRATION = { id: 'gi1', clientId: 'c', clientSecret: 's', credentials: { accessToken: 't' } };
@@ -410,5 +411,43 @@ describe('replan confirm — prep additions (early-next-week meetings)', () => {
     expect(out.additionResults).toEqual([
       { id: 'add-prep-1', success: true, googleEventId: 'evt-prep-new' },
     ]);
+  });
+});
+
+describe('replan confirm — convert a legacy deep-work block to a container', () => {
+  it('retitles the event "Deep work", lists the agenda, and records the missing members', async () => {
+    // The event 'evt-thu' already has member g-thu scheduled against it (beforeEach).
+    const out = await confirm({
+      conversions: [
+        {
+          googleEventId: 'evt-thu',
+          googleIntegrationId: 'gi1',
+          category: 'Writing/Deep Work',
+          date: '2026-07-16',
+          start: '09:00',
+          durationMinutes: 90,
+          tasks: [
+            { gid: 'g-thu', title: 'Already here', integrationId: 'om' },
+            { gid: 'g-new', title: 'New member', integrationId: 'om' },
+          ],
+        },
+      ],
+    });
+
+    // Event retitled to the generic deep-work container title (index 6 = title).
+    expect(updateCalendarEvent).toHaveBeenCalledTimes(1);
+    const call = (updateCalendarEvent as jest.Mock).mock.calls[0];
+    expect(call[3]).toBe('evt-thu');
+    expect(call[6]).toBe('✍️ Deep work');
+    // Description lists the week's deep-work tasks.
+    expect(call[7]).toContain('Already here');
+    expect(call[7]).toContain('New member');
+
+    // Only the member NOT already scheduled against the event is added.
+    expect(scheduleAsanaTask).toHaveBeenCalledTimes(1);
+    expect((scheduleAsanaTask as jest.Mock).mock.calls[0][0]).toBe('g-new');
+    expect((scheduleAsanaTask as jest.Mock).mock.calls[0][5]).toBe('evt-thu'); // same event
+
+    expect(out.conversionResults).toEqual([{ googleEventId: 'evt-thu', success: true }]);
   });
 });

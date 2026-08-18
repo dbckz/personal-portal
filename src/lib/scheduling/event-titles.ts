@@ -71,6 +71,15 @@ const CATEGORY_EMOJI: ReadonlyArray<readonly [string, string]> = [
 ];
 const UNKNOWN_CATEGORY_EMOJI = '🗂️';
 
+// The deep-work category, matched with the whitespace-robust normalize (so
+// "Writing / Deep Work" and "Writing/Deep Work" are treated the same). Its daily
+// blocks are titled "Deep work" — not the raw category label, and not a member
+// task name. Kept inline (rather than importing engine.isDeepWork) so this module
+// stays free of the placement logic.
+function isDeepWorkCategory(category: string): boolean {
+  return normalize(category) === normalize('Writing/Deep Work');
+}
+
 // Inverse of categoryEmoji: the category an app-created event title's emoji
 // prefix denotes, or null when the title carries no known category emoji. Time
 // attribution uses this so the breakdown follows the SAME emoji conventions the
@@ -146,6 +155,12 @@ export function eventTitleForBlock(block: ProposedBlock): string {
     // Rituals + breaks are already emoji'd in rituals.ts / breaks.ts; route
     // through here so titles have one source of truth.
     return block.title ?? block.category;
+  }
+  // Deep-work blocks (the daily generic container, its agenda listed in the
+  // description, or a task-less reserved morning) always read "Deep work" — never
+  // the raw "Writing/Deep Work" category label, and never a member task name.
+  if (isDeepWorkCategory(block.category)) {
+    return `${categoryEmoji(block.category)} Deep work`;
   }
   if (Array.isArray(block.tasks)) {
     return categoryBlockTitle(block.category);

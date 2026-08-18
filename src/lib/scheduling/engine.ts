@@ -1035,33 +1035,40 @@ export function proposeBlocks(
   // --- Deep-work daily placement -------------------------------------------
   // Deep work owns the mornings: place ONE block per working day, in the morning,
   // using the morning-flex placement (slide the start later within the morning,
-  // then shrink in 15-min steps to a 60-min floor to fit around a meeting). The
-  // selected deep-work tasks ROTATE across the mornings — cycling when there are
-  // more mornings than tasks, so a task may recur on several days (e.g. 3 tasks
-  // over 5 mornings: t0 Mon, t1 Tue, t2 Wed, t0 Thu, t1 Fri). A morning with no
-  // selected task (none were picked) gets a reserved deep-work block. A day whose
-  // morning can't fit even a 60-min block is skipped for that day (its morning is
-  // genuinely full — the "good reason" not to schedule deep work). Days that
-  // already hold a deep-work block (seeded into the per-date spread state from
-  // existingCategoryCountsByDate) are left alone, so a mid-week replan only fills
-  // the mornings still lacking one. weeklyCount counts the rotating TASKS, never
-  // the blocks. This runs for the deep-work category with `daily` set (its live
-  // config), taking precedence over the grouped/normal placement below.
+  // then shrink in 15-min steps to a 60-min floor to fit around a meeting). Every
+  // morning block is a GENERIC container: it carries ALL of the week's selected
+  // deep-work tasks as its shared agenda (the same list on every day) — Dave's
+  // rule is "a block that says deep work, listing the three tasks I've picked",
+  // NOT a specific task pinned to a specific time. No rotation, no per-block task
+  // assignment. A week with no selected tasks (none were picked) gets reserved
+  // deep-work blocks. A day whose morning can't fit even a 60-min block is skipped
+  // (its morning is genuinely full — the "good reason" not to schedule deep work).
+  // Days that already hold a deep-work block (seeded into the per-date spread
+  // state from existingCategoryCountsByDate) are left alone, so a mid-week replan
+  // only fills the mornings still lacking one. weeklyCount counts the SELECTED
+  // tasks (the agenda size), never the blocks. This runs for the deep-work
+  // category with `daily` set (its live config), taking precedence over the
+  // grouped/normal placement below.
   const placeDeepWorkDaily = (category: string): void => {
     const categoryDuration = categoryDurationFor(category);
     const preferredWindows = preferredWindowsFor(category);
-    // REPLAN override: rotate ONLY the week's already-selected deep-work tasks,
-    // never new candidates from the pool. An empty override means the mornings
-    // get reserved deep-work blocks. The wizard passes no override and keeps
-    // rotating its selected deep-work candidates.
+    // REPLAN override: the exact week-selected deep-work tasks to list on every
+    // morning block, never new candidates from the pool. An empty override means
+    // the mornings get reserved deep-work blocks. The wizard passes no override
+    // and lists its selected deep-work candidates.
     const overrideTasks = input.deepWorkTasksOverride;
     const categoryTasks = overrideTasks ?? tasksByCategory.get(category) ?? [];
     const catCount = catCountByCategory.get(category)!;
-    // Continue the rotation from where the week already is: seed it with the deep-
-    // work blocks already scheduled this week so a mid-week replan carries on the
-    // sequence rather than restarting it. Only the replan (override) path seeds —
-    // the wizard starts a fresh plan from 0.
-    let rotation = overrideTasks ? input.existingScheduledCounts[category] ?? 0 : 0;
+    // The full agenda shared by every daily deep-work block: all the week's
+    // selected deep-work tasks, in the engine's task sort order. The same list
+    // appears on each morning — the block is capacity for the week's deep work,
+    // not a promise to finish a particular task that day.
+    const agenda = categoryTasks.map(t => ({
+      gid: t.gid,
+      adhocId: t.adhocId,
+      title: t.title,
+      integrationId: t.integrationId,
+    }));
     for (const wd of workingDays) {
       if ((catCount[wd.dateStr] ?? 0) > 0) continue; // this morning already has deep work
       let morningWindows = deepWorkMorningWindows(preferredWindows, [wd]);
@@ -1095,23 +1102,19 @@ export function proposeBlocks(
         trimmedMinutes > 0 ? ` Shortened ${trimmedMinutes} min to fit the morning.` : '';
       const trimField =
         trimmedMinutes > 0 ? { trimmedFromMinutes: placedDuration + trimmedMinutes } : {};
-      const rotatedTask =
-        categoryTasks.length > 0 ? categoryTasks[rotation % categoryTasks.length] : undefined;
-      rotation += 1;
-      if (rotatedTask) {
+      if (agenda.length > 0) {
         proposals.push({
           id: `${slot.dateStr}-${start}-${category}`,
           category,
-          task: {
-            gid: rotatedTask.gid,
-            adhocId: rotatedTask.adhocId,
-            title: rotatedTask.title,
-            integrationId: rotatedTask.integrationId,
-          },
+          // Generic container: the whole week's deep-work agenda, listed on every
+          // morning. No single `task`.
+          tasks: agenda,
           date: slot.dateStr,
           start,
           durationMinutes: placedDuration,
-          reason: buildReason(category, slot.preferred, rotatedTask) + trimNote,
+          reason:
+            `Deep work leads the morning — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda for the week.` +
+            trimNote,
           ...trimField,
         });
       } else {

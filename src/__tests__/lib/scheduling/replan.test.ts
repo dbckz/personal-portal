@@ -950,7 +950,66 @@ describe('planReplan - task backfill', () => {
   });
 });
 
-describe('planReplan - deep-work rotation (backfill)', () => {
+describe('planReplan - legacy deep-work conversion', () => {
+  // A future, not-done deep-work block still in the OLD single-task shape is
+  // proposed for in-place conversion to a generic "Deep work" container.
+  const deepBlock = (o: Partial<ReplanBlock> & { date: string; start: string }) =>
+    block({ category: 'Writing/Deep Work', ...o });
+
+  it('proposes an in-place conversion for a future single-task deep-work block', () => {
+    const { conversions, moves, kept } = run({
+      blocks: [
+        deepBlock({ googleEventId: 'dw', date: '2026-07-16', start: '09:00', titles: ['Old single task'] }),
+      ], // Thursday, future
+      deepWorkWeekTasks: [
+        cand({ gid: 't1', signal: 'deep', title: 'T1' }),
+        cand({ gid: 't2', signal: 'deep', title: 'T2' }),
+      ],
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(conversions).toHaveLength(1);
+    const c = conversions[0];
+    expect(c.googleEventId).toBe('dw');
+    expect(c.date).toBe('2026-07-16'); // same slot — no reschedule
+    expect(c.start).toBe('09:00');
+    expect(c.tasks.map(t => t.gid)).toEqual(['t1', 't2']); // the week's agenda
+    // It gets its own entry — never counted as kept or moved.
+    expect(kept.some(k => k.googleEventId === 'dw')).toBe(false);
+  });
+
+  it('leaves an already-container deep-work block alone (no conversion)', () => {
+    const { conversions, kept } = run({
+      blocks: [
+        deepBlock({
+          googleEventId: 'dw',
+          date: '2026-07-16',
+          start: '09:00',
+          titles: ['A', 'B'],
+          isCategoryContainer: true,
+        }),
+      ],
+      deepWorkWeekTasks: [cand({ gid: 't1', signal: 'deep' })],
+      now: WED_8AM,
+    });
+    expect(conversions).toHaveLength(0);
+    expect(kept.some(k => k.googleEventId === 'dw')).toBe(true);
+  });
+
+  it('does not convert a PAST deep-work block, nor a DONE future one', () => {
+    const { conversions } = run({
+      blocks: [
+        deepBlock({ googleEventId: 'past', date: '2026-07-13', start: '09:00' }), // Monday, past
+        deepBlock({ googleEventId: 'done', date: '2026-07-16', start: '09:00', done: true }),
+      ],
+      deepWorkWeekTasks: [cand({ gid: 't1', signal: 'deep' })],
+      now: WED_8AM,
+    });
+    expect(conversions).toHaveLength(0);
+  });
+});
+
+describe('planReplan - deep-work containers (backfill)', () => {
   // A daily deep-work category: one block per remaining working morning.
   function dailyDeepConfig(): WorkflowConfig {
     const config = makeConfig({
@@ -971,9 +1030,10 @@ describe('planReplan - deep-work rotation (backfill)', () => {
     return config;
   }
 
-  // Remaining mornings (Wed/Thu/Fri) rotate ONLY the week's already-selected
-  // deep-work tasks — never a task from the general candidate pool.
-  it('rotates only the week-selected deep-work tasks, never a pool candidate', () => {
+  // Every remaining morning (Wed/Thu/Fri) is a generic container listing the SAME
+  // week-selected deep-work tasks — never a task from the general candidate pool,
+  // never a single task pinned to a day.
+  it('lists the week-selected deep-work tasks on every morning, never a pool candidate', () => {
     const { backfill } = run({
       blocks: [],
       config: dailyDeepConfig(),
@@ -987,15 +1047,18 @@ describe('planReplan - deep-work rotation (backfill)', () => {
     });
     const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
     expect(deep.map(b => b.date)).toEqual(['2026-07-15', '2026-07-16', '2026-07-17']);
-    // Rotation cycles t1, t2, t1 across the three mornings.
-    expect(deep.map(b => b.task?.gid)).toEqual(['t1', 't2', 't1']);
+    // Every morning is a container carrying the whole week's agenda [t1, t2].
+    expect(deep.every(b => b.task === undefined)).toBe(true);
+    for (const b of deep) {
+      expect(b.tasks?.map(t => t.gid)).toEqual(['t1', 't2']);
+    }
     // The general-pool deep-work task never enters the schedule.
-    expect(backfill.some(b => b.task?.gid === 'pool')).toBe(false);
+    expect(backfill.some(b => (b.tasks ?? []).some(t => t.gid === 'pool'))).toBe(false);
   });
 
-  // An empty rotation (all the week's deep-work tasks are done, or none were
+  // An empty selection (all the week's deep-work tasks are done, or none were
   // selected) yields RESERVED deep-work blocks — never a new pool task.
-  it('reserves the mornings when the rotation is empty', () => {
+  it('reserves the mornings when no deep-work task is selected', () => {
     const { backfill } = run({
       blocks: [],
       config: dailyDeepConfig(),
@@ -1006,13 +1069,13 @@ describe('planReplan - deep-work rotation (backfill)', () => {
     });
     const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
     expect(deep).toHaveLength(3);
-    expect(deep.every(b => !b.task)).toBe(true); // reserved, task-less
+    expect(deep.every(b => !b.task && b.tasks === undefined)).toBe(true); // reserved, task-less
     expect(backfill.some(b => b.task?.gid === 'pool')).toBe(false);
   });
 
-  // The rotation continues from where the week already is: two mornings already
-  // hold deep-work blocks, so the seed offsets which task leads the next one.
-  it('continues the rotation past the week\'s existing deep-work blocks', () => {
+  // The membership never depends on how many deep-work blocks the week already
+  // holds: every new morning lists the SAME full agenda (no rotation seed).
+  it('lists the full agenda on every new morning regardless of existing blocks', () => {
     const { backfill } = run({
       blocks: [],
       config: dailyDeepConfig(),
@@ -1022,13 +1085,13 @@ describe('planReplan - deep-work rotation (backfill)', () => {
         cand({ gid: 't2', signal: 'deep', title: 'T2' }),
         cand({ gid: 't3', signal: 'deep', title: 'T3' }),
       ],
-      // Mon + Tue already had deep-work blocks (t1, t2) — count them so the
-      // rotation resumes at t3 on Wednesday.
+      // Mon + Tue already had deep-work blocks — this must NOT change the agenda.
       existingScheduledCounts: { 'Writing/Deep Work': 2 },
       now: WED_8AM,
     });
     const deep = backfill.filter(b => b.category === 'Writing/Deep Work');
-    // Seed 2 → Wed t3, Thu t1, Fri t2.
-    expect(deep.map(b => b.task?.gid)).toEqual(['t3', 't1', 't2']);
+    for (const b of deep) {
+      expect(b.tasks?.map(t => t.gid)).toEqual(['t1', 't2', 't3']);
+    }
   });
 });

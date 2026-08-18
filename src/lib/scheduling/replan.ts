@@ -285,11 +285,12 @@ export interface ReplanInput {
   candidateTasks?: CandidateTask[];
   // The week's already-selected deep-work tasks, taken from this week's EXISTING
   // deep-work blocks (deduped by task id, done ones dropped). Mid-week the planner
-  // only ADDS deep-work BLOCKS and rotates these across the new mornings — it never
-  // introduces a NEW deep-work task from `candidateTasks`. Empty (all done / none
-  // selected) → new mornings get reserved deep-work blocks. Deep-work-category
+  // only ADDS deep-work BLOCKS, each a generic container listing this same set — it
+  // never introduces a NEW deep-work task from `candidateTasks`. Empty (all done /
+  // none selected) → new mornings get reserved deep-work blocks. Deep-work-category
   // tasks are stripped from `candidateTasks` before backfill so none can slip in
-  // through any other path. Omit to keep the pre-rotation behaviour.
+  // through any other path. Also the membership a legacy single-task deep-work
+  // block converts to (see `conversions`). Omit to skip both.
   deepWorkWeekTasks?: CandidateTask[];
   // Per-category count of blocks ALREADY scheduled this week (kept + moved + done +
   // ended). Reduces each category's remaining quota so backfill only proposes the
@@ -317,6 +318,26 @@ export interface ReplanRemoval {
   oldStart: string;
   durationMinutes: number;
   reason: ReplanRemovalReason;
+}
+
+// A FUTURE daily deep-work block still in the OLD single-task shape (one task
+// pinned to the block, not a container) to CONVERT in place: same date/slot, its
+// event retitled to "Deep work" and its description rewritten to list the week's
+// selected deep-work tasks, and its stored record turned into container
+// membership. Surfaced as its own review entry so Dave can convert this week's
+// already-planned deep-work blocks by pressing Replan once.
+export interface ReplanConversion {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  date: string; // unchanged — the block keeps its slot
+  start: string; // unchanged
+  durationMinutes: number;
+  // The block's current (single-task) titles, for display in the review.
+  titles: string[];
+  // The generic container membership to write: the week's selected deep-work
+  // tasks (the same list every daily deep-work block should carry).
+  tasks: Array<{ gid?: string; adhocId?: string; title: string; integrationId?: string }>;
 }
 
 // A break block that now conflicts with a meeting. Breaks have no fixed home, so
@@ -419,6 +440,9 @@ export interface ReplanResult {
   // Future ritual blocks to remove: retired-ritual blocks and mis-placed
   // 🎰 New bookies blocks (the latter are re-placed via `additions`).
   removals: ReplanRemoval[];
+  // Legacy single-task deep-work blocks (future, not done) to convert in place to
+  // generic "Deep work" containers. Empty when none remain / no deep-work tasks.
+  conversions: ReplanConversion[];
   // Whether an evening-overflow window exists on any remaining working day. When
   // true but an unplaceable block still has no `overflowOption`, the evening
   // window filled up (earlier blocks reserved its slots) — the UI uses this to
@@ -460,6 +484,15 @@ export function planReplan(input: ReplanInput): ReplanResult {
   const toMove: Array<{ block: ReplanBlock; reason: ReplanReason }> = [];
   const deletions: ReplanDeletion[] = [];
   const removals: ReplanRemoval[] = [];
+  const conversions: ReplanConversion[] = [];
+  // The generic-container agenda a legacy single-task deep-work block converts to:
+  // the week's selected deep-work tasks (same list every daily block should carry).
+  const deepWorkAgenda = (input.deepWorkWeekTasks ?? []).map(t => ({
+    gid: t.gid,
+    adhocId: t.adhocId,
+    title: t.title,
+    integrationId: t.integrationId,
+  }));
   // Kept blocks re-enter the busy set for re-slotting; lunch rituals keep their
   // break flag so they split runs rather than count as work.
   const keptBusy: BusyMs[] = [];
@@ -515,6 +548,29 @@ export function planReplan(input: ReplanInput): ReplanResult {
         removals.push(removalOf(block, 'misplaced'));
         continue;
       }
+    }
+    // A FUTURE, not-done deep-work block still in the OLD single-task shape (not a
+    // container) is proposed for in-place CONVERSION to a generic "Deep work"
+    // container: same slot, retitled, its description listing the week's deep-work
+    // tasks. It keeps its time (reserved in the busy set) and is NOT moved. Lets
+    // Dave convert this week's already-planned deep-work blocks by pressing Replan
+    // once. A block already in container shape (several tasks) is left as-is.
+    if (notEnded && !block.done && isDeepWork(block.category) && !block.isCategoryContainer) {
+      conversions.push({
+        googleEventId: block.googleEventId,
+        googleIntegrationId: block.googleIntegrationId,
+        category: block.category,
+        date: block.date,
+        start: block.start,
+        durationMinutes: block.durationMinutes,
+        titles: block.titles,
+        tasks: deepWorkAgenda,
+      });
+      keptBusy.push({
+        ...intervalOf(block.date, block.start, block.durationMinutes),
+        isBreak: block.isBreak,
+      });
+      continue;
     }
     if (block.done) {
       keep(block);
@@ -759,7 +815,7 @@ export function planReplan(input: ReplanInput): ReplanResult {
   // Two categories are deliberately EXCLUDED from the auto-backfill candidate pool:
   //  * Deep work — its tasks are already chosen (they back the week's existing
   //    deep-work blocks); the daily deep-work placement inside proposeBlocks only
-  //    ADDS blocks and ROTATES `deepWorkTasksOverride`, never a new pool task.
+  //    ADDS blocks, each listing `deepWorkTasksOverride`, never a new pool task.
   //  * The quota-less catch-all (General Todos) — the planner must NOT pick which
   //    todos to do. Its free time is reported as `freeSlots` for the user to fill
   //    by ticking todos himself (see below), so it never gets auto-placed blocks.
@@ -798,8 +854,8 @@ export function planReplan(input: ReplanInput): ReplanResult {
       config,
       busyIntervals: placementBusy,
       candidateTasks: backfillCandidates,
-      // Rotate ONLY the week's already-selected deep-work tasks across the new
-      // mornings; an empty override yields reserved deep-work blocks.
+      // List ONLY the week's already-selected deep-work tasks on every new
+      // morning; an empty override yields reserved deep-work blocks.
       deepWorkTasksOverride: input.deepWorkWeekTasks ?? [],
       existingScheduledCounts: input.existingScheduledCounts ?? {},
       existingCategoryCountsByDate: input.existingCategoryCountsByDate,
@@ -844,7 +900,7 @@ export function planReplan(input: ReplanInput): ReplanResult {
     freeSlots = buildFreeSlots(workingDays, finalBusy, workRun, nowMs, freeSlotMinutes, FREE_SLOTS_CAP);
   }
 
-  return { kept, moves, unplaceable, stale, additions, backfill, freeSlots, deletions, removals, overflowConfigured: ofWindows.length > 0 };
+  return { kept, moves, unplaceable, stale, additions, backfill, freeSlots, deletions, removals, conversions, overflowConfigured: ofWindows.length > 0 };
 }
 
 // The most free slots to list in "free space remaining" — enough to fill a light
