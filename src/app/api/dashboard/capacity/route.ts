@@ -128,10 +128,11 @@ export async function GET() {
     for (const s of scheduledAsana) {
       if (s.scheduledDate < weekStart || s.scheduledDate > weekEnd) continue;
       const info = asanaTypeMap.get(s.asanaTaskId);
-      const category = classifyBlockCategoryWithCatchAll(
-        info?.typeValue ? [info.typeValue] : [],
-        quotas
-      );
+      // Prefer the category stored at scheduling time; re-derive from the Asana
+      // Type only for legacy records without one.
+      const category =
+        s.category ??
+        classifyBlockCategoryWithCatchAll(info?.typeValue ? [info.typeValue] : [], quotas);
       if (!category) continue;
       scheduledTasks.push({
         taskId: s.asanaTaskId,
@@ -145,10 +146,9 @@ export async function GET() {
     }
     for (const t of adHocTasks) {
       if (!t.dueDate || t.dueDate < weekStart || t.dueDate > weekEnd) continue;
-      const category = classifyBlockCategoryWithCatchAll(
-        adHocTypeSignals(t.taskType, customTypes),
-        quotas
-      );
+      const category =
+        t.category ??
+        classifyBlockCategoryWithCatchAll(adHocTypeSignals(t.taskType, customTypes), quotas);
       if (!category) continue;
       scheduledTasks.push({ taskId: t.id, category, title: t.title });
       const overridden = !!t.googleEventId && !!doneOverrides[t.googleEventId];

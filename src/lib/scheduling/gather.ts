@@ -531,6 +531,9 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     googleEventId?: string | null;
     typeSignals: string[];
     date: string;
+    // Category stored at scheduling time, preferred over re-deriving from
+    // typeSignals (legacy records carry none).
+    category?: string;
   }
   const countRecords: CountRecord[] = [];
   for (const s of inWeekAsana) {
@@ -539,6 +542,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       googleEventId: s.googleEventId,
       typeSignals: typeValue ? [typeValue] : [],
       date: s.scheduledDate,
+      ...(s.category ? { category: s.category } : {}),
     });
   }
   for (const t of inWeekAdhoc) {
@@ -546,6 +550,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       googleEventId: t.googleEventId,
       typeSignals: adHocTypeSignals(t.taskType, customTypes),
       date: t.dueDate!,
+      ...(t.category ? { category: t.category } : {}),
     });
   }
 
@@ -560,11 +565,16 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     }
     const existing = grouped.get(r.googleEventId);
     // Copy signals on first insert so pushing more doesn't mutate the source record.
-    if (existing) existing.typeSignals.push(...r.typeSignals);
-    else grouped.set(r.googleEventId, { ...r, typeSignals: [...r.typeSignals] });
+    if (existing) {
+      existing.typeSignals.push(...r.typeSignals);
+      // Any member's stored category wins over re-derivation for the whole block.
+      if (!existing.category && r.category) existing.category = r.category;
+    } else {
+      grouped.set(r.googleEventId, { ...r, typeSignals: [...r.typeSignals] });
+    }
   }
-  for (const { typeSignals, date } of [...grouped.values(), ...standalone]) {
-    bump(classifyBlockCategory(typeSignals, quotas), date);
+  for (const { typeSignals, date, category } of [...grouped.values(), ...standalone]) {
+    bump(category ?? classifyBlockCategory(typeSignals, quotas), date);
   }
 
   // --- Candidate tasks (not yet scheduled this week) ---

@@ -35,7 +35,8 @@ export async function scheduleAsanaTask(
   duration: number,
   googleEventId?: string,
   googleIntegrationId?: string,
-  taskName?: string
+  taskName?: string,
+  category?: string
 ): Promise<ScheduledAsanaTask> {
   const data = await getUserData();
 
@@ -49,6 +50,7 @@ export async function scheduleAsanaTask(
     googleEventId,
     googleIntegrationId,
     ...(taskName ? { taskName } : {}),
+    ...(category ? { category } : {}),
   };
 
   data.scheduledAsanaTasks.push(scheduled);

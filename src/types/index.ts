@@ -300,6 +300,11 @@ export interface AdHocTask {
   taskType: TaskType;
   googleEventId?: string; // ID of the corresponding Google Calendar event
   googleIntegrationId?: string; // Which Google integration it was created in
+  // The block's category captured at scheduling time (e.g. 'Writing/Deep Work'),
+  // as chosen by the plan wizard / replan. Preferred over re-deriving from the
+  // task's type signals. Optional for backward compatibility with tasks stored
+  // before this field existed (those fall back to classification).
+  category?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -321,6 +326,12 @@ export interface ScheduledAsanaTask {
   // completed and dropped out of the live incomplete-tasks fetch. Optional for
   // backward compatibility with entries stored before this field existed.
   taskName?: string;
+  // The block's category captured at scheduling time (e.g. 'Writing/Deep Work'),
+  // as chosen by the plan wizard / replan. Consumers prefer this over
+  // re-deriving the category from the Asana Type field, which can disagree with
+  // what the user actually placed. Optional for backward compatibility with
+  // entries stored before this field existed (those fall back to classification).
+  category?: string;
 }
 
 export interface GoogleCalendarCredentials {

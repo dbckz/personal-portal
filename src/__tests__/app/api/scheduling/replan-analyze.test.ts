@@ -450,6 +450,85 @@ describe('replan analyze — daily review blocks', () => {
   });
 });
 
+describe('replan analyze — stored category preferred over re-derivation', () => {
+  // 'deep' is the ONLY Asana Type that classifies as deep work here.
+  const QUOTAS = [
+    { category: 'Writing/Deep Work', weeklyCount: 2, targetLength: '1h', types: ['deep'] },
+  ];
+
+  it('uses the stored category when the Asana Type disagrees (the incident)', async () => {
+    // The wizard placed this as deep work, but the task's Asana Type is 'admin'
+    // — which classifies as nothing here. The stored category must still win, so
+    // the block stays in the deep-work category rather than falling out.
+    mockScheduled.mockResolvedValue([
+      {
+        id: 's1',
+        asanaTaskId: 'g-open',
+        scheduledDate: '2026-07-13',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-open',
+        googleIntegrationId: 'gi1',
+        category: 'Writing/Deep Work',
+      },
+    ]);
+    setContext({
+      quotas: QUOTAS,
+      asanaCandidates: [{ task: { gid: 'g-open', name: 'Tapestry working group' }, typeValue: 'admin' }],
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-open');
+    expect(block!.category).toBe('Writing/Deep Work');
+  });
+
+  it('falls back to Asana-Type classification for a legacy record with no stored category', async () => {
+    mockScheduled.mockResolvedValue([
+      {
+        id: 's1',
+        asanaTaskId: 'g-open',
+        scheduledDate: '2026-07-13',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-open',
+        googleIntegrationId: 'gi1',
+        // no category: entry predates category capture
+      },
+    ]);
+    setContext({
+      quotas: QUOTAS,
+      asanaCandidates: [{ task: { gid: 'g-open', name: 'Deep work task' }, typeValue: 'deep' }],
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-open');
+    expect(block!.category).toBe('Writing/Deep Work');
+  });
+
+  it('prefers a stored ad-hoc category over the ad-hoc type signals', async () => {
+    mockAdHoc.mockResolvedValue([
+      {
+        id: 'ad1',
+        title: 'Ad-hoc deep task',
+        completed: false,
+        priority: 'medium',
+        taskType: 'focus',
+        dueDate: '2026-07-13',
+        dueTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-adhoc',
+        googleIntegrationId: 'gi1',
+        category: 'Writing/Deep Work',
+      },
+    ]);
+    setContext({ quotas: QUOTAS });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-adhoc');
+    expect(block!.category).toBe('Writing/Deep Work');
+  });
+});
+
 describe('replan analyze — previouslyStarted seeding from weekly stats', () => {
   const scheduled = {
     id: 's1',

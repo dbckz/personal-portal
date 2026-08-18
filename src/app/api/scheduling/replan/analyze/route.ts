@@ -209,11 +209,18 @@ export async function POST(request: NextRequest) {
       // "done for planning" in a prior replan (Asana task stays open).
       const done =
         !!doneOverrides[eventId] || entries.every(e => !incompleteByGid.has(e.asanaTaskId));
-      let category: string | null = null;
-      for (const e of entries) {
-        const tv = asanaTypeByGid.get(e.asanaTaskId);
-        category = classifyBlockCategory(tv ? [tv] : [], ctx.quotas);
-        if (category) break;
+      // Prefer the category the wizard / replan stored on any entry at
+      // scheduling time — it reflects what the user actually placed. Only fall
+      // back to re-deriving the category from the Asana Type field for legacy
+      // records that carry no stored category (that re-derivation can disagree
+      // with the placement, e.g. a deep-work task whose Type isn't Writing).
+      let category: string | null = entries.find(e => e.category)?.category ?? null;
+      if (!category) {
+        for (const e of entries) {
+          const tv = asanaTypeByGid.get(e.asanaTaskId);
+          category = classifyBlockCategory(tv ? [tv] : [], ctx.quotas);
+          if (category) break;
+        }
       }
       const { startMs, endMs } = intervalFor(
         eventId,
@@ -249,8 +256,12 @@ export async function POST(request: NextRequest) {
       };
     };
     const buildAdhocReviewBlock = (t: (typeof adHocTasks)[number]): ReplanReviewBlock => {
+      // Prefer the stored category (placed by the wizard / replan); re-derive
+      // from the ad-hoc task's type signals only for legacy records without one.
       const category =
-        classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';
+        t.category ??
+        classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ??
+        'Scheduled';
       const duration = t.duration ?? 30;
       const { startMs, endMs } = intervalFor(t.googleEventId!, t.dueDate!, t.dueTime!, duration);
       const adhocDone = t.completed || !!doneOverrides[t.googleEventId!];

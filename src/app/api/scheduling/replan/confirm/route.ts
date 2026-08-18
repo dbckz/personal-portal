@@ -1139,7 +1139,8 @@ export async function POST(request: NextRequest) {
               conv.durationMinutes,
               conv.googleEventId,
               resolved?.integration.id ?? conv.googleIntegrationId,
-              t.title
+              t.title,
+              conv.category
             );
           }
         }

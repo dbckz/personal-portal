@@ -447,6 +447,9 @@ describe('replan confirm — convert a legacy deep-work block to a container', (
     expect(scheduleAsanaTask).toHaveBeenCalledTimes(1);
     expect((scheduleAsanaTask as jest.Mock).mock.calls[0][0]).toBe('g-new');
     expect((scheduleAsanaTask as jest.Mock).mock.calls[0][5]).toBe('evt-thu'); // same event
+    // The deep-work category is stamped on the converted container member (index
+    // 8 = category), so the next analyze prefers it over the Asana Type.
+    expect((scheduleAsanaTask as jest.Mock).mock.calls[0][8]).toBe('Writing/Deep Work');
 
     expect(out.conversionResults).toEqual([{ googleEventId: 'evt-thu', success: true }]);
   });

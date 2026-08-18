@@ -125,7 +125,8 @@ describe('replan confirm — task backfill', () => {
       60,
       'new-evt',
       'gi1',
-      'Write memo'
+      'Write memo',
+      'Deep' // category stored at scheduling time
     );
     expect(setGoogleEventAttribution).toHaveBeenCalledWith('new-evt', 'gi1', 'asana1');
     expect(recordWeeklyTasks).toHaveBeenCalledTimes(1);

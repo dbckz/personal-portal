@@ -133,7 +133,8 @@ export async function createTaskBlockEvent(params: {
           proposal.durationMinutes,
           event.id,
           googleIntegration.id,
-          t.title
+          t.title,
+          proposal.category
         );
         if (t.integrationId) {
           await setGoogleEventAttribution(event.id, googleIntegration.id, t.integrationId);
@@ -145,6 +146,7 @@ export async function createTaskBlockEvent(params: {
           duration: proposal.durationMinutes,
           googleEventId: event.id,
           googleIntegrationId: googleIntegration.id,
+          category: proposal.category,
         });
       }
     }
@@ -170,7 +172,8 @@ export async function createTaskBlockEvent(params: {
         proposal.durationMinutes,
         event.id,
         googleIntegration.id,
-        proposal.task.title
+        proposal.task.title,
+        proposal.category
       );
       if (integrationId) {
         await setGoogleEventAttribution(event.id, googleIntegration.id, integrationId);
@@ -182,6 +185,7 @@ export async function createTaskBlockEvent(params: {
         duration: proposal.durationMinutes,
         googleEventId: event.id,
         googleIntegrationId: googleIntegration.id,
+        category: proposal.category,
       });
     }
   }
