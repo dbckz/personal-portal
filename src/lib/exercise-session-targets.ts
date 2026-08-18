@@ -21,6 +21,7 @@
 
 import { buildProgressions, exerciseKey } from '@/lib/exercise-progression';
 import { buildSessionTargets, type ExerciseTarget } from '@/lib/exercise-targets';
+import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { normalizeExerciseName } from '@/lib/exercise-names';
 import {
   buildProgrammerInput,
@@ -60,7 +61,23 @@ export async function resolveSessionTargets(
   sessions: ExerciseSession[]
 ): Promise<ResolvedSessionTargets> {
   const plan = sessions.find(s => s.date === date && s.planned);
-  const components = plan?.components ?? [];
+
+  // The routine day for this date, distilled with rotation context. Drives the
+  // AI programme (anchors/staples fixed, accessories rotated) and the hash.
+  const routineDay = await resolveRoutineDay(date, sessions);
+
+  // When a routine day governs this date, the routine's CURRENT title is the
+  // source of truth for the session's components — not the stored plan session,
+  // whose components can be stale (e.g. a calendar-sourced session whose event
+  // title predates a routine edit). Deriving from the routine keeps selection in
+  // step with the anchors the programme already pulls from it, and moves the
+  // hash so a stale cached programme for the day regenerates. The plan session
+  // is kept only for the plannedSessionId link. Falls back to the plan's
+  // components when the routine title doesn't parse as training (a rest day).
+  const routineParsed = routineDay ? parsePlannedTitle(`🏋️ ${routineDay.title}`) : null;
+  const components = routineParsed?.components ?? plan?.components ?? [];
+  const label = routineParsed?.title ?? plan?.label;
+
   // Exclude the target date so "last time" is the previous workout, not a session
   // already logged today.
   const progressions = buildProgressions(sessions, { before: date });
@@ -72,13 +89,9 @@ export async function resolveSessionTargets(
   // hash, so both routes must resolve them to look up the same cache entry.
   const goals = await buildProgrammerGoals(date);
 
-  // The routine day for this date, distilled with rotation context. Drives the
-  // AI programme (anchors/staples fixed, accessories rotated) and the hash.
-  const routineDay = await resolveRoutineDay(date, sessions);
-
   const input = buildProgrammerInput(
     progressions,
-    { label: plan?.label, components, ...(routineDay ? { routineDay } : {}) },
+    { label, components, ...(routineDay ? { routineDay } : {}) },
     date,
     totalSessions,
     goals

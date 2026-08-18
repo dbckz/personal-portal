@@ -85,12 +85,17 @@ function shapeMatchesSession(shape: RoutineSessionShape, session: ExerciseSessio
 //   CREATE — for each day today…+13 that is a non-rest routine day and holds NO
 //     planned or completed session yet (any source: a hand-made calendar event or
 //     a manual plan already there wins the date).
-//   UPDATE — a FUTURE (date > today) routine-sourced, not-completed session whose
-//     routine day title has changed → bring its content back in line.
+//   UPDATE — a routine- OR calendar-sourced, not-completed, not-started session
+//     dated today or later whose routine day title has changed → bring its
+//     content back in line (and, via the I/O layer, retitle its calendar event).
+//     Today is included so a routine edit drives the current day too — but only
+//     while it is untouched (no logged exercises), so a hand-adjusted or
+//     in-progress day is never overwritten.
 //   REMOVE — a FUTURE routine-sourced, not-completed session whose routine day is
-//     now a rest day (or no longer parses as training) → delete it.
-//   Sessions that are 'calendar', 'manual', 'sheet' or 'freeform', completed, or
-//   dated today or earlier are never touched. Today, once created, is left alone.
+//     now a rest day (or no longer parses as training) → delete it. Never removes
+//     today, and never auto-deletes a calendar-sourced event.
+//   Sessions that are 'manual', 'sheet' or 'freeform', completed, started, or
+//   dated earlier than today are never touched.
 export function planRoutineMaterialisation(
   routine: WeeklyRoutineDay[],
   existingSessions: ExerciseSession[],
@@ -123,12 +128,17 @@ export function planRoutineMaterialisation(
   const remove: string[] = [];
 
   for (const session of existingSessions) {
-    if (session.source !== 'routine' || session.completed) continue;
-    if (session.date <= today) continue; // today is left alone once it exists; past is history
+    // Only unfinished, untouched routine/calendar plans are reconciled. A logged
+    // exercise means the day is in progress — leave it exactly as done.
+    const reconcilable = session.source === 'routine' || session.source === 'calendar';
+    if (!reconcilable || session.completed || (session.exercises?.length ?? 0) > 0) continue;
+    if (session.date < today) continue; // past is history; today and future reconcile
 
     const shape = routineShapeFor(session.date);
     if (!shape) {
-      remove.push(session.id); // became a rest day (or stopped parsing as training)
+      // Became a rest day (or stopped parsing as training). Only auto-remove a
+      // FUTURE routine-made session — never today, and never a calendar event.
+      if (session.source === 'routine' && session.date > today) remove.push(session.id);
       continue;
     }
     if (!shapeMatchesSession(shape, session)) update.push({ sessionId: session.id, shape });

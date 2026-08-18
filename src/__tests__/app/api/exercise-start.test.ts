@@ -35,6 +35,14 @@ jest.mock('@/lib/storage/goals', () => ({
   queryGoals: jest.fn().mockResolvedValue([]),
 }));
 
+// No standing routine for these dates — this suite is about the SHAPE of the
+// seeded entries, so the deterministic targets must reflect the full history,
+// not a routine day's component filter. (With a routine present, the day's
+// components would legitimately narrow the seeded exercises.)
+jest.mock('@/lib/storage/weekly-routine', () => ({
+  getWeeklyRoutine: jest.fn().mockResolvedValue([]),
+}));
+
 // Keep the real programmer helpers (input/hash/row mapping the resolver needs)
 // but spy on generateProgramme so a test can assert the start route never fires
 // a Claude generation.
@@ -110,13 +118,14 @@ describe('POST /api/exercise/start — seeding the session', () => {
     mockGetCached.mockReturnValue(null);
   });
 
-  it('carries the run’s distance and time onto its seeded entry', async () => {
+  it('carries the run’s time onto its seeded entry (treadmill is time-only)', async () => {
     const entries = await start();
     const run = entries.find(e => e.name === 'Treadmill run')!;
     expect(run.durationMinutes).toBe(15);
-    expect(run.distanceKm).toBe(2.5);
-    // The pre-filled target reads in cardio units, not "—".
-    expect(run.targetText).toBe('15 min · 2.5 km');
+    // A treadmill piece is measured in minutes, never distance.
+    expect(run.distanceKm).toBeUndefined();
+    // The pre-filled target reads in minutes, not "—".
+    expect(run.targetText).toBe('15 min');
   });
 
   it('carries a plank’s seconds and marks unilateral work each side', async () => {

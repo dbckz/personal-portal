@@ -273,16 +273,19 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
     last.weightKg === undefined &&
     (last.durationMinutes !== undefined || last.distanceKm !== undefined || isCardioName(base.name));
   if (isCardio) {
+    // A treadmill piece is targeted in MINUTES, never distance — a logged
+    // "9.2" is a speed, not a distance, so distance would be fiction here.
+    const treadmill = /treadmill/i.test(base.name);
     const detail = describeVolumeLoad({
       durationMinutes: last.durationMinutes,
-      distanceKm: last.distanceKm,
+      ...(treadmill ? {} : { distanceKm: last.distanceKm }),
     });
     return {
       ...context,
       action: 'hold',
       kind: 'cardio',
       ...(last.durationMinutes !== undefined ? { durationMinutes: last.durationMinutes } : {}),
-      ...(last.distanceKm !== undefined ? { distanceKm: last.distanceKm } : {}),
+      ...(!treadmill && last.distanceKm !== undefined ? { distanceKm: last.distanceKm } : {}),
       rationale: detail
         ? `Last time was ${detail} — match or beat it.`
         : 'No distance or time logged last time — record them today.',
@@ -423,7 +426,10 @@ export function buildSessionTargets(
   components: string[] = [],
   limit = 8
 ): ExerciseTarget[] {
-  return orderTargets(selectPlanProgressions(progressions, components, limit).map(buildTarget));
+  return orderTargets(
+    selectPlanProgressions(progressions, components, limit).map(buildTarget),
+    components
+  );
 }
 
 // The exercises a session's plan implies, most-relevant first and capped. Shared
@@ -438,12 +444,48 @@ export function selectPlanProgressions(
   return relevant.slice(0, limit);
 }
 
+// The cardio words a plan/routine component can use to name which piece the
+// session wants, most-specific first so "treadmill" wins over the bare "run"
+// both a treadmill and an outdoor run share.
+const CARDIO_MATCH_WORDS = [
+  'treadmill',
+  'parkrun',
+  'outdoor',
+  'track',
+  'elliptical',
+  'erg',
+  'rower',
+  'rowing',
+  'bike',
+  'cycle',
+  'swim',
+  'run',
+];
+
+// At most ONE cardio piece leads the session. Prefer the cardio whose name
+// echoes the plan/routine wording (components say "treadmill" → Treadmill run);
+// with no such steer, keep the most-trained — which, since progressions arrive
+// most-trained first, is simply the first cardio.
+function pickCardio(cardio: ExerciseTarget[], components: string[]): ExerciseTarget {
+  const text = components.join(' ').toLowerCase();
+  for (const word of CARDIO_MATCH_WORDS) {
+    if (!text.includes(word)) continue;
+    const hit = cardio.find(t => t.name.toLowerCase().includes(word));
+    if (hit) return hit;
+  }
+  return cardio[0];
+}
+
 // Run/treadmill first, everything else in its original order — a warm-up run
 // leads the session, not a chest press. A stable partition, so the relative
-// order within each group is preserved.
-function orderTargets(targets: ExerciseTarget[]): ExerciseTarget[] {
+// order within each group is preserved. Only ONE cardio piece survives (see
+// pickCardio): the rest are dropped so a session never carries two runs.
+function orderTargets(targets: ExerciseTarget[], components: string[] = []): ExerciseTarget[] {
   const isCardio = (t: ExerciseTarget) => t.kind === 'cardio';
-  return [...targets.filter(isCardio), ...targets.filter(t => !isCardio(t))];
+  const cardio = targets.filter(isCardio);
+  const rest = targets.filter(t => !isCardio(t));
+  const lead = cardio.length > 0 ? [pickCardio(cardio, components)] : [];
+  return [...lead, ...rest];
 }
 
 // A muscle group a plan day can call for.

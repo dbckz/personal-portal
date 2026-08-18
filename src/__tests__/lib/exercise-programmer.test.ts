@@ -200,6 +200,71 @@ describe('validateProgramme', () => {
   });
 });
 
+describe('cardio rules in validateProgramme', () => {
+  function twoCardioInput(): ProgrammerInput {
+    return buildProgrammerInput(
+      [
+        progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }], 4),
+        progression('Outdoor run', [{ date: '2026-08-01', durationMinutes: 25, distanceKm: 5 }], 2),
+        progression('Cable tricep pushdown', [{ date: '2026-08-02', sets: 3, reps: 12, weightKg: 20 }], 2),
+      ],
+      { label: 'Run', components: [] },
+      '2026-08-06',
+      6
+    );
+  }
+
+  it('drops any cardio row after the first', () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 16 } },
+        { name: 'Outdoor run', kind: 'cardio', toFailure: false, target: { durationMinutes: 26, distanceKm: 5 } },
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+      ],
+      twoCardioInput()
+    );
+    expect(rows.map(r => r.name)).toEqual(['Treadmill run', 'Cable tricep pushdown']);
+    expect(rows.filter(r => r.kind === 'cardio')).toHaveLength(1);
+  });
+
+  it('strips distance from a treadmill row and keeps it in minutes', () => {
+    const rows = validateProgramme(
+      [{ name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 16, distanceKm: 2.6 } }],
+      twoCardioInput()
+    );
+    expect(rows[0].target).toEqual({ durationMinutes: 16 });
+  });
+
+  it('fills a treadmill duration from history when the model omits it', () => {
+    const rows = validateProgramme(
+      [{ name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { distanceKm: 2.6 } }],
+      twoCardioInput()
+    );
+    // No duration given, distance stripped — the last logged 15 min fills in.
+    expect(rows[0].target).toEqual({ durationMinutes: 15 });
+  });
+
+  it('caps a cardio duration jump at +5 minutes over the last logged', () => {
+    // The incident: the model back-solved 29 min from a calendar title.
+    const rows = validateProgramme(
+      [{ name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 29 } }],
+      twoCardioInput()
+    );
+    // Last was 15 min → capped at 20.
+    expect(rows[0].target.durationMinutes).toBe(20);
+  });
+
+  it('never forces a cardio duration upward — a deliberate deload survives', () => {
+    const rows = validateProgramme(
+      [{ name: 'Outdoor run', kind: 'cardio', toFailure: false, target: { durationMinutes: 18, distanceKm: 4 } }],
+      twoCardioInput()
+    );
+    // Last was 25 min; 18 is below the +5 cap, so it is left as the model set it.
+    expect(rows[0].target.durationMinutes).toBe(18);
+    expect(rows[0].target.distanceKm).toBe(4);
+  });
+});
+
 describe('generateProgramme', () => {
   it('validates and returns rows from the model, in order', async () => {
     const run = jest.fn().mockResolvedValue(

@@ -251,7 +251,8 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
-- Ordering. If the session includes a run or treadmill piece, put it FIRST.
+- Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session.
+- Treadmill and cardio targets. A treadmill piece is targeted in MINUTES, never distance (a logged number like "9.2" is a speed, not a distance). When you add duration to a cardio piece, add at most 5 minutes over the last logged duration — never back-solve a jump from a calendar title.
 - Finish to failure — safely. Mark exactly ONE exercise as the last set to failure, and make it the final row. It MUST be an exercise that is safe to push to failure alone: a machine, cable or bodyweight movement. Never a barbell or heavy dumbbell exercise where failing means dropping a weight.
 - Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights and reps, seconds for a hold, or minutes/distance for cardio).
 
@@ -330,7 +331,22 @@ function isSafeToFailure(name: string): boolean {
 
 const KINDS: ExerciseKind[] = ['core', 'rotation', 'cardio', 'hold'];
 
-function cleanTarget(raw: unknown): ProgrammeTarget {
+// The most recent logged duration for an exercise, read newest-first out of its
+// recent history. Undefined when nothing timed has been logged.
+function lastLoggedDurationMinutes(recent: ProgressionPoint[]): number | undefined {
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].durationMinutes !== undefined) return recent[i].durationMinutes;
+  }
+  return undefined;
+}
+
+// `cardio`, when passed, is the row's exercise name and history — supplied only
+// for a cardio row so its target can be corrected against reality: a treadmill
+// piece is time-only (distance stripped, a missing duration filled from
+// history), and any cardio duration is capped at +5 minutes over the last one
+// logged so the model can't back-solve a wild jump. The cap is upward-only, so a
+// deliberate deload survives.
+function cleanTarget(raw: unknown, cardio?: { name: string; recent: ProgressionPoint[] }): ProgrammeTarget {
   const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const num = (v: unknown): number | undefined =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
@@ -348,6 +364,19 @@ function cleanTarget(raw: unknown): ProgrammeTarget {
   if (durationMinutes !== undefined) out.durationMinutes = durationMinutes;
   if (distanceKm !== undefined) out.distanceKm = distanceKm;
   if (t.perSide === true) out.perSide = true;
+
+  if (cardio) {
+    const lastDuration = lastLoggedDurationMinutes(cardio.recent);
+    if (/treadmill/i.test(cardio.name)) {
+      delete out.distanceKm;
+      if (out.durationMinutes === undefined && lastDuration !== undefined) {
+        out.durationMinutes = lastDuration;
+      }
+    }
+    if (out.durationMinutes !== undefined && lastDuration !== undefined) {
+      out.durationMinutes = Math.min(out.durationMinutes, lastDuration + 5);
+    }
+  }
   return out;
 }
 
@@ -363,6 +392,9 @@ export function validateProgramme(
 
   const rows: ProgrammeRow[] = [];
   const seen = new Set<string>();
+  // At most one cardio piece per session: the first survives, the rest are
+  // dropped so a day never carries two runs.
+  let sawCardio = false;
   for (const record of records) {
     const name = typeof record.name === 'string' ? record.name.trim() : '';
     if (!name) continue;
@@ -374,7 +406,14 @@ export function validateProgramme(
     const kind = KINDS.includes(record.kind as ExerciseKind)
       ? (record.kind as ExerciseKind)
       : 'rotation';
-    const target = cleanTarget(record.target);
+    if (kind === 'cardio') {
+      if (sawCardio) continue; // second cardio piece — drop it
+      sawCardio = true;
+    }
+    const target = cleanTarget(
+      record.target,
+      kind === 'cardio' ? { name: known.name, recent: known.recent } : undefined
+    );
     const rationale =
       typeof record.rationale === 'string' && record.rationale.trim()
         ? record.rationale.trim().slice(0, 200)

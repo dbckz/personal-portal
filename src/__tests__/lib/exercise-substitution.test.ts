@@ -64,6 +64,9 @@ describe('per-exercise substitution and progression', () => {
   it('builds the target from the substitute’s own history, not the original’s', () => {
     const target = buildTarget(treadmill!);
     expect(target.kind).toBe('cardio');
-    expect(target.distanceKm).toBe(3);
+    // A treadmill piece is time-only, so its own logged 20 min carries through
+    // (the parkrun's would differ) and the ambiguous distance is dropped.
+    expect(target.durationMinutes).toBe(20);
+    expect(target.distanceKm).toBeUndefined();
   });
 });

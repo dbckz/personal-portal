@@ -249,16 +249,31 @@ describe('buildTarget', () => {
     expect(target.rationale).not.toMatch(/sets of/);
   });
 
-  it('repeats a cardio piece with its real numbers, not "the same"', () => {
-    // The exact complaint: a treadmill run that used to say "Repeat the same".
+  it('targets a treadmill piece in time only, never distance', () => {
+    // A treadmill is measured in MINUTES: a logged "distance" is really a speed,
+    // so the target carries the duration and drops the distance entirely.
     const target = buildTarget(
       progression({ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }, 'Treadmill run')
     );
     expect(target.kind).toBe('cardio');
     expect(target.durationMinutes).toBe(15);
+    expect(target.distanceKm).toBeUndefined();
+    // The rationale reads in minutes with no fabricated distance.
+    expect(target.rationale).toContain('15 min');
+    expect(target.rationale).not.toContain('km');
+    // The historical summary still records whatever was logged, distance and all.
+    expect(target.lastSummary).toBe('2 Aug · 15 min · 2.5 km');
+  });
+
+  it('keeps distance for a non-treadmill cardio piece', () => {
+    // An outdoor run's distance is real, so it survives.
+    const target = buildTarget(
+      progression({ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }, 'Outdoor run')
+    );
+    expect(target.kind).toBe('cardio');
+    expect(target.durationMinutes).toBe(15);
     expect(target.distanceKm).toBe(2.5);
     expect(target.rationale).toContain('15 min · 2.5 km');
-    expect(target.lastSummary).toBe('2 Aug · 15 min · 2.5 km');
   });
 });
 
@@ -411,5 +426,34 @@ describe('buildSessionTargets', () => {
       ['Pull (back & arms)', 'core']
     );
     expect(targets.map(t => t.name)).toEqual(['Lat pulldown', 'Pallof press']);
+  });
+
+  function cardioProg(name: string, sessions: number): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', durationMinutes: 15, distanceKm: 3 };
+    return { name, key: name.toLowerCase(), sessions, points: [point], first: point, latest: point };
+  }
+
+  it('keeps at most one cardio piece, leading the session', () => {
+    // Two runs are offered; only one survives, and it comes first.
+    const targets = buildSessionTargets(
+      [cardioProg('Treadmill run', 5), cardioProg('Outdoor run', 2), prog('Pallof press')],
+      ['Run', 'core']
+    );
+    const cardio = targets.filter(t => t.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    // With no distinguishing wording, the most-trained cardio (Treadmill, seen
+    // more often) wins, and cardio leads.
+    expect(targets[0].name).toBe('Treadmill run');
+  });
+
+  it('prefers the cardio whose name echoes the plan wording', () => {
+    // Outdoor run is the most-trained, but the plan names the treadmill.
+    const targets = buildSessionTargets(
+      [cardioProg('Outdoor run', 5), cardioProg('Treadmill run', 2)],
+      ['Treadmill']
+    );
+    const cardio = targets.filter(t => t.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Treadmill run');
   });
 });

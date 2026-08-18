@@ -125,12 +125,52 @@ describe('planRoutineMaterialisation — reconcile', () => {
     expect(plan.remove).toEqual([]);
   });
 
-  it('never touches today, past days, completed, or non-routine sessions', () => {
+  it('reconciles TODAY when it is unstarted, driving a routine edit into the current day', () => {
+    // Today (Monday) is routine "Push (chest & arms)"; the stored session is a
+    // stale "Legs" with nothing logged yet — a routine edit must reach it.
+    const staleToday = session({ id: 'today', date: TODAY, label: 'Legs', components: ['Legs'] });
+    const plan = planRoutineMaterialisation(ROUTINE, [staleToday], TODAY);
+    expect(plan.update).toHaveLength(1);
+    expect(plan.update[0].sessionId).toBe('today');
+    expect(plan.update[0].shape).toMatchObject({
+      type: 'strength',
+      label: 'Push (chest & arms)',
+      components: ['Push (chest & arms)'],
+    });
+  });
+
+  it('reconciles a calendar-sourced session so its event gets retitled', () => {
+    // The incident: today's session is source 'calendar' (from a stale event
+    // title "Run (4.5 km) + core"); the routine now says Push. It must update.
+    const staleCalendar = session({
+      id: 'cal',
+      date: TODAY,
+      source: 'calendar',
+      type: 'strength + cardio',
+      label: 'Run + core',
+      components: ['Run', 'core'],
+    });
+    const plan = planRoutineMaterialisation(ROUTINE, [staleCalendar], TODAY);
+    expect(plan.update).toHaveLength(1);
+    expect(plan.update[0].sessionId).toBe('cal');
+    expect(plan.update[0].shape).toMatchObject({
+      label: 'Push (chest & arms)',
+      components: ['Push (chest & arms)'],
+    });
+  });
+
+  it('never touches a completed, started, past, or non-reconcilable session', () => {
     const existing = [
-      session({ id: 'today', date: TODAY, label: 'Legs', components: ['Legs'] }), // today, leave alone
       session({ id: 'past', date: '2026-08-16', label: 'Legs', components: ['Legs'] }), // past
       session({ id: 'done', date: '2026-08-19', label: 'Legs', components: ['Legs'], completed: true }),
-      session({ id: 'cal', date: '2026-08-19', source: 'calendar', label: 'Legs', components: ['Legs'] }),
+      // Started today: a logged exercise means the day is in progress — leave it.
+      session({
+        id: 'started',
+        date: TODAY,
+        label: 'Legs',
+        components: ['Legs'],
+        exercises: [{ id: 'e1', name: 'Leg press', sets: 3, reps: 10, weightKg: 100 }],
+      }),
       session({ id: 'man', date: '2026-08-20', source: 'manual', label: 'Legs', components: ['Legs'] }),
     ];
     const plan = planRoutineMaterialisation(ROUTINE, existing, TODAY);
