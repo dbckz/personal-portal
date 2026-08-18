@@ -36,10 +36,12 @@ export interface BlockMember {
   adhocId?: string;
 }
 
-// Look up an Asana task's live title / completion by gid. `allAsanaTasks` is the
-// page's CalendarEvent-shaped Asana list (id === gid), so callers pass a lookup
-// over that; a missing task (completed and dropped from the incomplete fetch)
-// falls back to the scheduled record's captured name.
+// Look up an Asana task's live title / completion by gid. Callers pass a lookup
+// over the page's CalendarEvent-shaped Asana list (id === gid). That list holds
+// only incomplete tasks, so a scheduled member absent from it has been completed
+// and dropped: it is treated as done, and falls back to the scheduled record's
+// captured name. (Use the UNFILTERED raw list for the lookup, so a task hidden by
+// a client-side filter isn't mistaken for a completed one.)
 export type AsanaTaskLookup = (gid: string) => { title: string; completed: boolean; integrationId?: string } | undefined;
 
 // The member tasks scheduled into a block, in a stable display order (Asana
@@ -60,7 +62,8 @@ export function resolveBlockMembers(
       key: s.id,
       source: 'asana',
       title: live?.title ?? s.taskName ?? 'Scheduled task',
-      done: live?.completed ?? false,
+      // The live list is incomplete-only; a member missing from it is done.
+      done: live ? live.completed : true,
       taskId: s.asanaTaskId,
       gid: s.asanaTaskId,
       integrationId: s.integrationId ?? live?.integrationId,

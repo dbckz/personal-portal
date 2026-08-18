@@ -234,6 +234,7 @@ export default function Home() {
   const {
     googleEvents,
     allAsanaTasks,
+    rawAsanaTasks,
     filteredAsanaTasks,
     scheduledAsanaTasks,
     isLoading,
@@ -1074,11 +1075,11 @@ export default function Home() {
       scheduledAsanaTasks,
       allAdhocTasks,
       gid => {
-        const t = allAsanaTasks.find(task => task.id === gid);
+        const t = rawAsanaTasks.find(task => task.id === gid);
         return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
       }
     );
-  }, [batchBlockEvent, scheduledAsanaTasks, allAdhocTasks, allAsanaTasks]);
+  }, [batchBlockEvent, scheduledAsanaTasks, allAdhocTasks, rawAsanaTasks]);
 
   const closeBatchBlock = useCallback(() => {
     setBatchBlockEvent(null);

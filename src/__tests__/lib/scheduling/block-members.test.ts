@@ -49,12 +49,13 @@ describe('resolveBlockMembers', () => {
   it('groups every scheduled Asana task sharing the block event id', () => {
     const tasks = [
       scheduled({ id: 's1', asanaTaskId: 'g1' }),
-      scheduled({ id: 's2', asanaTaskId: 'g2' }),
+      scheduled({ id: 's2', asanaTaskId: 'g2', taskName: 'Second' }),
       scheduled({ id: 's3', asanaTaskId: 'g3', googleEventId: 'other-evt' }),
     ];
+    // The live list holds only incomplete tasks: g1 is present (not done); g2 has
+    // dropped from it (completed) and is treated as done.
     const members = resolveBlockMembers('evt-batch', tasks, [], lookup({
       g1: { title: 'First', completed: false, integrationId: 'int-1' },
-      g2: { title: 'Second', completed: true, integrationId: 'int-1' },
     }));
 
     expect(members.map(m => m.key)).toEqual(['s1', 's2']);
@@ -69,14 +70,24 @@ describe('resolveBlockMembers', () => {
     expect(members[1]).toMatchObject({ title: 'Second', done: true });
   });
 
-  it('falls back to the captured taskName when the Asana task has dropped from the live list', () => {
+  it('treats a scheduled member absent from the live incomplete list as done, using the captured taskName', () => {
     const members = resolveBlockMembers(
       'evt-batch',
       [scheduled({ id: 's1', asanaTaskId: 'gone', taskName: 'Completed earlier' })],
       [],
       lookup({})
     );
-    expect(members[0]).toMatchObject({ title: 'Completed earlier', done: false });
+    expect(members[0]).toMatchObject({ title: 'Completed earlier', done: true });
+  });
+
+  it('marks a scheduled member present in the live incomplete list as not done', () => {
+    const members = resolveBlockMembers(
+      'evt-batch',
+      [scheduled({ id: 's1', asanaTaskId: 'g1' })],
+      [],
+      lookup({ g1: { title: 'Still open', completed: false } })
+    );
+    expect(members[0]).toMatchObject({ title: 'Still open', done: false });
   });
 
   it('uses the scheduled record integration id, falling back to the live task', () => {

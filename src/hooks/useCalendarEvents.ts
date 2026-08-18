@@ -22,6 +22,7 @@ export function useCalendarEvents() {
 
   const {
     allAsanaTasks,
+    rawAsanaTasks,
     filteredAsanaTasks,
     scheduledAsanaTasks,
     isLoading: asanaLoading,
@@ -151,6 +152,7 @@ export function useCalendarEvents() {
   return {
     googleEvents,
     allAsanaTasks,
+    rawAsanaTasks,
     filteredAsanaTasks,
     scheduledAsanaTasks,
     isLoading,

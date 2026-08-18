@@ -32,6 +32,7 @@ interface TypeFieldInfo {
 
 interface UseAsanaTasksReturn {
   allAsanaTasks: CalendarEvent[];
+  rawAsanaTasks: CalendarEvent[];
   filteredAsanaTasks: CalendarEvent[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
   isLoading: boolean;
@@ -893,6 +894,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
 
   return {
     allAsanaTasks,
+    rawAsanaTasks,
     filteredAsanaTasks,
     scheduledAsanaTasks,
     isLoading,

@@ -106,6 +106,7 @@ export function MobileShell() {
   const {
     googleEvents,
     allAsanaTasks,
+    rawAsanaTasks,
     scheduledAsanaTasks,
     isLoading,
     fetchAllEvents,
@@ -307,10 +308,10 @@ export function MobileShell() {
     const adhocTasks = getTasksForDate(format(selectedEvent.startTime, 'yyyy-MM-dd'));
     if (!isGroupedBlock(selectedEvent, scheduledAsanaTasks, adhocTasks)) return [];
     return resolveBlockMembers(selectedEvent.id, scheduledAsanaTasks, adhocTasks, gid => {
-      const t = allAsanaTasks.find(task => task.id === gid);
+      const t = rawAsanaTasks.find(task => task.id === gid);
       return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
     });
-  }, [selectedEvent, scheduledAsanaTasks, allAsanaTasks, getTasksForDate]);
+  }, [selectedEvent, scheduledAsanaTasks, allAsanaTasks, rawAsanaTasks, getTasksForDate]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
