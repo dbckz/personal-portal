@@ -47,6 +47,16 @@ export function buildBriefPrompt({ task, stories, brief }: BriefPromptInput): st
       + 'comment on a task, use the calendar-asana draft_comment tool — it saves '
       + 'the comment as a local draft for Dave to review, edit and post himself. '
       + 'It does NOT post to Asana.',
+    'When you create a Gmail REPLY draft (create_draft on an existing thread), '
+      + 'the API does NOT add the quoted conversation below your text the way '
+      + 'the Gmail compose window does — a draft sent as-is loses the thread '
+      + 'history, so anyone later added to the thread has no context. You MUST '
+      + 'therefore fetch the thread (get_thread) and append the full quoted '
+      + 'trail below your reply: a blank line, then '
+      + '"On <date>, <sender name> <<email>> wrote:" followed by the prior '
+      + 'message with each line prefixed by "> " (and earlier messages nested '
+      + 'with ">> ", etc., or included via the previous message\'s own quoted '
+      + 'trail). New standalone emails (no thread) need no quoting.',
     'Return ONLY valid JSON with this schema:',
     '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
     'outputs should be a short list of concrete review items such as URLs, artefacts produced, or key caveats.',
