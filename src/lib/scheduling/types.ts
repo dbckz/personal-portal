@@ -138,4 +138,10 @@ export interface ProposeBlocksInput {
   // reserved deep-work blocks. Absent in the wizard path, which lists its selected
   // deep-work candidates on every morning as before.
   deepWorkTasksOverride?: CandidateTask[];
+  // Per-date cap (yyyy-MM-dd → absolute ms) for how late the deep-work MORNING
+  // window may run on that day. On office days deep work must end at the
+  // get-ready block's start instead of the usual noon; this carries that cap in.
+  // A day with no entry keeps the normal noon-extended morning window. The 60-min
+  // floor still applies, so a day whose cap leaves < 60 min gets no deep work.
+  perDayDeepWorkEndMs?: Record<string, number>;
 }

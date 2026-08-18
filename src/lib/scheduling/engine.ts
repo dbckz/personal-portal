@@ -415,17 +415,24 @@ export const DEEP_WORK_MORNING_FLOOR_MINUTES = 60;
 // preferred window (the caller then just uses normal placement).
 export function deepWorkMorningWindows(
   preferredWindows: Array<[TimeOfDay, TimeOfDay]>,
-  workingDays: WorkingDay[]
+  workingDays: WorkingDay[],
+  // Optional per-date cap (yyyy-MM-dd → absolute ms): on an office day deep work
+  // must end at the get-ready block's start rather than noon. A day with no entry
+  // keeps the normal noon-extended end.
+  endCapByDate?: Record<string, number>
 ): Window[] {
   const morningPrefs = preferredWindows.filter(([start]) => start.h < DEEP_WORK_MORNING_END.h);
   if (morningPrefs.length === 0) return [];
   const windows: Window[] = [];
   for (const day of workingDays) {
+    const cap = endCapByDate?.[day.dateStr];
     for (const [start, end] of morningPrefs) {
       const startMs = msAt(day.date, start);
       // Extend the end to at least noon so a meeting-shortened morning still has
-      // room for the block to slide/shrink into.
-      const endMs = Math.max(msAt(day.date, end), msAt(day.date, DEEP_WORK_MORNING_END));
+      // room for the block to slide/shrink into, then clamp to the day's cap
+      // (office days: the get-ready block's start).
+      let endMs = Math.max(msAt(day.date, end), msAt(day.date, DEEP_WORK_MORNING_END));
+      if (cap !== undefined) endMs = Math.min(endMs, cap);
       if (endMs <= startMs) continue;
       windows.push({ date: day.date, dateStr: day.dateStr, startMs, endMs, preferred: true, bestTimeMatch: false });
     }
@@ -1069,15 +1076,19 @@ export function proposeBlocks(
       title: t.title,
       integrationId: t.integrationId,
     }));
+    const deepWorkEndCap = input.perDayDeepWorkEndMs;
     for (const wd of workingDays) {
       if ((catCount[wd.dateStr] ?? 0) > 0) continue; // this morning already has deep work
-      let morningWindows = deepWorkMorningWindows(preferredWindows, [wd]);
+      let morningWindows = deepWorkMorningWindows(preferredWindows, [wd], deepWorkEndCap);
       if (morningWindows.length === 0) {
         // No configured morning preferred window: fall back to the day's morning
-        // working hours (start → noon) so deep work still leads the morning.
-        const noonMs = new Date(
+        // working hours (start → noon, clamped to the day's cap on office days) so
+        // deep work still leads the morning.
+        let noonMs = new Date(
           wd.date.getFullYear(), wd.date.getMonth(), wd.date.getDate(), 12, 0, 0, 0
         ).getTime();
+        const cap = deepWorkEndCap?.[wd.dateStr];
+        if (cap !== undefined) noonMs = Math.min(noonMs, cap);
         if (noonMs > wd.whStartMs) {
           morningWindows = [{
             date: wd.date,
@@ -1243,7 +1254,7 @@ export function proposeBlocks(
       // 60-min block won't fit the morning does it fall through to normal placement.
       let placement: FlexSlot | null = null;
       if (isDeepWork(category)) {
-        const morningWindows = deepWorkMorningWindows(preferredWindows, workingDays);
+        const morningWindows = deepWorkMorningWindows(preferredWindows, workingDays, input.perDayDeepWorkEndMs);
         if (morningWindows.length > 0) {
           placement = findDeepWorkMorningPlacement(
             (dur, wr) => findLeveledSlot(catCount, morningWindows, dur, wr),

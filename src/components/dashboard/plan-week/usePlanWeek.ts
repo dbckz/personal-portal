@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { format, parseISO } from 'date-fns';
+import { addDays, format, parseISO, startOfWeek } from 'date-fns';
 
 import {
   api,
@@ -36,6 +36,41 @@ import {
   type MatchMeta,
   type ReminderTriageRow,
 } from './types';
+import type { WizardDayLocation } from '@/lib/api';
+
+const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+// The remaining working-day dates (yyyy-MM-dd) of the target week, derived from
+// the configured working-day names. Kept light (config is a local read) so the
+// Location step can list one row per day without a full week-context gather. Past
+// days are dropped; out-of-office days aren't known here (the propose route
+// re-filters day locations to real working dates anyway).
+function computeWorkingDayDates(weekStart: string | undefined, workingDayNames: string[]): string[] {
+  const names = new Set(
+    (workingDayNames ?? []).map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+  );
+  const monday = weekStart
+    ? startOfWeek(new Date(`${weekStart}T00:00:00`), { weekStartsOn: 1 })
+    : startOfWeek(new Date(), { weekStartsOn: 1 });
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const out: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const day = addDays(monday, i);
+    const dateStr = format(day, 'yyyy-MM-dd');
+    if (dateStr < todayStr) continue;
+    if (!names.has(WEEKDAY_NAMES[day.getDay()])) continue;
+    out.push(dateStr);
+  }
+  return out;
+}
 
 // One classifier suggestion for a reminder, as returned by the triage endpoint.
 type ReminderSuggestion = Awaited<
@@ -68,9 +103,15 @@ export function usePlanWeek({
   typeFieldInfoByIntegration,
   asanaIntegrations,
 }: UsePlanWeekOptions) {
-  const [step, setStep] = useState<Step>('priorities');
+  const [step, setStep] = useState<Step>('location');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Location step — per-day work location (Home / Office / Travelling). Missing
+  // entry = home. The step lists the target week's working days; a light config
+  // read (below) resolves those dates without a full week-context gather.
+  const [dayLocations, setDayLocations] = useState<Record<string, WizardDayLocation>>({});
+  const [locationWorkingDays, setLocationWorkingDays] = useState<string[]>([]);
 
   // Step 0 — type unclassified tasks. Incomplete tasks whose Asana "Type" custom
   // field is empty, but whose integration has writable Type labels. These are
@@ -121,6 +162,7 @@ export function usePlanWeek({
   const screenOrder = useMemo<Array<{ key: string; title: string }>>(
     () => [
       ...(hasTypeStep ? [{ key: 'type', title: STEP_LABELS.type }] : []),
+      { key: 'location', title: STEP_LABELS.location },
       { key: 'priorities-input', title: STEP_LABELS.priorities },
       { key: 'priorities-review', title: PRIORITIES_MATCH_LABEL },
       ...(hasRemindersStep ? [{ key: 'reminders', title: STEP_LABELS.reminders }] : []),
@@ -234,7 +276,16 @@ export function usePlanWeek({
     if (!isOpen) return;
     // Invalidate any reminder-classification run started for a previous open.
     remindersRunRef.current += 1;
-    setStep(hasTypeStep ? 'type' : 'priorities');
+    setStep(hasTypeStep ? 'type' : 'location');
+    setDayLocations({});
+    // Resolve the week's working-day dates for the Location step from a light
+    // config read (no Google/Asana round trip). A failure just leaves the step
+    // with no rows.
+    setLocationWorkingDays([]);
+    api
+      .getWorkflowConfig()
+      .then(c => setLocationWorkingDays(computeWorkingDayDates(weekStart, c.scheduling?.workingDays ?? [])))
+      .catch(() => setLocationWorkingDays([]));
     setTypeRows(null);
     setTypeLoading(false);
     setTypeError(null);
@@ -345,7 +396,7 @@ export function usePlanWeek({
     if (!typeRows || !typeFieldInfoByIntegration) return;
     const toWrite = typeRows.filter(r => r.chosen);
     if (toWrite.length === 0) {
-      setStep('priorities');
+      setStep('location');
       return;
     }
     setIsApplyingTypes(true);
@@ -393,7 +444,7 @@ export function usePlanWeek({
         setError(`${failed} of ${toWrite.length} type update${toWrite.length === 1 ? '' : 's'} failed — retry, or Skip to continue.`);
         return; // stay on the type step
       }
-      setStep('priorities');
+      setStep('location');
     } finally {
       setIsApplyingTypes(false);
     }
@@ -656,6 +707,7 @@ export function usePlanWeek({
       if (Object.keys(taskDurations).length) body.durationOverrides = taskDurations;
       if (Object.keys(taskDurationOverrides).length) body.taskDurationOverrides = taskDurationOverrides;
       if (walkDays.size) body.walkDays = Array.from(walkDays);
+      if (Object.keys(dayLocations).length) body.dayLocations = dayLocations;
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
       // Overflow blocks are OPTIONAL — default them to rejected so the user opts in.
       setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
@@ -672,7 +724,7 @@ export function usePlanWeek({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, walkDays, weekStart]);
+  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, walkDays, dayLocations, weekStart]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -854,6 +906,21 @@ export function usePlanWeek({
       });
     }
   }, [mustDoIds]);
+
+  // Set (or clear) a day's work location. Passing 'home' clears the entry (home
+  // is the default = no extra blocks). Selecting 'travel' seeds sensible defaults
+  // the user can then edit inline.
+  const setDayLocation = useCallback((dateStr: string, next: WizardDayLocation | null) => {
+    setDayLocations(prev => {
+      if (!next || next.type === 'home') {
+        if (!(dateStr in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[dateStr];
+        return rest;
+      }
+      return { ...prev, [dateStr]: next };
+    });
+  }, []);
 
   // Toggle a 🚶 walk on/off for a given working day (yyyy-MM-dd).
   const toggleWalkDay = useCallback((dateStr: string) => {
@@ -1134,6 +1201,9 @@ export function usePlanWeek({
       case 'type':
         applyTypes();
         break;
+      case 'location':
+        setStep('priorities');
+        break;
       case 'priorities':
         if (matchRows === null) runMatch();
         else confirmPriorities();
@@ -1157,6 +1227,11 @@ export function usePlanWeek({
   const handleSkip = useCallback(() => {
     switch (step) {
       case 'type':
+        setStep('location');
+        break;
+      case 'location':
+        // Skip = every day at home; clear any location picks.
+        setDayLocations({});
         setStep('priorities');
         break;
       case 'priorities':
@@ -1183,6 +1258,9 @@ export function usePlanWeek({
 
   const handleBack = useCallback(() => {
     switch (step) {
+      case 'location':
+        setStep('type');
+        break;
       case 'priorities':
         if (matchRows !== null) setMatchRows(null); // matched → input phase
         break;
@@ -1208,6 +1286,7 @@ export function usePlanWeek({
   const activeIndex =
     step === 'done' ? screenOrder.length : screenOrder.findIndex(s => s.key === activeScreenKey);
   const canBack =
+    (step === 'location' && hasTypeStep) ||
     (step === 'priorities' && matchRows !== null) ||
     step === 'reminders' ||
     step === 'prep' ||
@@ -1215,6 +1294,7 @@ export function usePlanWeek({
     step === 'review';
   const canSkip =
     step === 'type' ||
+    step === 'location' ||
     step === 'priorities' ||
     step === 'reminders' ||
     step === 'prep' ||
@@ -1249,6 +1329,10 @@ export function usePlanWeek({
     screenOrder,
     activeScreenKey,
     activeIndex,
+    // location step
+    dayLocations,
+    setDayLocation,
+    locationWorkingDays,
     // type step
     untypedTasks,
     typeRows,

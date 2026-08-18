@@ -122,6 +122,19 @@ export interface ProposeWeekRequest {
   // Days (yyyy-MM-dd) the user opted a 🚶 walk into, from the wizard's Walks row.
   // Absent/empty → no walks are scheduled (walks are opt-in per day).
   walkDays?: string[];
+  // Per-day work location (yyyy-MM-dd → where Dave is that day), from the wizard's
+  // Location step. Office days get a get-ready + commute pair (and cap deep work);
+  // travel days get a fixed travel block. A missing entry (or 'home') = home.
+  dayLocations?: Record<string, WizardDayLocation>;
+}
+
+// Where Dave is on a working day, chosen in the wizard's Location step. Mirrors
+// DayLocation in scheduling/rituals.ts.
+export interface WizardDayLocation {
+  type: 'home' | 'office' | 'travel';
+  destination?: string;
+  departTime?: string; // "HH:mm"
+  travelMinutes?: number;
 }
 
 export interface PriorityMatchRow {

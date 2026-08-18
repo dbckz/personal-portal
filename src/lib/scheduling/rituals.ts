@@ -21,6 +21,7 @@ import {
   buildWindowsForTask,
   findSlot,
   localDateStr,
+  parseTimeOfDay,
   resolveWorkingWindow,
   slotIsValid,
   timeStr,
@@ -50,6 +51,22 @@ export const DELEGATION_REVIEW_TITLE = '🤖 Delegation review';
 // Daily BREAK-type walk (paired with a podcast; the pairing is just flavour).
 // Like lunch/exercise it splits work runs and never counts as worked time.
 export const WALK_TITLE = '🚶 Walk';
+// Office-day BREAK-type rituals (see placeOfficeAndTravelBlocks). Both split work
+// runs and never count as worked time (like the walk). Get ready sits immediately
+// before the commute.
+export const GET_READY_TITLE = '🪞 Get ready';
+export const COMMUTE_TITLE = '🚇 Commute to office';
+// Travel-day fixed block: "✈️ Travel to {destination}" (fallback "✈️ Travel").
+// The title is dynamic (carries the destination), so it is matched by PREFIX
+// rather than listed in RITUAL_TITLES. Personal/non-work time, like a break.
+export const TRAVEL_TITLE_PREFIX = '✈️ Travel';
+export function travelBlockTitle(destination?: string): string {
+  const d = destination?.trim();
+  return d ? `${TRAVEL_TITLE_PREFIX} to ${d}` : TRAVEL_TITLE_PREFIX;
+}
+export function isTravelTitle(title: string): boolean {
+  return title.trim().startsWith(TRAVEL_TITLE_PREFIX);
+}
 // WEEKLY x1 WORK-type rituals (placed once per week, deduped by title across the
 // whole week). 📖 Reading is an afternoon-preferred single; 🎰 New bookies is
 // placed in the EVENING (Mon/Fri, >= 18:00, outside working hours) by its own
@@ -78,6 +95,8 @@ export const RITUAL_TITLES: readonly string[] = [
   RETRO_TITLE,
   DELEGATION_REVIEW_TITLE,
   WALK_TITLE,
+  GET_READY_TITLE,
+  COMMUTE_TITLE,
   CONSULTING_TITLE,
   SIDE_PROJECTS_TITLE,
   NEW_BOOKIES_TITLE,
@@ -107,6 +126,9 @@ export type RitualKind =
   | 'retro'
   | 'delegationReview'
   | 'walk'
+  | 'getReady'
+  | 'commute'
+  | 'travel'
   | 'consulting'
   | 'sideProjects'
   | 'newBookies'
@@ -148,7 +170,15 @@ export function isExerciseTitle(title: string): boolean {
 }
 export function isBreakTitle(title: string): boolean {
   const t = title.trim();
-  return t === LUNCH_TITLE || t === EXERCISE_TITLE || t === WALK_TITLE || t === BREAK_TITLE;
+  return (
+    t === LUNCH_TITLE ||
+    t === EXERCISE_TITLE ||
+    t === WALK_TITLE ||
+    t === BREAK_TITLE ||
+    t === GET_READY_TITLE ||
+    t === COMMUTE_TITLE ||
+    isTravelTitle(t)
+  );
 }
 export function isRitualTitle(title: string): boolean {
   return RITUAL_TITLES.includes(title.trim());
@@ -225,6 +255,9 @@ export function ritualKindForTitle(title: string): RitualKind {
   if (t === EXERCISE_TITLE) return 'exercise';
   if (t === LUNCH_TITLE) return 'lunch';
   if (t === WALK_TITLE) return 'walk';
+  if (t === GET_READY_TITLE) return 'getReady';
+  if (t === COMMUTE_TITLE) return 'commute';
+  if (isTravelTitle(t)) return 'travel';
   if (t === BREAK_TITLE) return 'break';
   if (t === KINDLE_TITLE) return 'kindleNotes';
   if (t === GROOMING_TITLE) return 'grooming';
@@ -268,6 +301,9 @@ export function ritualIntegrationIdForKind(
   // Walk is a break-type personal ritual: its own calendar, else the exercise
   // (personal) calendar like the other breaks.
   if (kind === 'walk') return cals?.walk ?? cals?.exercise;
+  // Get ready / Commute / Travel are personal, break-type daily blocks — route
+  // them to the same (personal) calendar the other breaks use.
+  if (kind === 'getReady' || kind === 'commute' || kind === 'travel') return cals?.exercise;
   if (kind === 'lunch') return cals?.lunch ?? legacy;
   if (kind === 'emails') return cals?.emails ?? legacy;
   // The WORK-type rituals (kindle / grooming / retro / delegation review /
@@ -294,6 +330,21 @@ const GROOMING_DURATION_MINUTES = 60;
 const RETRO_DURATION_MINUTES = 60;
 const DELEGATION_REVIEW_DURATION_MINUTES = 30;
 const WALK_DURATION_MINUTES = 45;
+const GET_READY_DURATION_MINUTES = 45;
+const COMMUTE_DURATION_MINUTES = 45;
+// Office-day pair: target the commute to END at 12:00 (get ready 10:30–11:15,
+// commute 11:15–12:00) when the morning is otherwise clear.
+const OFFICE_COMMUTE_TARGET_END_HOUR = 12;
+// A fixed calendar meeting starting before this hour pulls the commute earlier so
+// it ends at/before the meeting.
+const OFFICE_MORNING_MEETING_CUTOFF_HOUR = 13;
+// Never place the get-ready/commute pair earlier than this (a sensible morning
+// floor so a very early meeting simply skips the pair rather than landing it at
+// dawn).
+const OFFICE_PAIR_FLOOR_HOUR = 6;
+// Default travel-block placement when the wizard omits values.
+const DEFAULT_TRAVEL_DEPART: TimeOfDay = { h: 9, m: 0 };
+const DEFAULT_TRAVEL_MINUTES = 120;
 const NEW_BOOKIES_DURATION_MINUTES = 30;
 const READING_DURATION_MINUTES = 60;
 // WORK rituals PREFER the afternoon (from this hour) with a morning fallback, so
@@ -915,4 +966,213 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   } // end placeWeekly
 
   return proposals;
+}
+
+// Where Dave is on a given working day. Missing entry = home (no extra blocks).
+export interface DayLocation {
+  type: 'home' | 'office' | 'travel';
+  destination?: string;
+  departTime?: string; // "HH:mm"
+  travelMinutes?: number;
+}
+
+// Sanitise the wizard's raw dayLocations payload into a clean map for the placer.
+// Keeps only entries whose date is one of this week's dates (`weekDateStrs`) and
+// whose type is 'office' or 'travel' ('home'/unknown → dropped, since home adds no
+// blocks). Travel entries validate departTime ("HH:mm"), clamp travelMinutes to
+// 15–720, and trim/cap the destination. Pure so the route stays thin and this is
+// unit-testable.
+export function sanitizeDayLocations(
+  raw: unknown,
+  weekDateStrs: Set<string>
+): Record<string, DayLocation> {
+  const out: Record<string, DayLocation> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [dateStr, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!weekDateStrs.has(dateStr) || !value || typeof value !== 'object') continue;
+    const r = value as Record<string, unknown>;
+    if (r.type === 'office') {
+      out[dateStr] = { type: 'office' };
+    } else if (r.type === 'travel') {
+      const destination =
+        typeof r.destination === 'string' && r.destination.trim()
+          ? r.destination.trim().slice(0, 200)
+          : undefined;
+      const departTime =
+        typeof r.departTime === 'string' && /^([01]?\d|2[0-3]):[0-5]\d$/.test(r.departTime)
+          ? r.departTime
+          : undefined;
+      const tm = Number(r.travelMinutes);
+      const travelMinutes = Number.isFinite(tm)
+        ? Math.min(720, Math.max(15, Math.round(tm)))
+        : undefined;
+      out[dateStr] = {
+        type: 'travel',
+        ...(destination ? { destination } : {}),
+        ...(departTime ? { departTime } : {}),
+        ...(travelMinutes !== undefined ? { travelMinutes } : {}),
+      };
+    }
+    // 'home' (or anything else) → no entry, no blocks.
+  }
+  return out;
+}
+
+export interface OfficeTravelInput {
+  config: WorkflowConfig;
+  busyIntervals: BusyInterval[];
+  weekStart: Date;
+  now: Date;
+  // Per-date location (yyyy-MM-dd → DayLocation). Only office/travel entries
+  // produce blocks; home (or a missing entry) is a no-op.
+  dayLocations: Record<string, DayLocation>;
+  // Per-date set of ritual titles already on the calendar (so the get-ready /
+  // commute pair is not duplicated on a re-run). Keyed by yyyy-MM-dd.
+  existingRitualTitlesByDate?: Record<string, Set<string>>;
+  // Dates (yyyy-MM-dd) that already have a "✈️ Travel…" event, so a travel block
+  // is not duplicated on a re-run. The travel title is dynamic, so it can't be
+  // deduped via existingRitualTitlesByDate.
+  existingTravelDates?: Set<string>;
+  // Out-of-office dates to drop from working days.
+  outOfOfficeDates?: Set<string>;
+}
+
+export interface OfficeTravelResult {
+  blocks: ProposedBlock[];
+  // Per office-day cap (yyyy-MM-dd → absolute ms): the get-ready block's start,
+  // i.e. the latest a deep-work morning block may run to on that day. Threaded
+  // into the engine so deep work stops at the get-ready block on office days.
+  deepWorkEndByDate: Record<string, number>;
+}
+
+// Scan downward from `targetEndMs` (15-min grid) for the latest END at which a
+// back-to-back pair of length `pairMs` fits free of busy, with its start >=
+// `floorMs`. Returns the end ms, or null when the pair fits nowhere in range.
+function findLatestPairEnd(
+  targetEndMs: number,
+  floorMs: number,
+  pairMs: number,
+  busy: BusyMs[]
+): number | null {
+  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
+  let end = Math.floor(targetEndMs / stepMs) * stepMs;
+  while (end - pairMs >= floorMs) {
+    const start = end - pairMs;
+    if (!overlapsBusy(start, end, busy)) return end;
+    end -= stepMs;
+  }
+  return null;
+}
+
+// Place the office-day get-ready + commute pair and the travel-day travel block
+// for this week's day locations. Pure/deterministic like proposeRitualBlocks.
+//
+//  * Office day → "🪞 Get ready" (45m) immediately before "🚇 Commute to office"
+//    (45m), both breaks. The commute ends at 12:00 by default (get ready
+//    10:30–11:15, commute 11:15–12:00); if a fixed calendar meeting starts before
+//    13:00 the commute is pulled earlier so it ends at/before that meeting, at the
+//    latest position that fits. Reports a per-day deep-work cap (the get-ready
+//    start) so deep work stops at the pair on office days.
+//  * Travel day → "✈️ Travel to {destination}" starting at departTime for
+//    travelMinutes (defaults 09:00 / 120m), a fixed busy block (treated as a break
+//    so it doesn't count as worked time). No get-ready/commute and no deep-work cap.
+export function placeOfficeAndTravelBlocks(input: OfficeTravelInput): OfficeTravelResult {
+  const { config, weekStart, now, dayLocations } = input;
+  const { workingDays } = resolveWorkingWindow(
+    config.scheduling,
+    weekStart,
+    now,
+    input.outOfOfficeDates
+  );
+  const busy: BusyMs[] = input.busyIntervals.map(i => ({
+    start: i.start.getTime(),
+    end: i.end.getTime(),
+    isBreak: i.isBreak,
+  }));
+  const getReadyMs = GET_READY_DURATION_MINUTES * MS_PER_MINUTE;
+  const commuteMs = COMMUTE_DURATION_MINUTES * MS_PER_MINUTE;
+  const pairMs = getReadyMs + commuteMs;
+
+  const blocks: ProposedBlock[] = [];
+  const deepWorkEndByDate: Record<string, number> = {};
+
+  for (const day of workingDays) {
+    const loc = dayLocations[day.dateStr];
+    if (!loc) continue;
+    const present = input.existingRitualTitlesByDate?.[day.dateStr] ?? new Set<string>();
+
+    if (loc.type === 'office') {
+      // Default: commute ends at 12:00. A fixed calendar meeting (non-break busy)
+      // starting before 13:00 pulls the pair earlier so it ends at/before it.
+      const cutoffMs = msAtDay(day, OFFICE_MORNING_MEETING_CUTOFF_HOUR, 0);
+      const dayFloorMs = Math.max(msAtDay(day, OFFICE_PAIR_FLOOR_HOUR, 0), now.getTime());
+      let targetEndMs = msAtDay(day, OFFICE_COMMUTE_TARGET_END_HOUR, 0);
+      let earliestMeeting: number | null = null;
+      for (const b of busy) {
+        if (b.isBreak) continue; // breaks aren't meetings
+        if (b.start >= day.whStartMs - pairMs && b.start < cutoffMs && b.start >= dayFloorMs) {
+          if (earliestMeeting === null || b.start < earliestMeeting) earliestMeeting = b.start;
+        }
+      }
+      if (earliestMeeting !== null && earliestMeeting < targetEndMs) targetEndMs = earliestMeeting;
+
+      const commuteEnd = findLatestPairEnd(targetEndMs, dayFloorMs, pairMs, busy);
+      if (commuteEnd === null) continue; // no room for the pair this morning
+      const getReadyStart = commuteEnd - pairMs;
+      const commuteStart = getReadyStart + getReadyMs;
+
+      if (!present.has(GET_READY_TITLE)) {
+        const start = timeStr(getReadyStart);
+        blocks.push({
+          id: `${day.dateStr}-${start}-ritual-get-ready`,
+          category: 'Get ready',
+          kind: 'ritual',
+          title: GET_READY_TITLE,
+          date: day.dateStr,
+          start,
+          durationMinutes: GET_READY_DURATION_MINUTES,
+          reason: 'Get ready before the commute to the office.',
+        });
+      }
+      if (!present.has(COMMUTE_TITLE)) {
+        const start = timeStr(commuteStart);
+        blocks.push({
+          id: `${day.dateStr}-${start}-ritual-commute`,
+          category: 'Commute',
+          kind: 'ritual',
+          title: COMMUTE_TITLE,
+          date: day.dateStr,
+          start,
+          durationMinutes: COMMUTE_DURATION_MINUTES,
+          reason: 'Commute to the office.',
+        });
+      }
+      // The pair is a break: still busy, but splits work runs.
+      busy.push({ start: getReadyStart, end: commuteEnd, isBreak: true });
+      // Deep work must stop at the get-ready block on office days.
+      deepWorkEndByDate[day.dateStr] = getReadyStart;
+    } else if (loc.type === 'travel') {
+      if (input.existingTravelDates?.has(day.dateStr)) continue; // already has one
+      const depart = parseTimeOfDay(loc.departTime ?? '') ?? DEFAULT_TRAVEL_DEPART;
+      const travelMinutes =
+        loc.travelMinutes && loc.travelMinutes > 0 ? loc.travelMinutes : DEFAULT_TRAVEL_MINUTES;
+      const startMs = msAtDay(day, depart.h, depart.m);
+      const start = timeStr(startMs);
+      blocks.push({
+        id: `${day.dateStr}-${start}-ritual-travel`,
+        category: 'Travel',
+        kind: 'ritual',
+        title: travelBlockTitle(loc.destination),
+        date: day.dateStr,
+        start,
+        durationMinutes: travelMinutes,
+        reason: loc.destination ? `Travelling to ${loc.destination}.` : 'Travelling.',
+      });
+      // Travel is personal/non-work: busy, tagged as a break so it never counts as
+      // worked time and splits work runs (deep work fits around it normally).
+      busy.push({ start: startMs, end: startMs + travelMinutes * MS_PER_MINUTE, isBreak: true });
+    }
+  }
+
+  return { blocks, deepWorkEndByDate };
 }

@@ -26,15 +26,31 @@ jest.mock('@/lib/api', () => ({
     getProjects: jest.fn().mockResolvedValue({ projects: [], dormantCount: 0 }),
     getReminders: jest.fn().mockResolvedValue({ reminders: [] }),
     getCalendarReminders: jest.fn().mockResolvedValue({ candidates: [] }),
+    // The Location step resolves the week's working-day dates from a light config
+    // read on open.
+    getWorkflowConfig: jest.fn().mockResolvedValue({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    }),
   },
 }));
 
 import { api } from '@/lib/api';
 
+// The wizard now opens on the Location step; advance past it (all days at home)
+// to reach the priorities step the older assertions target.
+async function advancePastLocation() {
+  const next = screen.queryByRole('button', { name: /^Next/i });
+  if (next) {
+    await act(async () => {
+      fireEvent.click(next);
+    });
+  }
+}
+
 // Walk the wizard forward with the footer's Skip/Next button until the review
 // step is reached, so every per-step fetch fires.
 async function skipThroughSteps() {
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const next =
       screen.queryByRole('button', { name: 'Skip' }) ??
       screen.queryByRole('button', { name: /^Next/i });
@@ -72,6 +88,7 @@ describe('PlanWeekModal — next-week targeting', () => {
 
   it('passes the target week to every wizard endpoint and shows its dates', async () => {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={NEXT_MONDAY} />);
+    await advancePastLocation();
 
     // Type a priority so the matching call fires, then walk on through
     // reminders/prep → tasks → review, which drives the remaining calls.
@@ -156,6 +173,10 @@ describe('PlanWeekModal — walks (opt-in per day)', () => {
   // Skip priorities (→ prep) then skip prep (→ tasks), where the Walks row shows.
   async function reachTasksStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
+    // Location step first (skip = all home), then priorities (skip → prep).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
@@ -212,30 +233,32 @@ describe('PlanWeekModal', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('gives the priorities step two step dots (input + match-review screens)', () => {
+  it('gives the priorities step two step dots (input + match-review screens)', async () => {
     const { container } = render(<PlanWeekModal isOpen onClose={jest.fn()} />);
+    await advancePastLocation();
 
     // With no untyped tasks and no reminders, the screens the user pages through
-    // are: priorities-input, priorities-review, prep, tasks, review = 5 dots.
+    // are: location, priorities-input, priorities-review, prep, tasks, review = 6 dots.
     const dots = container.querySelectorAll('span.rounded-full');
-    expect(dots).toHaveLength(5);
+    expect(dots).toHaveLength(6);
 
     // The two priorities screens each get their own labelled dot.
     expect(screen.getByTitle('Priorities')).toBeInTheDocument();
     expect(screen.getByTitle('Review matches')).toBeInTheDocument();
 
-    // On the input phase the first priorities dot is the active one.
+    // After the location step, the first priorities dot is the active one.
     expect(screen.getByTitle('Priorities').querySelector('span')).toHaveClass('bg-orange-500');
     expect(screen.getByTitle('Review matches').querySelector('span')).toHaveClass('bg-gray-200');
   });
 
-  it('renders the modal shell and the priorities step when open', () => {
+  it('renders the modal shell and the priorities step when open', async () => {
     render(<PlanWeekModal isOpen onClose={jest.fn()} />);
+    await advancePastLocation();
 
     // Header
     expect(screen.getByRole('heading', { name: 'Plan my week' })).toBeInTheDocument();
 
-    // Priorities step (the default first step with no untyped tasks) is shown.
+    // Priorities step (after the location step, with no untyped tasks) is shown.
     expect(
       screen.getByText(/What matters most this week\?/i)
     ).toBeInTheDocument();
@@ -294,6 +317,10 @@ describe('PlanWeekModal — prep step optimistic toggling', () => {
   // the prep step, then wait for its candidates to render.
   async function reachPrepStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
+    // Location step first (skip = all home), then priorities (skip → prep).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });

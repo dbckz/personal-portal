@@ -15,6 +15,7 @@ import type { CalendarEvent } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 
 import { TypeStep } from './plan-week/TypeStep';
+import { LocationStep } from './plan-week/LocationStep';
 import { PrioritiesStep } from './plan-week/PrioritiesStep';
 import { RemindersStep } from './plan-week/RemindersStep';
 import { PrepStep } from './plan-week/PrepStep';
@@ -65,6 +66,9 @@ export function PlanWeekModal({
     weekLabel,
     screenOrder,
     activeIndex,
+    dayLocations,
+    setDayLocation,
+    locationWorkingDays,
     untypedTasks,
     typeRows,
     setTypeRows,
@@ -206,6 +210,13 @@ export function PlanWeekModal({
                   setTypeRows={setTypeRows}
                   typeLoading={typeLoading}
                   typeError={typeError}
+                />
+              )}
+              {step === 'location' && (
+                <LocationStep
+                  workingDays={locationWorkingDays}
+                  dayLocations={dayLocations}
+                  setDayLocation={setDayLocation}
                 />
               )}
               {step === 'priorities' && (

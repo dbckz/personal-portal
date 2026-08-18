@@ -10,6 +10,7 @@ import { TypeStep } from '@/components/dashboard/plan-week/TypeStep';
 import { PrepStep } from '@/components/dashboard/plan-week/PrepStep';
 import { ReviewStep } from '@/components/dashboard/plan-week/ReviewStep';
 import { TaskPeekModal } from '@/components/dashboard/plan-week/TaskPeekModal';
+import { MobileLocationStep } from './MobileLocationStep';
 import { MobilePrioritiesStep } from './MobilePrioritiesStep';
 import { MobileRemindersStep } from './MobileRemindersStep';
 import { MobileTasksStep } from './MobileTasksStep';
@@ -55,6 +56,9 @@ export function MobilePlanWeekWizard({
     weekLabel,
     screenOrder,
     activeIndex,
+    dayLocations,
+    setDayLocation,
+    locationWorkingDays,
     untypedTasks,
     typeRows,
     setTypeRows,
@@ -218,6 +222,13 @@ export function MobilePlanWeekWizard({
                 setTypeRows={setTypeRows}
                 typeLoading={typeLoading}
                 typeError={typeError}
+              />
+            )}
+            {step === 'location' && (
+              <MobileLocationStep
+                workingDays={locationWorkingDays}
+                dayLocations={dayLocations}
+                setDayLocation={setDayLocation}
               />
             )}
             {step === 'priorities' && (

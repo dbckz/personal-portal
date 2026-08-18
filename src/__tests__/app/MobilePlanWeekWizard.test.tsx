@@ -28,12 +28,26 @@ jest.mock('@/lib/api', () => ({
     getCalendarReminders: jest.fn().mockResolvedValue({ candidates: [] }),
     getGoals: jest.fn().mockResolvedValue({ goals: [] }),
     checkInGoal: jest.fn().mockResolvedValue({ ok: true }),
+    getWorkflowConfig: jest.fn().mockResolvedValue({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    }),
   },
 }));
 
 import { api } from '@/lib/api';
 
 const WEEK = '2026-07-20'; // Monday
+
+// The wizard now opens on the Location step; advance past it (all days at home)
+// to reach the priorities step the older assertions target.
+async function advancePastLocation() {
+  const next = screen.queryByRole('button', { name: /^Next/i });
+  if (next) {
+    await act(async () => {
+      fireEvent.click(next);
+    });
+  }
+}
 
 function setupMocks() {
   jest.clearAllMocks();
@@ -59,7 +73,7 @@ function setupMocks() {
 
 // Page forward with Skip/Next until the review step (mirrors the desktop test).
 async function skipThroughSteps() {
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const next =
       screen.queryByRole('button', { name: 'Skip' }) ??
       screen.queryByRole('button', { name: /^Next/i });
@@ -78,17 +92,20 @@ describe('MobilePlanWeekWizard — rendering & progress', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('opens on the priorities step and shows step 1 of 5 (no type/reminders steps)', () => {
+  it('opens on the location step, then reaches priorities (step 2 of 6, no type/reminders steps)', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
     expect(screen.getByRole('heading', { name: 'Plan my week' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/One priority per line/i)).toBeInTheDocument();
-    // Screens paged through: priorities-input, priorities-review, prep, tasks, review.
-    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+    // Screens paged through: location, priorities-input, priorities-review, prep, tasks, review.
+    expect(screen.getByText(/Step 1 of 6/)).toBeInTheDocument();
     // Footer nav.
     expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Next/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+
+    await advancePastLocation();
+    expect(screen.getByPlaceholderText(/One priority per line/i)).toBeInTheDocument();
+    expect(screen.getByText(/Step 2 of 6/)).toBeInTheDocument();
   });
 });
 
@@ -98,7 +115,10 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
   it('skips priorities → prep → tasks, firing each step fetch in order', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
-    // Skip priorities → prep (candidates fetch fires for the target week).
+    // Skip location → priorities, then skip priorities → prep (candidates fetch).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
@@ -119,6 +139,7 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
 
   it('passes the target week to every wizard endpoint through the touch UI', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
+    await advancePastLocation();
 
     // Type a priority so matching fires, then page through to review.
     const box = screen.getByPlaceholderText(/One priority per line/i);

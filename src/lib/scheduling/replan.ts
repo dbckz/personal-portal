@@ -92,6 +92,9 @@ export interface ReplanBlock {
     | 'retro'
     | 'delegationReview'
     | 'walk'
+    | 'getReady'
+    | 'commute'
+    | 'travel'
     | 'consulting'
     | 'sideProjects'
     | 'newBookies'
@@ -592,8 +595,15 @@ export function planReplan(input: ReplanInput): ReplanResult {
       overlapsAny(block.startMs, block.endMs, otherBusyMs)
     ) {
       // A future break that now conflicts is DELETED (no fixed home); everything
-      // else is re-slotted.
-      if (block.ritualKind === 'break') {
+      // else is re-slotted. Get-ready / commute / travel are fixed personal blocks
+      // tied to the morning / a departure time, so a conflicting one is likewise
+      // deleted rather than re-slotted to some unrelated afternoon gap.
+      if (
+        block.ritualKind === 'break' ||
+        block.ritualKind === 'getReady' ||
+        block.ritualKind === 'commute' ||
+        block.ritualKind === 'travel'
+      ) {
         deletions.push({
           googleEventId: block.googleEventId,
           googleIntegrationId: block.googleIntegrationId,

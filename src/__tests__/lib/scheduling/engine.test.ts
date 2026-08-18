@@ -1948,3 +1948,62 @@ describe('proposeBlocks - placement/spare agreement (screenshot regression)', ()
     expect(findSlot([win(10, 11, 50)], 30, WR, busy, at(9, 0))).not.toBeNull();
   });
 });
+
+describe('proposeBlocks - office-day deep-work cap (perDayDeepWorkEndMs)', () => {
+  // Daily deep work, morning window 08:30–11:00. The office-day get-ready block
+  // caps how late deep work may run in the morning; the engine honours it.
+  const deepDailyConfig = () =>
+    makeConfig({
+      quotas: {
+        'Writing/Deep Work': {
+          weeklyCount: 3,
+          targetLength: '1.5h',
+          grouped: true,
+          daily: true,
+          preferredTimes: ['08:30-11:00'],
+        },
+      },
+      typeMapping: { 'Writing/Deep Work': ['deep'] },
+      scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+    });
+  const MON = '2026-07-13';
+  const monMs = (h: number, m = 0) => new Date(2026, 6, 13, h, m, 0, 0).getTime();
+
+  it('places a full 90-min block when uncapped (baseline)', () => {
+    const proposals = proposeBlocks(
+      makeInput({ config: deepDailyConfig(), candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })] })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.start).toBe('08:30');
+    expect(deep.durationMinutes).toBe(90);
+  });
+
+  it('shrinks deep work to end at the get-ready block on an office day', () => {
+    // Cap at 09:45 (a get-ready block starts there) → only 75 min of morning, so
+    // the 90-min block shrinks to fill it rather than running past the commute.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+        perDayDeepWorkEndMs: { [MON]: monMs(9, 45) },
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work')!;
+    expect(deep.start).toBe('08:30');
+    expect(deep.durationMinutes).toBe(75);
+    expect(deep.trimmedFromMinutes).toBe(90);
+  });
+
+  it('skips deep work when fewer than 60 min remain before the get-ready block', () => {
+    // Cap at 09:15 → only 45 min of morning, under the 60-min floor, so the daily
+    // deep-work placement skips the day entirely (no afternoon fallback).
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+        perDayDeepWorkEndMs: { [MON]: monMs(9, 15) },
+      })
+    );
+    expect(proposals.some(p => p.category === 'Writing/Deep Work')).toBe(false);
+  });
+});

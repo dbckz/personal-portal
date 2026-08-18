@@ -5,7 +5,11 @@ import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow, effectiveWeeklyCount, type UnplaceableTask } from '@/lib/scheduling/engine';
 import {
   placeWeekRituals,
+  placeOfficeAndTravelBlocks,
+  sanitizeDayLocations,
   proposedBlockToBusyInterval,
+  existingRitualTitlesByDateFromEvents,
+  isTravelTitle,
   EXERCISE_TITLE,
 } from '@/lib/scheduling/rituals';
 import { proposeBreakBlocks } from '@/lib/scheduling/breaks';
@@ -61,6 +65,12 @@ export async function POST(request: NextRequest) {
     }
     const walkDays = rawWalkDays.filter(d => weekDateStrs.has(d));
 
+    // Per-day work location (Home / Office / Travelling), from the wizard's
+    // Location step. Office days get a get-ready + commute pair (and cap deep
+    // work); travel days get a fixed travel block. The placer further restricts to
+    // actual working days.
+    const dayLocations = sanitizeDayLocations(body?.dayLocations, weekDateStrs);
+
     // DAILY rituals (walk / lunch / exercise / emails) are placed FIRST (before
     // task allocation), around the calendar's existing busy time + any accepted
     // prep blocks, so tasks flow around them. A day that already has a ritual event
@@ -75,10 +85,35 @@ export async function POST(request: NextRequest) {
     // claims the mornings first and the weekly rituals fit around it (Dave's rule:
     // deep work has first claim on the mornings, everything else fits around it).
     const prepIntervals = prepBlocks.map(proposedBlockToBusyInterval);
+
+    // Office / travel blocks are placed FIRST (before the daily rituals), around
+    // the calendar's existing busy time + accepted prep, so the get-ready/commute
+    // pair takes its late-morning slot and travel blocks reserve their time before
+    // anything else fills in. Office days also yield a per-day deep-work end cap
+    // (the get-ready block's start), passed to the engine so deep work stops there.
+    const existingRitualTitlesByDate = existingRitualTitlesByDateFromEvents(ctx.weekEvents);
+    const existingTravelDates = new Set<string>();
+    for (const e of ctx.weekEvents) {
+      if (!e.allDay && e.title && isTravelTitle(e.title)) {
+        existingTravelDates.add(localDateStr(e.startTime));
+      }
+    }
+    const { blocks: officeTravelBlocks, deepWorkEndByDate } = placeOfficeAndTravelBlocks({
+      config: ctx.config,
+      busyIntervals: [...ctx.busyIntervals, ...prepIntervals],
+      weekStart: ctx.weekStart,
+      now: ctx.now,
+      dayLocations,
+      existingRitualTitlesByDate,
+      existingTravelDates,
+      outOfOfficeDates: ctx.outOfOfficeDates,
+    });
+    const officeTravelIntervals = officeTravelBlocks.map(proposedBlockToBusyInterval);
+
     const dailyRituals = placeWeekRituals({
       config: ctx.config,
       weekEvents: ctx.weekEvents,
-      busyIntervals: [...ctx.busyIntervals, ...prepIntervals],
+      busyIntervals: [...ctx.busyIntervals, ...prepIntervals, ...officeTravelIntervals],
       weekStart: ctx.weekStart,
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
@@ -86,11 +121,12 @@ export async function POST(request: NextRequest) {
       phase: 'daily',
     });
 
-    // Accepted prep + placed daily ritual blocks occupy time before task placement
-    // (lunch/exercise tagged as breaks, so they split work runs).
+    // Accepted prep + office/travel + placed daily ritual blocks occupy time
+    // before task placement (breaks tagged so they split work runs).
     const busyIntervals = [
       ...ctx.busyIntervals,
       ...prepIntervals,
+      ...officeTravelIntervals,
       ...dailyRituals.map(proposedBlockToBusyInterval),
     ];
 
@@ -149,6 +185,7 @@ export async function POST(request: NextRequest) {
       weekStart: ctx.weekStart,
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
+      perDayDeepWorkEndMs: Object.keys(deepWorkEndByDate).length ? deepWorkEndByDate : undefined,
     }, unplaceable);
 
     // WEEKLY WORK rituals placed AFTER task blocks: deep work (placed first inside
@@ -168,7 +205,7 @@ export async function POST(request: NextRequest) {
       walkDays,
       phase: 'weekly',
     });
-    const ritualBlocks = [...dailyRituals, ...weeklyRituals];
+    const ritualBlocks = [...officeTravelBlocks, ...dailyRituals, ...weeklyRituals];
 
     const { workRun, workingDays, configuredWorkingDaysPerWeek, availableWorkingDaysPerWeek } =
       resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now, ctx.outOfOfficeDates);

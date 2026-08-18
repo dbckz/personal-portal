@@ -1,10 +1,11 @@
 import type { PriorityMatchRow } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 
-export type Step = 'type' | 'priorities' | 'reminders' | 'prep' | 'tasks' | 'review' | 'done';
+export type Step = 'type' | 'location' | 'priorities' | 'reminders' | 'prep' | 'tasks' | 'review' | 'done';
 
 export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
   type: 'Type',
+  location: 'Location',
   priorities: 'Priorities',
   reminders: 'Reminders',
   prep: 'Prep',
