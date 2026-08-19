@@ -148,6 +148,11 @@ export interface ExerciseTarget {
   // checklist and the "Anchor" badge. Absent on non-prescribed targets.
   section?: string;
   isAnchor?: boolean;
+  // Routine provenance from the AI programme / deterministic fallback: whether
+  // this is one of the day's FIXED lifts (an anchor driven up, or a staple
+  // always present). Drives the "Anchor"/"Staple" checklist badge. Absent on
+  // rotating accessories and ad-hoc rows.
+  fixed?: 'anchor' | 'staple';
   // Last time out, for context.
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — what was actually done last time, with numbers, so
@@ -453,7 +458,7 @@ export function selectPlanProgressions(
 }
 
 // The groups the day's components activate, in first-seen order, de-duplicated.
-function activeGroups(components: string[]): Group[] {
+export function activeGroups(components: string[]): Group[] {
   const groups: Group[] = [];
   for (const component of components) {
     for (const group of componentGroups(component)) {
@@ -550,6 +555,10 @@ export type Group = 'run' | 'core' | 'legs' | 'pull' | 'push';
 const CLASSIFY: Array<[Group, RegExp]> = [
   ['run', /\b(run|treadmill|parkrun|jog|cardio)\b/i],
   ['core', /\b(plank|dead ?bug|core|abs?|knee raise|pallof|paloff|shoulder taps?|sit-?ups?|crunch|hollow|hanging leg)\b/i],
+  // A glute BRIDGE is core work in Dave's book (single-leg glute bridge too),
+  // even though the rest of the glute work — hip thrust, kickbacks — is legs.
+  // Must precede the legs entry, whose \bglute\b would otherwise claim it.
+  ['core', /\bglute bridge\b/i],
   ['legs', /\b(squat|legs?|lunge|glute|calf|calves|hamstring|quad|deadlift|hip thrust|step-?up|leg press|leg extension|leg curl)\b/i],
   ['pull', /\b(row|pulldown|pull-?ups?|pullups?|chin|curl|shrug|rear delt|pec deck|lats?|face pull|y raise|dead hang)\b/i],
   ['push', /\b(press|push|fly|flye|dip|tricep|pushdown|lateral raise|crossover|shoulders?|chest|pec)\b/i],

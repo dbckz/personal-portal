@@ -118,6 +118,23 @@ describe('TodayChecklist cardio-aware form', () => {
     expect(screen.queryByText('Staple')).not.toBeInTheDocument();
   });
 
+  it('badges routine fixed lifts "Anchor"/"Staple" from the fixed field', () => {
+    stubSession([
+      row({ key: 'f1', name: 'Converging chest press machine', fixed: 'anchor', kind: 'core', sets: 3, reps: 8 }),
+      row({ key: 'f2', name: 'Dead bug', fixed: 'staple', kind: 'hold', sets: 3, holdSeconds: 30 }),
+      row({ key: 'f3', name: 'Cable tricep pushdown', kind: 'rotation', sets: 3, reps: 12 }),
+    ]);
+    render(<TodayChecklist />);
+
+    // The fixed badge shows on the anchor and staple, and replaces the generic
+    // kind badge on those rows (no "Hold" on the fixed staple, no "Rotating"
+    // hidden behind them).
+    expect(screen.getByText('Anchor')).toBeInTheDocument();
+    expect(screen.getByText('Staple')).toBeInTheDocument();
+    expect(screen.queryByText('Hold')).not.toBeInTheDocument();
+    expect(screen.getByText('Rotating')).toBeInTheDocument();
+  });
+
   it('offers a time field in the swap form once the replacement name is cardio', () => {
     const commitSwap = jest.fn();
     stubSession([row({ key: 'r4', name: 'Bench press', sets: 3, reps: 8, weightKg: 40 })], {

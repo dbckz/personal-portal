@@ -24,7 +24,7 @@ import {
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
-import { ActionBadge, FailureTag, KindTag } from './action-badge';
+import { ActionBadge, FailureTag, FixedTag, KindTag } from './action-badge';
 import { RirChips } from './rir-chips';
 
 // The desktop "Today" tab: today's workout as an interactive checklist. Every
@@ -223,7 +223,11 @@ function RowCard({
             >
               {row.name}
             </span>
-            {row.kind && <KindTag kind={row.kind} isAnchor={row.isAnchor} />}
+            {row.fixed ? (
+              <FixedTag fixed={row.fixed} />
+            ) : (
+              row.kind && <KindTag kind={row.kind} isAnchor={row.isAnchor} />
+            )}
             {row.toFailure && <FailureTag />}
             {row.action && <ActionBadge action={row.action} />}
           </div>

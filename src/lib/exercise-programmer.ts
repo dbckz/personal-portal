@@ -22,10 +22,13 @@ import { extractJsonArray, runClaudeText } from './ai-classifier';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from './exercise-progression';
 import { isCardioName, isHoldName } from './exercise-parse';
 import {
+  activeGroups,
+  classifyExercise,
   describeLast,
   selectPlanProgressions,
   type ExerciseKind,
   type ExerciseTarget,
+  type Group,
 } from './exercise-targets';
 
 // What to aim for on one exercise. Any of the measures may be present: a press
@@ -47,6 +50,10 @@ export interface ProgrammeRow {
   key: string;
   kind: ExerciseKind;
   toFailure: boolean;
+  // One of the day's FIXED lifts (a routine anchor or staple), matched by key
+  // against the routine day. Threaded to the checklist's "Anchor"/"Staple"
+  // badge. Absent on rotating accessories.
+  fixed?: 'anchor' | 'staple';
   target: ProgrammeTarget;
   rationale: string;
   // Always concrete: filled from real history server-side, never from the model.
@@ -431,7 +438,88 @@ export function validateProgramme(
     });
   }
 
-  return enforceToFailure(orderProgrammeRows(guaranteeFixed(rows, seen, input), input.plan.routineDay));
+  const covered = guaranteeGroupCoverage(guaranteeFixed(rows, seen, input), seen, input);
+  return enforceToFailure(
+    orderProgrammeRows(markFixed(covered, input.plan.routineDay), input.plan.routineDay)
+  );
+}
+
+// Per-group minimum row counts, ENFORCED here rather than merely suggested in the
+// prompt (the model reliably ignores the instruction and thins one group). On a
+// combined day — Pull + Legs returning ~8 lopsided rows with one group starved —
+// each active strength group is floored at MIN_STRENGTH_ROWS and core at
+// MIN_CORE_ROWS, matching Dave's own history (combined days at 10–11 exercises,
+// single-group days 5–6).
+const MIN_STRENGTH_ROWS = 5;
+const MIN_CORE_ROWS = 3;
+
+// The floor for a group. Cardio (the 'run' group) is never floored — the
+// single-cardio rule stands — so it returns 0.
+function groupMinimum(group: Group): number {
+  if (group === 'run') return 0;
+  return group === 'core' ? MIN_CORE_ROWS : MIN_STRENGTH_ROWS;
+}
+
+// Enforce each active group's minimum row count. For every strength/core group
+// the day activates, count its rows and, while short of the floor, append the
+// group's most-trained UNUSED vocabulary exercises (input.exercises is
+// most-trained first) with a deterministic fallback target — exactly as
+// guaranteeFixed appends a dropped anchor. Capped by what the vocabulary holds:
+// a group with only four known exercises tops out at four, never invents one.
+// Runs before ordering and the to-failure marker so both apply to the final set.
+function guaranteeGroupCoverage(
+  rows: ProgrammeRow[],
+  seen: Set<string>,
+  input: ProgrammerInput
+): ProgrammeRow[] {
+  const day = input.plan.routineDay;
+  if (!day) return rows;
+
+  // The day's active groups, read from its components and its routine title so a
+  // combined "Pull + Legs" surfaces both even when components arrive empty.
+  const groups = activeGroups([...input.plan.components, day.title]);
+  const out = [...rows];
+
+  for (const group of groups) {
+    const min = groupMinimum(group);
+    if (min === 0) continue;
+    let count = out.filter(r => classifyExercise(r.name) === group).length;
+    for (const known of input.exercises) {
+      if (count >= min) break;
+      if (seen.has(known.key) || classifyExercise(known.name) !== group) continue;
+      seen.add(known.key);
+      const hasHistory = known.lastSummary !== 'no history';
+      out.push({
+        name: known.name,
+        key: known.key,
+        kind: inferKind(known.name),
+        toFailure: false,
+        target: fallbackTarget(known),
+        rationale: hasHistory
+          ? `Added for ${group} balance — last time ${known.lastSummary}.`
+          : `Added for ${group} balance — no history yet, log a baseline.`,
+        lastSummary: known.lastSummary,
+      });
+      count += 1;
+    }
+  }
+  return out;
+}
+
+// Stamp the FIXED provenance on rows that are the routine day's anchors or
+// staples, matched by exerciseKey. Applied to the whole row set (model-returned
+// and guaranteeFixed-appended alike) so the checklist can badge every fixed lift
+// "Anchor"/"Staple", however it reached the programme. Exported so the cached
+// path can stamp older programmes without regenerating them.
+export function markFixed(rows: ProgrammeRow[], day?: ProgrammerRoutineDay): ProgrammeRow[] {
+  if (!day) return rows;
+  const anchorKeys = new Set(day.anchors.map(exerciseKey).filter(Boolean));
+  const stapleKeys = new Set(day.staples.map(exerciseKey).filter(Boolean));
+  return rows.map(row => {
+    if (anchorKeys.has(row.key)) return { ...row, fixed: 'anchor' as const };
+    if (stapleKeys.has(row.key)) return { ...row, fixed: 'staple' as const };
+    return row;
+  });
 }
 
 // Deterministic row order for the checklist, independent of the order the model
@@ -580,6 +668,7 @@ export function programmeRowToTarget(row: ProgrammeRow): ExerciseTarget {
     toFailure: row.toFailure,
     rationale: row.rationale,
     lastSummary: row.lastSummary,
+    ...(row.fixed ? { fixed: row.fixed } : {}),
     ...(row.target.sets !== undefined ? { sets: row.target.sets } : {}),
     ...(row.target.reps !== undefined ? { reps: row.target.reps } : {}),
     ...(row.target.holdSeconds !== undefined ? { holdSeconds: row.target.holdSeconds } : {}),

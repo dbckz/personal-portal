@@ -338,6 +338,16 @@ describe('classifyExercise', () => {
     expect(classifyExercise('Pallof press')).toBe('core');
   });
 
+  it('treats a glute BRIDGE as core, but other glute work as legs', () => {
+    // Dave programmes glute bridges with planks and dead bugs, so they are core —
+    // even though \bglute\b otherwise means legs.
+    expect(classifyExercise('Glute bridge')).toBe('core');
+    expect(classifyExercise('Single-leg glute bridge')).toBe('core');
+    // Hip thrust and bare glute work stay legs.
+    expect(classifyExercise('Hip thrust')).toBe('legs');
+    expect(classifyExercise('Glute kickback')).toBe('legs');
+  });
+
   it("classifies Dave's real pull staples as pull", () => {
     for (const name of [
       'Lat pulldown',
@@ -426,11 +436,11 @@ describe('selectPlanProgressions', () => {
       prog('Barbell shrug'),
       prog('Rear delt fly'),
       prog('Leg extension'),
-      prog('Glute bridge'),
+      prog('Hip thrust'),
       prog('Standing calf raise'),
       prog('Reverse lunge'),
     ];
-    const legNames = ['Leg extension', 'Glute bridge', 'Standing calf raise', 'Reverse lunge'];
+    const legNames = ['Leg extension', 'Hip thrust', 'Standing calf raise', 'Reverse lunge'];
     const combined = selectPlanProgressions(progressions, ['Pull (back & arms)', 'Legs']).map(p => p.name);
     // Pull budget 6 (of 7 available) + all 4 legs = 10 candidates.
     expect(combined).toHaveLength(10);

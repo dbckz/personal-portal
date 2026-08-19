@@ -60,6 +60,9 @@ export interface TodayRow {
   // that didn't come from a prescription.
   section?: string;
   isAnchor?: boolean;
+  // Routine anchor/staple provenance (AI programme or deterministic fallback),
+  // shown as an "Anchor"/"Staple" badge on the fixed lifts at the top.
+  fixed?: 'anchor' | 'staple';
   rationale?: string;
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — last time with numbers, shown on the row.
@@ -135,6 +138,7 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     toFailure: t.toFailure,
     section: t.section,
     isAnchor: t.isAnchor,
+    fixed: t.fixed,
     rationale: t.rationale,
     last: t.last,
     lastSummary: t.lastSummary,

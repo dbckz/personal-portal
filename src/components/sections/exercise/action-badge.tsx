@@ -51,6 +51,19 @@ export function KindTag({ kind, isAnchor }: { kind: ExerciseKind; isAnchor?: boo
   );
 }
 
+// A routine anchor or staple — one of the day's FIXED lifts, floored in the
+// programme and hoisted to the top of the checklist. Wears the same indigo pill
+// as the prescription 'Anchor' badge so fixed lifts read alike wherever they
+// come from (AI programme or deterministic fallback), and both anchor and staple
+// share it — the word carries the distinction.
+export function FixedTag({ fixed }: { fixed: 'anchor' | 'staple' }) {
+  return (
+    <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
+      {fixed === 'anchor' ? 'Anchor' : 'Staple'}
+    </span>
+  );
+}
+
 // The final exercise, taken to failure. Deliberately loud — it's the one cue
 // that changes how the last set is performed.
 export function FailureTag() {

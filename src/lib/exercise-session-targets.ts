@@ -26,6 +26,7 @@ import { normalizeExerciseName } from '@/lib/exercise-names';
 import {
   buildProgrammerInput,
   enforceToFailure,
+  markFixed,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -108,7 +109,9 @@ export async function resolveSessionTargets(
     // Re-apply enforceToFailure afterwards so the single to-failure marker lands
     // on the last safe row of the FINAL order — keeping the cached path identical
     // to what validateProgramme produces for a freshly generated programme.
-    const ordered = enforceToFailure(orderProgrammeRows(cached, routineDay));
+    // markFixed also re-stamps the anchor/staple provenance so programmes cached
+    // before the fixed-badge change gain it without regeneration.
+    const ordered = enforceToFailure(orderProgrammeRows(markFixed(cached, routineDay), routineDay));
     return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 
@@ -117,8 +120,25 @@ export async function resolveSessionTargets(
   // already surface here through component selection; ones with no history yet
   // are not represented in this fallback — only in the AI path, which guarantees
   // them. Left as-is because building no-history targets here is not cheap.)
-  const targets = buildSessionTargets(progressions, components);
+  const targets = markFixedTargets(buildSessionTargets(progressions, components), routineDay);
   return { plan, components, targets, source: 'fallback', input, hash };
+}
+
+// Stamp the routine day's anchors/staples onto the deterministic fallback
+// targets, matched by key, so the "Anchor"/"Staple" badge shows on the fallback
+// path too — not only on the AI programme. A no-op without a routine day.
+function markFixedTargets(
+  targets: ExerciseTarget[],
+  day: ProgrammerRoutineDay | undefined
+): ExerciseTarget[] {
+  if (!day) return targets;
+  const anchorKeys = new Set(day.anchors.map(exerciseKey).filter(Boolean));
+  const stapleKeys = new Set(day.staples.map(exerciseKey).filter(Boolean));
+  return targets.map(t => {
+    if (anchorKeys.has(t.key)) return { ...t, fixed: 'anchor' as const };
+    if (stapleKeys.has(t.key)) return { ...t, fixed: 'staple' as const };
+    return t;
+  });
 }
 
 // The distilled routine day for a date: the weekly-routine entry for that

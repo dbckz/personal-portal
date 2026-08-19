@@ -13,7 +13,7 @@ import {
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
-import { ActionBadge, FailureTag, KindTag } from '@/components/sections/exercise/action-badge';
+import { ActionBadge, FailureTag, FixedTag, KindTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
 
 // The in-the-gym checklist on mobile: today's workout, one tickable row per
@@ -205,7 +205,11 @@ function RowCard({
             >
               {row.name}
             </p>
-            {row.kind && <KindTag kind={row.kind} isAnchor={row.isAnchor} />}
+            {row.fixed ? (
+              <FixedTag fixed={row.fixed} />
+            ) : (
+              row.kind && <KindTag kind={row.kind} isAnchor={row.isAnchor} />
+            )}
             {row.toFailure && <FailureTag />}
             {row.action && <ActionBadge action={row.action} />}
           </div>

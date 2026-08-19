@@ -18,6 +18,7 @@ import {
   type ProgrammerInput,
 } from '@/lib/exercise-programmer';
 import type { ProgrammerRoutineDay } from '@/lib/exercise-programmer';
+import { classifyExercise } from '@/lib/exercise-targets';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from '@/lib/exercise-progression';
 import { getCachedProgramme, saveCachedProgramme } from '@/lib/storage/exercise-programmes';
 import { __resetDbForTests } from '@/lib/storage/db';
@@ -410,6 +411,184 @@ describe('the weekly routine drives the programmer', () => {
     const anchor = rows.find(r => r.name === 'Converging chest press machine')!;
     expect(anchor.kind).toBe('core');
     expect(anchor.target).toEqual({ sets: 3, reps: 8, weightKg: 34 });
+  });
+});
+
+describe('guaranteeGroupCoverage — per-group minimum rows', () => {
+  // A combined Pull + Legs day with six of each group in history, so the
+  // vocabulary can support the floor either way.
+  function pullLegsProgressions(): ExerciseProgression[] {
+    const load = (kg: number): ProgressionPoint[] => [
+      { date: '2026-08-02', sets: 3, reps: 10, weightKg: kg },
+    ];
+    return [
+      progression('Lat pulldown', load(50), 6),
+      progression('Cable row', load(45), 6),
+      progression('Seated row', load(40), 5),
+      progression('Cable bicep curl', load(15), 5),
+      progression('Face pull', load(12), 4),
+      progression('Barbell shrug', load(60), 4),
+      progression('Leg press', load(120), 6),
+      progression('Leg extension', load(50), 6),
+      progression('Leg curl', load(45), 5),
+      progression('Hip thrust', load(80), 5),
+      progression('Standing calf raise', load(40), 4),
+      progression('Reverse lunge', load(20), 4),
+    ];
+  }
+
+  function pullLegsInput(
+    over: Partial<ProgrammerRoutineDay> = {},
+    progressions = pullLegsProgressions()
+  ): ProgrammerInput {
+    return buildProgrammerInput(
+      progressions,
+      {
+        label: 'Pull + Legs',
+        components: ['Pull (back & arms)', 'Legs'],
+        routineDay: { title: 'Pull + Legs', anchors: [], staples: [], ...over },
+      },
+      '2026-08-06',
+      6
+    );
+  }
+
+  const groupOf = (rows: ProgrammeRow[], group: string) =>
+    rows.filter(r => classifyExercise(r.name) === group);
+
+  it('floors each group of a combined day at its minimum, filling from vocabulary', () => {
+    // The model returns 8 lopsided rows: six pull, only two legs.
+    const lopsided = [
+      'Lat pulldown',
+      'Cable row',
+      'Seated row',
+      'Cable bicep curl',
+      'Face pull',
+      'Barbell shrug',
+      'Leg press',
+      'Leg extension',
+    ].map(name => ({ name, kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 30 } }));
+
+    const rows = validateProgramme(lopsided, pullLegsInput());
+
+    // Both groups reach the strength floor of 5, vocabulary permitting.
+    expect(groupOf(rows, 'pull').length).toBeGreaterThanOrEqual(5);
+    expect(groupOf(rows, 'legs').length).toBeGreaterThanOrEqual(5);
+
+    // The three appended legs rows carry a deterministic fallback target from
+    // history, not a blank.
+    const legCurl = rows.find(r => r.name === 'Leg curl');
+    expect(legCurl).toBeDefined();
+    expect(legCurl!.target).toEqual({ sets: 3, reps: 10, weightKg: 45 });
+
+    // Ordering and the single to-failure marker still hold on the final set.
+    const failing = rows.filter(r => r.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(rows[rows.length - 1].name);
+  });
+
+  it('tops a group out at the vocabulary it has when that is below the floor', () => {
+    // Only three legs exercises exist in history — the floor of 5 cannot be met,
+    // so the group tops out at three rather than inventing lifts.
+    const thin = [
+      progression('Lat pulldown', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 50 }], 6),
+      progression('Cable row', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 45 }], 6),
+      progression('Seated row', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 40 }], 5),
+      progression('Cable bicep curl', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 15 }], 5),
+      progression('Face pull', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 12 }], 4),
+      progression('Leg press', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 120 }], 6),
+      progression('Leg extension', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 50 }], 6),
+      progression('Leg curl', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 45 }], 5),
+    ];
+    // The model returns pull only, no legs at all.
+    const pullOnly = ['Lat pulldown', 'Cable row'].map(name => ({
+      name,
+      kind: 'core',
+      toFailure: false,
+      target: { sets: 3, reps: 10, weightKg: 30 },
+    }));
+
+    const rows = validateProgramme(pullOnly, pullLegsInput({}, thin));
+    expect(groupOf(rows, 'legs')).toHaveLength(3); // all the vocabulary holds
+  });
+
+  it('leaves a single-group day that already meets the floor untouched', () => {
+    const pullDay = buildProgrammerInput(
+      pullLegsProgressions(),
+      {
+        label: 'Pull',
+        components: ['Pull (back & arms)'],
+        routineDay: { title: 'Pull', anchors: [], staples: [] },
+      },
+      '2026-08-06',
+      6
+    );
+    const returned = ['Lat pulldown', 'Cable row', 'Seated row', 'Cable bicep curl', 'Face pull'].map(
+      name => ({ name, kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 30 } })
+    );
+    const rows = validateProgramme(returned, pullDay);
+    // Five pull rows in, five out — no coverage fill, no legs conjured.
+    expect(rows.map(r => r.name)).toEqual([
+      'Lat pulldown',
+      'Cable row',
+      'Seated row',
+      'Cable bicep curl',
+      'Face pull',
+    ]);
+  });
+});
+
+describe('markFixed — anchor/staple provenance', () => {
+  function routineInput(): ProgrammerInput {
+    return buildProgrammerInput(
+      [
+        ...pushProgressions(),
+        progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
+      ],
+      {
+        label: 'Push',
+        components: ['Push (chest & arms)'],
+        routineDay: {
+          title: 'Push (chest & arms)',
+          anchors: ['Converging chest press machine'],
+          staples: ['Dead bug'],
+        },
+      },
+      '2026-08-06',
+      6
+    );
+  }
+
+  it('stamps fixed on anchors and staples, including ones the model dropped', () => {
+    // The model returns only the anchor and an accessory; the staple is dropped
+    // and appended by guaranteeFixed — it must still be marked fixed.
+    const rows = validateProgramme(
+      [
+        { name: 'Converging chest press machine', kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 35 } },
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+      ],
+      routineInput()
+    );
+    const anchor = rows.find(r => r.name === 'Converging chest press machine')!;
+    const staple = rows.find(r => r.name === 'Dead bug')!;
+    const accessory = rows.find(r => r.name === 'Cable tricep pushdown')!;
+    expect(anchor.fixed).toBe('anchor');
+    expect(staple.fixed).toBe('staple');
+    expect(accessory.fixed).toBeUndefined();
+  });
+
+  it('threads fixed through programmeRowToTarget for the checklist', () => {
+    const target = programmeRowToTarget({
+      name: 'Converging chest press machine',
+      key: exerciseKey('Converging chest press machine'),
+      kind: 'core',
+      toFailure: false,
+      fixed: 'anchor',
+      target: { sets: 3, reps: 8, weightKg: 34 },
+      rationale: 'Fixed anchor.',
+      lastSummary: '2 Aug · 3 × 8 · 34kg',
+    });
+    expect(target.fixed).toBe('anchor');
   });
 });
 
