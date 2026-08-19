@@ -450,6 +450,67 @@ describe('replan analyze — daily review blocks', () => {
   });
 });
 
+describe('replan analyze — week-wide moveCandidates + stale meetingStartMs', () => {
+  it('returns future task blocks across the whole remaining week, sorted, with startMs', async () => {
+    // NOW is Wed 2026-07-15 08:00. Wed 09:00, Thu 09:00 and Fri 09:00 are all
+    // future task blocks → all are move candidates; tomorrowBlocks is Thu only.
+    const base = { duration: 60, googleIntegrationId: 'gi1' };
+    mockScheduled.mockResolvedValue([
+      { id: 's-fri', asanaTaskId: 'g-fri', scheduledDate: '2026-07-17', scheduledTime: '09:00', googleEventId: 'evt-fri', taskName: 'Friday task', ...base },
+      { id: 's-wed', asanaTaskId: 'g-wed', scheduledDate: '2026-07-15', scheduledTime: '09:00', googleEventId: 'evt-wed', taskName: 'Wednesday task', ...base },
+      { id: 's-thu', asanaTaskId: 'g-thu', scheduledDate: '2026-07-16', scheduledTime: '09:00', googleEventId: 'evt-thu', taskName: 'Thursday task', ...base },
+    ]);
+    setContext({
+      asanaCandidates: [
+        { task: { gid: 'g-fri', name: 'Friday task' }, typeValue: 'deep' },
+        { task: { gid: 'g-wed', name: 'Wednesday task' }, typeValue: 'deep' },
+        { task: { gid: 'g-thu', name: 'Thursday task' }, typeValue: 'deep' },
+      ],
+    });
+
+    const out = await analyzeFull();
+    // Sorted earliest-first across the week.
+    expect(out.moveCandidates.map((c: { googleEventId: string }) => c.googleEventId)).toEqual([
+      'evt-wed',
+      'evt-thu',
+      'evt-fri',
+    ]);
+    // Each carries an absolute startMs for the client-side "before" constraints.
+    expect(out.moveCandidates[0].startMs).toBe(new Date(2026, 6, 15, 9, 0, 0, 0).getTime());
+    // tomorrowBlocks stays the Thursday-only subset.
+    expect(out.tomorrowBlocks.map((b: { googleEventId: string }) => b.googleEventId)).toEqual(['evt-thu']);
+  });
+
+  it('attaches meetingStartMs + meetingTitle to a stale prep block', async () => {
+    // A prep block that ended (07:30) before NOW (08:00) with its meeting already
+    // started (07:45) → stale, and it must carry the meeting start + title.
+    const meetingStart = new Date(2026, 6, 15, 7, 45, 0, 0);
+    mockScheduled.mockResolvedValue([]);
+    mockPrep.mockResolvedValue([
+      {
+        id: 'p1',
+        googleEventId: 'evt-prep',
+        googleIntegrationId: 'gi1',
+        meetingEventId: 'evt-meeting',
+        meetingTitle: 'Board sync',
+        meetingStart: meetingStart.toISOString(),
+        date: '2026-07-15',
+        start: '07:00',
+        durationMinutes: 30,
+        done: false,
+        createdAt: '2026-07-14T00:00:00.000Z',
+      },
+    ]);
+    setContext({});
+
+    const out = await analyzeFull();
+    const stale = out.stale.find((s: { googleEventId: string }) => s.googleEventId === 'evt-prep');
+    expect(stale).toBeDefined();
+    expect(stale.meetingStartMs).toBe(meetingStart.getTime());
+    expect(stale.meetingTitle).toBe('Board sync');
+  });
+});
+
 describe('replan analyze — stored category preferred over re-derivation', () => {
   // 'deep' is the ONLY Asana Type that classifies as deep work here.
   const QUOTAS = [

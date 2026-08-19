@@ -152,6 +152,10 @@ export interface ReplanUnplaceable {
   // Task ids (Asana gid / ad-hoc id) backing this block, so the confirm route can
   // defer them. Populated by the analyze route (planReplan leaves it undefined).
   deferTaskIds?: string[];
+  // Asana-backed tasks behind this block, so a "Mark done" on a couldn't-fit card
+  // can complete each in Asana (ad-hoc tasks have no gid and are omitted).
+  // Populated by the analyze route (planReplan leaves it undefined).
+  tasks?: Array<{ gid: string; integrationId?: string }>;
 }
 
 // A prep block that can no longer be usefully re-slotted: its meeting has
@@ -166,6 +170,12 @@ export interface ReplanStale {
   oldStart: string;
   durationMinutes: number;
   reason: ReplanReason;
+  // The prep's meeting start (absolute ms) and title, set by the analyze route
+  // from the prep record. When the meeting is still in the future the UI can
+  // offer "Make room" — displacing a block that ends before the meeting so the
+  // prep still fits. Absent when the meeting has already passed.
+  meetingStartMs?: number;
+  meetingTitle?: string;
 }
 
 // One task backing an end-of-week carry-over block. `id` is the deferral /

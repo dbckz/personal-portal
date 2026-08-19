@@ -7,14 +7,20 @@ import type { ProposedBlock } from '@/lib/scheduling/types';
 
 // Per-missed-row action: reschedule to the proposed slot, or mark done.
 export type MoveMode = 'reschedule' | 'done';
-// Per-stale-row action: leave untouched, mark done, or dismiss (delete record).
-export type StaleMode = 'leave' | 'done' | 'dismiss';
+// Per-stale-row action: leave untouched, mark done, dismiss (delete record), or
+// make room — displace a later block that ends before the meeting so the prep
+// still fits (only offered while the meeting is still ahead).
+export type StaleMode = 'leave' | 'done' | 'dismiss' | 'makeRoom';
 // Per-unplaceable-row action: defer to next week (default), leave unscheduled,
-// move into the evening overflow slot (only when one was found), prioritise it
-// tomorrow by displacing one of tomorrow's blocks (only when there is one to
-// bump), or drop it outright — "I'm not doing this at all": the calendar block
-// and the backing Asana task are both deleted.
-export type UnplaceableMode = 'defer' | 'leave' | 'overflow' | 'prioritise' | 'drop';
+// mark done (complete its tasks in Asana), move into the evening overflow slot
+// (only when one was found), prioritise it tomorrow by displacing one of
+// tomorrow's blocks (only when there is one to bump), make room by displacing a
+// chosen block anywhere in the remaining week, or drop it outright — "I'm not
+// doing this at all": the calendar block and the backing Asana task are deleted.
+export type UnplaceableMode = 'defer' | 'leave' | 'done' | 'overflow' | 'prioritise' | 'makeRoom' | 'drop';
+// Disposition of a displaced block's tasks when making room: defer them to next
+// week (default) or leave them unscheduled.
+export type MakeRoomDisposition = 'defer' | 'leave';
 // Per-row action in END-OF-WEEK mode (the last working day and the weekend after
 // it): there is no week left to reschedule into, so each unfinished task is
 // carried into next week's plan (default), dropped back to the backlog with no
@@ -46,6 +52,15 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   // For a 'prioritise' unplaceable row: the googleEventId of tomorrow's block the
   // user chose to displace (bump). Keyed by the unplaceable block's googleEventId.
   const [unplaceableVictim, setUnplaceableVictim] = useState<Record<string, string>>({});
+  // "Make room" selections, keyed by the couldn't-fit / stale-prep block's
+  // googleEventId: the chosen victim block to displace, an optional day filter
+  // (yyyy-MM-dd) and "before HH:mm" cap narrowing the victim list (unplaceable
+  // only — stale rows constrain automatically to before the meeting), and whether
+  // the victim's tasks defer to next week (default) or are left unscheduled.
+  const [makeRoomVictim, setMakeRoomVictim] = useState<Record<string, string>>({});
+  const [makeRoomDay, setMakeRoomDay] = useState<Record<string, string>>({});
+  const [makeRoomBefore, setMakeRoomBefore] = useState<Record<string, string>>({});
+  const [makeRoomDisposition, setMakeRoomDisposition] = useState<Record<string, MakeRoomDisposition>>({});
   const [carryMode, setCarryMode] = useState<Record<string, CarryMode>>({});
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
@@ -83,6 +98,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       Object.fromEntries((data.unplaceable ?? []).map(u => [u.googleEventId, unplaceableDefault]))
     );
     setUnplaceableVictim({});
+    setMakeRoomVictim({});
+    setMakeRoomDay({});
+    setMakeRoomBefore({});
+    setMakeRoomDisposition({});
     // Every end-of-week row defaults to "carry over to next week" — block level
     // for single-task blocks, per incomplete member for grouped ones.
     setCarryMode(
@@ -191,14 +210,64 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
           });
         }
       }
+      // Victim event ids already claimed by an earlier prioritise / make-room
+      // resolution in this batch — a block can only be displaced once.
+      const claimedVictims = new Set<string>();
+      const moveCandidates = data.moveCandidates ?? [];
+      // Displace `victim` and move `item` (a couldn't-fit or stale-prep block) into
+      // the freed slot — the prioritise flow generalised. No-op if the victim is
+      // gone, too short, or already claimed by another resolution this batch.
+      const pushMakeRoom = (
+        item: { googleEventId: string; googleIntegrationId?: string; durationMinutes: number },
+        victim:
+          | {
+              googleEventId: string;
+              googleIntegrationId?: string;
+              taskIds: string[];
+              date: string;
+              start: string;
+              durationMinutes: number;
+            }
+          | undefined,
+        disposition: MakeRoomDisposition
+      ) => {
+        if (!victim) return;
+        if (victim.durationMinutes < item.durationMinutes) return;
+        if (claimedVictims.has(victim.googleEventId)) return;
+        claimedVictims.add(victim.googleEventId);
+        displace.push({
+          googleEventId: victim.googleEventId,
+          googleIntegrationId: victim.googleIntegrationId,
+          taskIds: victim.taskIds,
+          mode: disposition,
+          durationMinutes: victim.durationMinutes,
+          priorityDurationMinutes: item.durationMinutes,
+        });
+        moves.push({
+          googleEventId: item.googleEventId,
+          googleIntegrationId: item.googleIntegrationId,
+          date: victim.date,
+          start: victim.start,
+          durationMinutes: item.durationMinutes,
+        });
+      };
+
       for (const s of stale) {
         const mode = staleMode[s.googleEventId];
         if (mode === 'done') doneIds.push(s.googleEventId);
         else if (mode === 'dismiss') dismissIds.push(s.googleEventId);
+        else if (mode === 'makeRoom') {
+          pushMakeRoom(
+            s,
+            moveCandidates.find(c => c.googleEventId === makeRoomVictim[s.googleEventId]),
+            makeRoomDisposition[s.googleEventId] ?? 'defer'
+          );
+        }
       }
-      // Unplaceable rows: overflow → a move into the evening slot; prioritise →
-      // displace tomorrow's chosen victim and move this block into its freed slot;
-      // defer → park the tasks; leave → clear any override.
+      // Unplaceable rows: done → mark done + complete tasks in Asana; overflow → a
+      // move into the evening slot; prioritise → displace tomorrow's chosen victim
+      // and move this block into its freed slot; makeRoom → the same over any
+      // remaining-week victim; defer → park the tasks; leave → clear any override.
       const tomorrowBlocks = data.tomorrowBlocks ?? [];
       for (const u of data.unplaceable) {
         if (carriedEventIds.has(u.googleEventId)) continue;
@@ -211,29 +280,28 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
             start: u.overflowOption.start,
             durationMinutes: u.overflowOption.durationMinutes,
           });
+        } else if (mode === 'done') {
+          // Mark the block done and complete each Asana-backed task in Asana. Both
+          // are handled by the existing confirm-route done / completeAsana paths.
+          doneIds.push(u.googleEventId);
+          for (const t of u.tasks ?? []) {
+            if (t.integrationId) completeAsana.push({ gid: t.gid, integrationId: t.integrationId });
+          }
         } else if (mode === 'prioritise') {
           // Needs a chosen victim big enough to hold the prioritised block; without
           // one the row is a no-op (nothing queued) so the user is nudged to pick a
           // qualifying block before confirming.
-          const victim = tomorrowBlocks.find(t => t.googleEventId === unplaceableVictim[u.googleEventId]);
-          if (victim && victim.durationMinutes >= u.durationMinutes) {
-            displace.push({
-              googleEventId: victim.googleEventId,
-              googleIntegrationId: victim.googleIntegrationId,
-              taskIds: victim.taskIds,
-              mode: 'defer',
-              durationMinutes: victim.durationMinutes,
-              priorityDurationMinutes: u.durationMinutes,
-            });
-            // The prioritised block takes the victim's freed slot tomorrow.
-            moves.push({
-              googleEventId: u.googleEventId,
-              googleIntegrationId: u.googleIntegrationId,
-              date: victim.date,
-              start: victim.start,
-              durationMinutes: u.durationMinutes,
-            });
-          }
+          pushMakeRoom(
+            u,
+            tomorrowBlocks.find(t => t.googleEventId === unplaceableVictim[u.googleEventId]),
+            'defer'
+          );
+        } else if (mode === 'makeRoom') {
+          pushMakeRoom(
+            u,
+            moveCandidates.find(c => c.googleEventId === makeRoomVictim[u.googleEventId]),
+            makeRoomDisposition[u.googleEventId] ?? 'defer'
+          );
         } else if (mode === 'drop') {
           drop.push({
             googleEventId: u.googleEventId,
@@ -305,7 +373,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     // "Deep work" containers (event retitled + re-described, membership recorded).
     const conversionBlocks = conversions.filter(c => conversionIncluded.has(c.googleEventId));
     return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks, conversionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded, conversions, conversionIncluded]);
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, makeRoomVictim, makeRoomDisposition, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded, conversions, conversionIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -460,6 +528,15 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setUnplaceableMode,
     unplaceableVictim,
     setUnplaceableVictim,
+    makeRoomVictim,
+    setMakeRoomVictim,
+    makeRoomDay,
+    setMakeRoomDay,
+    makeRoomBefore,
+    setMakeRoomBefore,
+    makeRoomDisposition,
+    setMakeRoomDisposition,
+    moveCandidates: data?.moveCandidates ?? [],
     carryBlocks,
     carriedEventIds,
     carryMode,

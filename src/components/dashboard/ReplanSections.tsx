@@ -1,11 +1,12 @@
 'use client';
 
+import { useState } from 'react';
 import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot, ListPlus, Clock, PenLine } from 'lucide-react';
 
-import type { ReplanAnalyzeResponse } from '@/lib/api';
+import type { ReplanAnalyzeResponse, ReplanMoveCandidate } from '@/lib/api';
 import type { ReplanCarryTask } from '@/lib/scheduling/replan';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
-import type { CarryMode, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
+import type { CarryMode, MakeRoomDisposition, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
 import { carryTaskKey, todoCandidateKey } from './useReplanActions';
 
 // Shared render of the replan "plan view": moves / stale / missing rituals /
@@ -29,6 +30,15 @@ export function ReplanSections({
     setUnplaceableMode,
     unplaceableVictim,
     setUnplaceableVictim,
+    makeRoomVictim,
+    setMakeRoomVictim,
+    makeRoomDay,
+    setMakeRoomDay,
+    makeRoomBefore,
+    setMakeRoomBefore,
+    makeRoomDisposition,
+    setMakeRoomDisposition,
+    moveCandidates,
     additionIncluded,
     additionResults,
     backfill,
@@ -68,6 +78,42 @@ export function ReplanSections({
   // section, so they are filtered out of their usual sections here.
   const moves = data.moves.filter(m => !carriedEventIds.has(m.googleEventId));
   const unplaceable = data.unplaceable.filter(u => !carriedEventIds.has(u.googleEventId));
+
+  // --- "Make room" victim selection ---------------------------------------
+  // A single "now" captured when the plan view first renders, for gating stale
+  // make-room by the meeting still being ahead (Date.now() in render is impure).
+  const [nowMs] = useState(() => Date.now());
+  const toMinutes = (hhmm: string) => {
+    const [h, m] = hhmm.split(':').map(Number);
+    return h * 60 + m;
+  };
+  // Every victim currently claimed by a make-room / prioritise selection, so no
+  // block is offered to two items at once. A row still sees its OWN pick — that's
+  // subtracted per item when filtering below.
+  const claimedVictimIds = new Set<string>(
+    [...Object.values(unplaceableVictim), ...Object.values(makeRoomVictim)].filter(Boolean)
+  );
+  // Candidate victims for an item (couldn't-fit or stale-prep), BEFORE the
+  // optional day filter: not itself, not claimed by another row, long enough to
+  // hold the item, and — for a stale prep — starting in the future and ending
+  // before its meeting. `ownPick` is exempt from the claimed filter.
+  const baseCandidatesFor = (
+    itemId: string,
+    itemDurationMinutes: number,
+    opts: { beforeMs?: number } = {}
+  ) =>
+    moveCandidates.filter(c => {
+      if (c.googleEventId === itemId) return false;
+      if (claimedVictimIds.has(c.googleEventId) && makeRoomVictim[itemId] !== c.googleEventId) return false;
+      if (c.durationMinutes < itemDurationMinutes) return false;
+      // Stale prep: the freed slot must start in the future and the prep (placed at
+      // the victim's start, for the prep's own duration) must end before the meeting.
+      if (opts.beforeMs !== undefined) {
+        if (c.startMs <= nowMs) return false;
+        if (c.startMs + itemDurationMinutes * 60 * 1000 > opts.beforeMs) return false;
+      }
+      return true;
+    });
 
   // Additions come in two flavours: missing rituals and prep blocks for
   // early-next-week meetings. Same toggle/result plumbing, separate sections.
@@ -295,6 +341,19 @@ export function ReplanSections({
             {stale.map(s => {
               const result = results[s.googleEventId];
               const mode = staleMode[s.googleEventId] ?? 'leave';
+              // "Make room" is offered only while the meeting is still ahead and a
+              // block ending before it can be displaced to fit the prep.
+              const staleCandidates =
+                s.meetingStartMs !== undefined && s.meetingStartMs > nowMs
+                  ? baseCandidatesFor(s.googleEventId, s.durationMinutes, { beforeMs: s.meetingStartMs })
+                  : [];
+              const canMakeRoom = staleCandidates.length > 0;
+              const staleOptions: StaleMode[] = [
+                'leave',
+                'done',
+                'dismiss',
+                ...(canMakeRoom ? (['makeRoom'] as StaleMode[]) : []),
+              ];
               return (
                 <li
                   key={s.googleEventId}
@@ -311,7 +370,7 @@ export function ReplanSections({
                     </p>
                     {!hasResults && (
                       <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
-                        {(['leave', 'done', 'dismiss'] as StaleMode[]).map(opt => (
+                        {staleOptions.map(opt => (
                           <button
                             key={opt}
                             onClick={() =>
@@ -325,10 +384,29 @@ export function ReplanSections({
                                 : 'bg-white text-gray-600 hover:bg-gray-50'
                             }`}
                           >
-                            {opt === 'leave' ? 'Leave' : opt === 'done' ? 'Mark done' : 'Dismiss'}
+                            {opt === 'leave'
+                              ? 'Leave'
+                              : opt === 'done'
+                                ? 'Mark done'
+                                : opt === 'dismiss'
+                                  ? 'Dismiss'
+                                  : 'Make room'}
                           </button>
                         ))}
                       </div>
+                    )}
+                    {mode === 'makeRoom' && (
+                      <MakeRoomPanel
+                        itemLabel={titleLabel(s.titles)}
+                        candidates={staleCandidates}
+                        victimId={makeRoomVictim[s.googleEventId] ?? ''}
+                        onPick={v => setMakeRoomVictim(prev => ({ ...prev, [s.googleEventId]: v }))}
+                        disposition={makeRoomDisposition[s.googleEventId] ?? 'defer'}
+                        onDisposition={d => setMakeRoomDisposition(prev => ({ ...prev, [s.googleEventId]: d }))}
+                        results={results}
+                        hasResults={hasResults}
+                        emptyNote="No block left to move out of the way before the meeting."
+                      />
                     )}
                   </div>
                   {result &&
@@ -781,6 +859,19 @@ export function ReplanSections({
               const chosenVictim = tomorrowBlocks.find(
                 t => t.googleEventId === unplaceableVictim[u.googleEventId]
               );
+              // "Make room" bumps a block anywhere in the remaining week. Its victim
+              // list is narrowed by the optional day / "before HH:mm" filters below.
+              const baseMakeRoom = baseCandidatesFor(u.googleEventId, u.durationMinutes);
+              const canMakeRoom = baseMakeRoom.length > 0;
+              const mrDay = makeRoomDay[u.googleEventId] ?? '';
+              const mrBefore = makeRoomBefore[u.googleEventId] ?? '';
+              const mrDays = [...new Set(baseMakeRoom.map(c => c.date))].sort();
+              const beforeMin = mrBefore ? toMinutes(mrBefore) : null;
+              const mrCandidates = baseMakeRoom.filter(
+                c =>
+                  (!mrDay || c.date === mrDay) &&
+                  (beforeMin === null || toMinutes(c.start) + c.durationMinutes <= beforeMin)
+              );
               // End-of-week: task-backed rows have moved to the carry-over
               // section, so anything left here (meeting prep) has no week to be
               // rescheduled or bumped into — leaving it unscheduled is the only
@@ -798,6 +889,8 @@ export function ReplanSections({
                     { v: 'leave', label: 'Leave unscheduled' },
                     ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
                     ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
+                    ...(canMakeRoom ? [{ v: 'makeRoom' as UnplaceableMode, label: 'Make room' }] : []),
+                    { v: 'done', label: 'Mark done' },
                     { v: 'drop', label: 'Delete task' },
                   ];
               return (
@@ -891,6 +984,68 @@ export function ReplanSections({
                           </ul>
                         )}
                       </div>
+                    )}
+                    {mode === 'makeRoom' && (
+                      <div className="mt-2">
+                        {/* Optional day + "before" filters narrowing the victim list. */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                            <button
+                              onClick={() => setMakeRoomDay(prev => ({ ...prev, [u.googleEventId]: '' }))}
+                              className={`px-2.5 py-1 transition-colors ${
+                                !mrDay ? 'bg-slate-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                              }`}
+                            >
+                              Any day
+                            </button>
+                            {mrDays.map(d => (
+                              <button
+                                key={d}
+                                onClick={() => setMakeRoomDay(prev => ({ ...prev, [u.googleEventId]: d }))}
+                                className={`px-2.5 py-1 transition-colors ${
+                                  mrDay === d ? 'bg-slate-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                                }`}
+                              >
+                                {slotLabel(d, '').trim()}
+                              </button>
+                            ))}
+                          </div>
+                          <label className="inline-flex items-center gap-1 text-[11px] text-gray-500">
+                            before
+                            <input
+                              type="time"
+                              value={mrBefore}
+                              onChange={e => setMakeRoomBefore(prev => ({ ...prev, [u.googleEventId]: e.target.value }))}
+                              className="rounded border border-gray-200 px-1 py-0.5 text-[11px] text-gray-700"
+                            />
+                            {mrBefore && (
+                              <button
+                                onClick={() => setMakeRoomBefore(prev => ({ ...prev, [u.googleEventId]: '' }))}
+                                className="text-gray-400 hover:text-gray-600"
+                                aria-label="Clear time"
+                              >
+                                ×
+                              </button>
+                            )}
+                          </label>
+                        </div>
+                        <MakeRoomPanel
+                          itemLabel={titleLabel(u.titles)}
+                          candidates={mrCandidates}
+                          victimId={makeRoomVictim[u.googleEventId] ?? ''}
+                          onPick={v => setMakeRoomVictim(prev => ({ ...prev, [u.googleEventId]: v }))}
+                          disposition={makeRoomDisposition[u.googleEventId] ?? 'defer'}
+                          onDisposition={d => setMakeRoomDisposition(prev => ({ ...prev, [u.googleEventId]: d }))}
+                          results={results}
+                          hasResults={hasResults}
+                          emptyNote="No block matches these filters — widen the day or time."
+                        />
+                      </div>
+                    )}
+                    {mode === 'done' && !hasResults && (
+                      <p className="mt-0.5 text-xs text-emerald-600">
+                        Marks the block done and completes its task{(u.tasks?.length ?? 0) === 1 ? '' : 's'} in Asana.
+                      </p>
                     )}
                     {mode === 'drop' && !hasResults && (
                       <p className="mt-0.5 text-xs text-rose-600">
@@ -1039,6 +1194,106 @@ function CarryOptions({
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// The "Make room" panel shared by couldn't-fit and stale-prep cards: a victim
+// list (each block long enough to hold the item and, for a stale prep, ending
+// before the meeting) plus a toggle for what happens to the chosen block's tasks.
+// Picking a victim displaces it and moves the item into its freed slot.
+function MakeRoomPanel({
+  itemLabel,
+  candidates,
+  victimId,
+  onPick,
+  disposition,
+  onDisposition,
+  results,
+  hasResults,
+  emptyNote,
+}: {
+  itemLabel: string;
+  candidates: ReplanMoveCandidate[];
+  victimId: string;
+  onPick: (victimEventId: string) => void;
+  disposition: MakeRoomDisposition;
+  onDisposition: (d: MakeRoomDisposition) => void;
+  results: Record<string, { success: boolean; error?: string }>;
+  hasResults: boolean;
+  emptyNote: string;
+}) {
+  const chosen = candidates.find(c => c.googleEventId === victimId);
+  return (
+    <div className="mt-2">
+      {chosen ? (
+        <p className="text-xs text-slate-600">
+          Moves {titleLabel(chosen.titles)} off the plan ({disposition === 'defer' ? 'deferred to next week' : 'left unscheduled'});
+          {' '}{itemLabel} takes its {slotLabel(chosen.date, chosen.start)} slot.
+        </p>
+      ) : candidates.length > 0 ? (
+        <p className="text-xs text-amber-600">Pick a block below to move out of the way:</p>
+      ) : (
+        <p className="text-xs text-amber-600">{emptyNote}</p>
+      )}
+      {!hasResults && candidates.length > 0 && (
+        <>
+          <ul className="mt-1.5 space-y-1">
+            {candidates.map(c => {
+              const cColor = categoryColor(c.category);
+              const picked = victimId === c.googleEventId;
+              const vResult = results[c.googleEventId];
+              return (
+                <li key={c.googleEventId}>
+                  <button
+                    onClick={() => onPick(picked ? '' : c.googleEventId)}
+                    className={`flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[11px] transition-colors ${
+                      picked
+                        ? 'border-orange-300 bg-orange-50'
+                        : 'border-gray-200 bg-white hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cColor.dot}`} />
+                    <span className="font-medium text-gray-700 truncate">{titleLabel(c.titles)}</span>
+                    <span className="ml-auto flex-shrink-0 text-gray-400">
+                      {slotLabel(c.date, c.start)} · {formatDuration(c.durationMinutes)}
+                    </span>
+                    {vResult &&
+                      (vResult.success ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                      ) : (
+                        <AlertTriangle
+                          className="w-3.5 h-3.5 text-red-500 flex-shrink-0"
+                          aria-label={vResult.error}
+                        />
+                      ))}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mt-1.5 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+            {(
+              [
+                { v: 'defer', label: 'Defer its tasks to next week' },
+                { v: 'leave', label: 'Leave unscheduled' },
+              ] as Array<{ v: MakeRoomDisposition; label: string }>
+            ).map(opt => (
+              <button
+                key={opt.v}
+                onClick={() => onDisposition(opt.v)}
+                className={`px-2.5 py-1 transition-colors ${
+                  disposition === opt.v
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

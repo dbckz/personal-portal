@@ -282,6 +282,14 @@ export interface ReplanTomorrowBlock {
   taskIds: string[];
 }
 
+// A displaceable app block anywhere in the remaining week, offered as a bump
+// target for the "Make room" option on a couldn't-fit / stale-prep card. Extends
+// the tomorrow block with `startMs`, so the client can apply the "before HH:mm"
+// and "ends before the meeting" constraints.
+export interface ReplanMoveCandidate extends ReplanTomorrowBlock {
+  startMs: number;
+}
+
 // One unscheduled General-Todos candidate the user can tick to fill a free slot.
 export interface ReplanTodoCandidate {
   gid?: string;
@@ -325,6 +333,10 @@ export interface ReplanAnalyzeResponse {
   // App blocks scheduled tomorrow that can be displaced to make room for a
   // prioritised block. Absent on older responses — treat as [].
   tomorrowBlocks?: ReplanTomorrowBlock[];
+  // App blocks across the remaining week that can be displaced to make room for a
+  // couldn't-fit / stale-prep block ("Make room"). Absent on older responses —
+  // treat as []. Superset of tomorrowBlocks (which is its tomorrow-only subset).
+  moveCandidates?: ReplanMoveCandidate[];
   // Past app blocks (task/prep) for the daily-review step. Absent on older
   // responses — treat as [].
   reviewBlocks?: ReplanReviewBlock[];

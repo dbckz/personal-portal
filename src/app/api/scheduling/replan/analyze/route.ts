@@ -639,24 +639,41 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Attach the deferrable task ids to each unplaceable block.
+    // Attach the deferrable task ids — and the Asana-backed tasks (for a "Mark
+    // done" that completes each in Asana) — to each unplaceable block. Mirrors
+    // carryTasksByEvent: only tasks with a gid are Asana-completable.
     const unplaceable = result.unplaceable.map(u => ({
       ...u,
       deferTaskIds: taskIdsByEvent.get(u.googleEventId) ?? [],
+      tasks: (carryTasksByEvent.get(u.googleEventId) ?? [])
+        .filter((t): t is ReplanCarryTask & { gid: string } => !!t.gid)
+        .map(t => ({ gid: t.gid, ...(t.integrationId ? { integrationId: t.integrationId } : {}) })),
     }));
 
-    // Displaceable blocks scheduled TOMORROW, offered as bump targets for the
-    // "prioritise tomorrow" option on an unplaceable block. Only future, not-done
-    // app blocks backed by deferrable work qualify — task/ad-hoc blocks (they have
-    // entries in taskIdsByEvent); rituals, breaks and meeting-prep are excluded
-    // (no taskIdsByEvent entry), and real Google meetings are never app blocks.
-    const tomorrow = new Date(ctx.now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
-    const tomorrowBlocks = blocks
+    // Attach each stale prep block's meeting start + title from the prep record,
+    // so the UI can offer "Make room" only while the meeting is still ahead.
+    const prepByEventId = new Map(prepBlocks.map(p => [p.googleEventId, p]));
+    const stale = result.stale.map(s => {
+      const p = prepByEventId.get(s.googleEventId);
+      if (!p) return s;
+      const meetingStartMs = new Date(p.meetingStart).getTime();
+      return {
+        ...s,
+        ...(Number.isNaN(meetingStartMs) ? {} : { meetingStartMs }),
+        ...(p.meetingTitle ? { meetingTitle: p.meetingTitle } : {}),
+      };
+    });
+
+    // Displaceable app blocks across the REMAINING week, offered as bump targets
+    // for the "Make room" / "Prioritise tomorrow" options on couldn't-fit and
+    // stale-prep cards. Only future, not-done app blocks backed by deferrable work
+    // qualify — task/ad-hoc blocks (they have entries in taskIdsByEvent); rituals,
+    // breaks and meeting-prep are excluded (no taskIdsByEvent entry), and real
+    // Google meetings are never app blocks. `startMs` lets the client apply the
+    // "before HH:mm" / "ends before the meeting" constraints.
+    const moveCandidates = blocks
       .filter(
         b =>
-          b.date === tomorrowStr &&
           !b.done &&
           b.startMs > nowMs &&
           (taskIdsByEvent.get(b.googleEventId)?.length ?? 0) > 0
@@ -669,8 +686,17 @@ export async function POST(request: NextRequest) {
         date: b.date,
         start: b.start,
         durationMinutes: b.durationMinutes,
+        startMs: b.startMs,
         taskIds: taskIdsByEvent.get(b.googleEventId) ?? [],
-      }));
+      }))
+      .sort((a, b) => a.startMs - b.startMs);
+
+    // The existing "prioritise tomorrow" flow only bumps TOMORROW's blocks; derive
+    // that subset from the week-wide candidates so both share one source.
+    const tomorrow = new Date(ctx.now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
+    const tomorrowBlocks = moveCandidates.filter(b => b.date === tomorrowStr);
 
     // --- End-of-week review ---------------------------------------------
     // On the last working day (and the weekend after it) there is no week left
@@ -755,7 +781,9 @@ export async function POST(request: NextRequest) {
       // meetings. Both are ProposedBlocks; the confirm route creates each by kind.
       additions: [...result.additions, ...prepAdditions],
       unplaceable,
+      stale,
       tomorrowBlocks,
+      moveCandidates,
       reviewBlocks,
       // The unscheduled General-Todos pool the user picks from to fill `freeSlots`
       // (from planReplan). freeSlots rides through in `...result`.
