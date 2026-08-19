@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { removeSessionEntry, updateSessionEntry } from '@/lib/storage/exercise';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // A reps-in-reserve rating: a number 0-10, null to clear an existing rating, or
 // undefined when the value is unusable (out of range / non-numeric) and should be
@@ -64,6 +65,12 @@ export async function PATCH(
     });
     if (!session) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
 
+    // Correcting an entry (weight, reps, a rename that merges histories) changes
+    // history — pre-generate so the next Today open doesn't wait on Claude.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
+
     return NextResponse.json({ session });
   } catch (error) {
     console.error('Error updating exercise entry:', error);
@@ -79,6 +86,11 @@ export async function DELETE(
     const { id, entryId } = await params;
     const session = await removeSessionEntry(id, entryId);
     if (!session) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
+    // Removing an entry changes history — pre-generate so the next Today open
+    // doesn't wait on Claude.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
     return NextResponse.json({ session });
   } catch (error) {
     console.error('Error removing exercise entry:', error);

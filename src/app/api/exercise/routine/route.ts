@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getWeeklyRoutine, saveWeeklyRoutine } from '@/lib/storage/weekly-routine';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // GET /api/exercise/routine — the seven-day standing training routine, Mon→Sun.
 // Seeds the captured default on first read of an empty store.
@@ -26,6 +27,11 @@ export async function PUT(request: NextRequest) {
       );
     }
     const routine = await saveWeeklyRoutine(body.routine);
+    // A routine edit moves today's programme hash — pre-generate the new
+    // programme in the background so the next Today open doesn't wait on Claude.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
     return NextResponse.json({ routine });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to save routine';

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { removePlannedEvent } from '@/lib/exercise-calendar';
 import { getAllSessions, deleteSession, updateSession } from '@/lib/storage/exercise';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // PATCH is how a planned session becomes a done one: send { completed: true }
 // plus whatever the actuals turned out to be.
@@ -23,6 +24,11 @@ export async function PATCH(
       completed: body.completed,
     });
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    // A session edit (completing a plan, correcting a date) changes today's
+    // history — pre-generate so the next Today open doesn't wait on Claude.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
     return NextResponse.json({ session });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to update session';
@@ -43,6 +49,11 @@ export async function DELETE(
     const deleted = await deleteSession(id);
     if (!deleted) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     if (session?.planned && session.googleEventId) await removePlannedEvent(session);
+    // Deleting a session changes today's history — pre-generate so the next
+    // Today open doesn't wait on Claude.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting exercise session:', error);

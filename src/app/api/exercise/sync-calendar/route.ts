@@ -3,6 +3,7 @@ import { addDays, subDays } from 'date-fns';
 
 import { materialiseRoutineSessions, pullPlannedSessions } from '@/lib/exercise-calendar';
 import { getExerciseLastSyncedAt, setExerciseLastSyncedAt } from '@/lib/user-data-storage';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // How far either side of today to sync by default. Back far enough to pick up a
 // plan written last week, forward far enough to cover the fortnight ahead that
@@ -45,6 +46,11 @@ export async function POST(request: NextRequest) {
     const pull = await pullPlannedSessions(subDays(now, backDays), addDays(now, forwardDays));
     const materialise = await materialiseRoutineSessions();
     await setExerciseLastSyncedAt(now.toISOString());
+    // Plan sessions may have been re-asserted for today, moving its programme
+    // hash — pre-generate the new programme so the next Today open doesn't wait.
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
     return NextResponse.json({
       ...pull,
       created: pull.created + materialise.created,

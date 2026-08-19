@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { addSessionEntry } from '@/lib/storage/exercise';
 import { parseLoad, parseVolume } from '@/lib/exercise-parse';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // POST /api/exercise/:id/entries — add an exercise to a session in progress.
 // Volume and load come in as the same shorthand used in the training log
@@ -26,6 +27,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       done: body.done ?? true,
     });
     if (!result) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+    // Logging an exercise changes history — a backdated entry moves today's
+    // programme hash. Pre-generate so the next Today open doesn't wait on Claude
+    // (a no-op via hash dedup + cache hit when today's inputs are unchanged).
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
 
     return NextResponse.json(result);
   } catch (error) {

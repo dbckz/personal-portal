@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { pushPlannedSession } from '@/lib/exercise-calendar';
 import { createSession, getSessionsInRange } from '@/lib/storage/exercise';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // GET /api/exercise?from=yyyy-MM-dd&to=yyyy-MM-dd — planned and completed
 // sessions in an inclusive window. Both bounds optional; omitting them returns
@@ -36,6 +37,13 @@ export async function POST(request: NextRequest) {
       exercises: body.exercises,
       components: body.components,
     });
+
+    // A new (possibly backdated) session changes today's history — pre-generate
+    // the programme so the next Today open doesn't wait on Claude. A no-op when
+    // today's inputs are unchanged (hash dedup + cache hit).
+    void prewarmProgramme().catch(error =>
+      console.error('Failed to pre-warm exercise programme:', error)
+    );
 
     // Planning in the portal writes the all-day event, so the plan stays
     // visible in the calendar Dave actually looks at. A calendar failure must

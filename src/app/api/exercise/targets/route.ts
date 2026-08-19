@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { format } from 'date-fns';
 
-import { generateProgramme, type ProgrammerInput } from '@/lib/exercise-programmer';
-import { saveCachedProgramme } from '@/lib/storage/exercise-programmes';
 import { getAllSessions } from '@/lib/storage/exercise';
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
+import { kickOffGeneration } from '@/lib/exercise-prewarm';
 
 // GET /api/exercise/targets?date=yyyy-MM-dd
 //
@@ -21,29 +20,6 @@ import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 // programme is cached yet, kick off generation in the background and return the
 // fallback with generating:true; the client refetches to pick up the programme
 // once it lands.
-
-// In-flight generations, keyed by date+hash, so overlapping loads (or a client
-// poll firing before the first finished) never spawn two Claude calls for the
-// same plan. Per-process — a best-effort guard, not a distributed lock.
-const inFlight = new Set<string>();
-
-function kickOffGeneration(date: string, hash: string, input: ProgrammerInput): void {
-  const key = `${date}:${hash}`;
-  if (inFlight.has(key)) return;
-  inFlight.add(key);
-  // Fire-and-forget: the response has already gone; the long-running server
-  // finishes this and caches the result for the client's next fetch.
-  void generateProgramme(input)
-    .then(rows => {
-      if (rows) saveCachedProgramme(date, hash, rows);
-    })
-    .catch(error => {
-      console.error('Background exercise programme generation failed:', error);
-    })
-    .finally(() => {
-      inFlight.delete(key);
-    });
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -69,7 +45,7 @@ export async function GET(request: NextRequest) {
     // No programme cached: serve the instant rule-based targets and, when there
     // is history to program from, generate the AI version in the background.
     const generating = input.exercises.length > 0;
-    if (generating) kickOffGeneration(date, hash, input);
+    if (generating) void kickOffGeneration(date, hash, input);
 
     return NextResponse.json({
       date,

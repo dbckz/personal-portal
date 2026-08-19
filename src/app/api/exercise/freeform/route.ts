@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 
 import { parseFreeform, type FreeformDraft } from '@/lib/exercise-freeform';
 import { createSession } from '@/lib/storage/exercise';
+import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // POST /api/exercise/freeform — log a session from a blob of text describing
 // what was actually done, for the days that go off-plan.
@@ -43,8 +44,8 @@ export async function POST(request: NextRequest) {
 
 // A freehand log is always something already done, so it is created completed
 // and unplanned — it is history, never an intention.
-function saveDraft(draft: FreeformDraft, text: string, date: string) {
-  return createSession({
+async function saveDraft(draft: FreeformDraft, text: string, date: string) {
+  const session = await createSession({
     date: draft.date || date,
     type: draft.type,
     ...(draft.label ? { label: draft.label } : {}),
@@ -58,4 +59,10 @@ function saveDraft(draft: FreeformDraft, text: string, date: string) {
     planned: false,
     completed: true,
   });
+  // A freehand log (often backdated) changes history — pre-generate the
+  // programme so the next Today open doesn't wait on Claude.
+  void prewarmProgramme().catch(error =>
+    console.error('Failed to pre-warm exercise programme:', error)
+  );
+  return session;
 }
