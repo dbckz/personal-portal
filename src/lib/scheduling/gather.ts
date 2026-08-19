@@ -94,6 +94,11 @@ export interface WeekContext {
   // How many still-active deferred tasks fall in each quota category (for the
   // wizard's "N deferred to next week" note). Keyed by category.
   deferredCountsByCategory: Record<string, number>;
+  // Asana gids the user marked "portal-done" (finished his part, waiting on
+  // someone else to close it in Asana). Held out of candidateTasks — the planner
+  // must not re-schedule them — and treated as complete by the replan analyze so
+  // a block whose only members are portal-done never resurfaces as "missed".
+  portalDoneGids: Set<string>;
 }
 
 // Resolve the type signals for an ad-hoc task's taskType (id + human label).
@@ -601,9 +606,18 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     };
   };
 
+  // Asana gids flagged portal-done: finished the user's part, waiting on someone
+  // else. Held out of the candidate pool (like a deferral) so the planner stops
+  // scheduling them, and exposed on the context for the replan/analyze exclusion.
+  const portalDoneGids = new Set<string>();
+  for (const [gid, meta] of Object.entries(metadata)) {
+    if (meta?.portalDone) portalDoneGids.add(gid);
+  }
+
   const candidateTasks: CandidateTask[] = [];
   for (const { task, integrationId, typeValue } of asanaCandidates) {
     if (scheduledGids.has(task.gid)) continue;
+    if (portalDoneGids.has(task.gid)) continue;
     if (activeDeferrals.has(task.gid)) {
       bumpDeferred(typeValue ? [typeValue] : []);
       continue;
@@ -655,5 +669,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     outOfOfficeDates: oooDates,
     quotas,
     deferredCountsByCategory,
+    portalDoneGids,
   };
 }

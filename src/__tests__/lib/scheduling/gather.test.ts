@@ -112,6 +112,16 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     expect(ctx.deferredCountsByCategory.Engage).toBe(1);
   });
 
+  it('holds a portal-done task out of the candidate pool and exposes its gid', async () => {
+    (getAllTaskMetadata as jest.Mock).mockResolvedValue({
+      rollover: { asanaTaskGid: 'rollover', integrationId: 'int1', portalDone: true, updatedAt: 'x' },
+    });
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.candidateTasks.map(t => t.gid)).not.toContain('rollover');
+    expect(ctx.portalDoneGids.has('rollover')).toBe(true);
+  });
+
   it('prunes an expired deferral and lets the task return as a candidate', async () => {
     (getTaskDeferrals as jest.Mock).mockResolvedValue({ rollover: '2026-07-15' }); // within this week -> expired
 

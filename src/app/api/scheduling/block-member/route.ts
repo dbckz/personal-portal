@@ -10,6 +10,8 @@ import {
   updateAdHocTask,
   removeCarryOvers,
   setWeeklyTaskOutcomes,
+  getAllTaskMetadata,
+  upsertTaskMetadata,
 } from '@/lib/user-data-storage';
 import type { AsanaIntegration, WeeklyTaskOutcomeKind } from '@/types';
 
@@ -29,6 +31,11 @@ import type { AsanaIntegration, WeeklyTaskOutcomeKind } from '@/types';
 //              and record an 'unscheduled' weekly outcome — mirrors the confirm
 //              route's leaveUnscheduled path, but for one member rather than the
 //              whole block. NOT a hard delete: the task returns to the backlog.
+//   * portalDone       → flag the Asana task "done in the portal, waiting on
+//              others" (metadata only, Asana untouched); the planner stops
+//              scheduling it and it surfaces in the "Waiting on others" widget.
+//   * reopenPortalDone → clear that flag so the task returns to scheduling.
+// Both portal-done actions are Asana-only (ad-hoc tasks have no Asana side).
 //
 // The Google event itself is left untouched: other members keep their block, and
 // an emptied block stays on the calendar for the existing delete affordance.
@@ -40,7 +47,10 @@ interface MemberInput {
   integrationId?: string;
   scheduleId?: string; // ScheduledAsanaTask.id (asana)
   adhocId?: string; // AdHocTask.id (adhoc)
+  title?: string; // live title, snapshotted when flagging portal-done
 }
+
+type MemberAction = 'done' | 'remove' | 'portalDone' | 'reopenPortalDone';
 
 // The Monday of the week a date falls in — the same key the analyze route used to
 // seed the task's high-water-mark entry, so the outcome lands in that week.
@@ -72,8 +82,23 @@ export async function POST(request: NextRequest) {
     const action: unknown = body?.action;
     const member: MemberInput | undefined = body?.member;
 
-    if (action !== 'done' && action !== 'remove') {
-      return NextResponse.json({ error: "action must be 'done' or 'remove'" }, { status: 400 });
+    const VALID_ACTIONS: MemberAction[] = ['done', 'remove', 'portalDone', 'reopenPortalDone'];
+    if (!VALID_ACTIONS.includes(action as MemberAction)) {
+      return NextResponse.json(
+        { error: "action must be 'done', 'remove', 'portalDone' or 'reopenPortalDone'" },
+        { status: 400 }
+      );
+    }
+    // Portal-done state lives on the Asana task's metadata (gid-keyed), so it is
+    // meaningless for ad-hoc members, which have no Asana side.
+    if (
+      (action === 'portalDone' || action === 'reopenPortalDone') &&
+      (member?.source !== 'asana' || !member?.gid || !member?.integrationId)
+    ) {
+      return NextResponse.json(
+        { error: `gid and integrationId on an Asana member are required for '${action}'` },
+        { status: 400 }
+      );
     }
     if (!member || (member.source !== 'asana' && member.source !== 'adhoc')) {
       return NextResponse.json({ error: "member.source must be 'asana' or 'adhoc'" }, { status: 400 });
@@ -102,7 +127,26 @@ export async function POST(request: NextRequest) {
 
     let outcome: WeeklyTaskOutcomeKind;
 
-    if (action === 'done') {
+    if (action === 'portalDone') {
+      // Done in the portal only — Asana is deliberately untouched. Snapshot the
+      // title so the "Waiting on others" widget can render without an Asana
+      // fetch, drop any carry-over, and record a 'portalDone' outcome.
+      outcome = 'portalDone';
+      await upsertTaskMetadata(member.gid!, member.integrationId!, {
+        portalDone: true,
+        portalDoneAt: new Date().toISOString(),
+        ...(member.title ? { portalDoneTitle: member.title } : {}),
+      });
+      await removeCarryOvers([member.taskId]);
+    } else if (action === 'reopenPortalDone') {
+      // Needs more work — clear the flag so the planner schedules it again.
+      outcome = 'scheduled';
+      await upsertTaskMetadata(member.gid!, member.integrationId!, {
+        portalDone: false,
+        portalDoneAt: undefined,
+        portalDoneTitle: undefined,
+      });
+    } else if (action === 'done') {
       outcome = 'done';
       if (member.source === 'asana') {
         if (!member.gid || !member.integrationId) {
@@ -113,6 +157,15 @@ export async function POST(request: NextRequest) {
         }
         const accessToken = await resolveAsanaToken(member.integrationId);
         await completeTask(accessToken, member.gid, true);
+        // Completing in Asana also settles any portal-done "waiting" state.
+        const metadata = await getAllTaskMetadata();
+        if (metadata[member.gid]?.portalDone) {
+          await upsertTaskMetadata(member.gid, member.integrationId, {
+            portalDone: false,
+            portalDoneAt: undefined,
+            portalDoneTitle: undefined,
+          });
+        }
       } else {
         const adhocId = member.adhocId ?? member.taskId;
         await updateAdHocTask(adhocId, { completed: true });

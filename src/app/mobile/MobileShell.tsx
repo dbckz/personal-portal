@@ -302,16 +302,28 @@ export function MobileShell() {
     [settings]
   );
 
+  // Asana gids flagged portal-done, so batch members show "waiting on others".
+  const portalDoneGids = useMemo(
+    () => new Set(Object.entries(metadataByGid).filter(([, m]) => m?.portalDone).map(([gid]) => gid)),
+    [metadataByGid]
+  );
+
   // Member tasks when the open event is a grouped batch block (else empty).
   const selectedEventMembers = useMemo<BlockMember[]>(() => {
     if (!selectedEvent) return [];
     const adhocTasks = getTasksForDate(format(selectedEvent.startTime, 'yyyy-MM-dd'));
     if (!isGroupedBlock(selectedEvent, scheduledAsanaTasks, adhocTasks)) return [];
-    return resolveBlockMembers(selectedEvent.id, scheduledAsanaTasks, adhocTasks, gid => {
-      const t = rawAsanaTasks.find(task => task.id === gid);
-      return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
-    });
-  }, [selectedEvent, scheduledAsanaTasks, allAsanaTasks, rawAsanaTasks, getTasksForDate]);
+    return resolveBlockMembers(
+      selectedEvent.id,
+      scheduledAsanaTasks,
+      adhocTasks,
+      gid => {
+        const t = rawAsanaTasks.find(task => task.id === gid);
+        return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
+      },
+      portalDoneGids
+    );
+  }, [selectedEvent, scheduledAsanaTasks, allAsanaTasks, rawAsanaTasks, getTasksForDate, portalDoneGids]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -452,7 +464,7 @@ export function MobileShell() {
     }
   }, [toast]);
 
-  const handleBlockMemberAction = useCallback(async (action: 'done' | 'remove', member: BlockMember) => {
+  const handleBlockMemberAction = useCallback(async (action: 'done' | 'remove' | 'portalDone', member: BlockMember) => {
     await api.updateBlockMember(action, {
       source: member.source,
       taskId: member.taskId,
@@ -460,6 +472,7 @@ export function MobileShell() {
       ...(member.integrationId ? { integrationId: member.integrationId } : {}),
       ...(member.scheduleId ? { scheduleId: member.scheduleId } : {}),
       ...(member.adhocId ? { adhocId: member.adhocId } : {}),
+      ...(member.title ? { title: member.title } : {}),
     });
   }, []);
 
@@ -481,11 +494,24 @@ export function MobileShell() {
     }
   }, [handleBlockMemberAction, toast]);
 
+  const handleMemberPortalDone = useCallback(async (member: BlockMember) => {
+    try {
+      await handleBlockMemberAction('portalDone', member);
+    } catch (err) {
+      toast.error('Could not mark the task done (waiting)');
+      throw err;
+    }
+  }, [handleBlockMemberAction, toast]);
+
   // Reconcile block-member changes with the server when the sheet closes.
   const handleCloseEventSheet = useCallback(() => {
     setSelectedEvent(null);
-    if (selectedEventMembers.length > 0) fetchAllEvents();
-  }, [selectedEventMembers, fetchAllEvents]);
+    if (selectedEventMembers.length > 0) {
+      fetchAllEvents();
+      // A portal-done flag change lands in task metadata, so refresh it too.
+      reloadMetadata();
+    }
+  }, [selectedEventMembers, fetchAllEvents, reloadMetadata]);
 
   const handleMoveEvent = useCallback((event: CalendarEvent) => {
     setScheduleTarget({ kind: 'move', event });
@@ -852,6 +878,7 @@ export function MobileShell() {
           members={selectedEventMembers}
           onMemberDone={handleMemberDone}
           onMemberRemove={handleMemberRemove}
+          onMemberPortalDone={handleMemberPortalDone}
         />
       )}
 

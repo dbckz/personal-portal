@@ -24,6 +24,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   updateAdHocTask: jest.fn(),
   removeCarryOvers: jest.fn(),
   setWeeklyTaskOutcomes: jest.fn(),
+  getAllTaskMetadata: jest.fn(),
+  upsertTaskMetadata: jest.fn(),
 }));
 
 import { format, startOfWeek } from 'date-fns';
@@ -38,6 +40,8 @@ import {
   updateAdHocTask,
   removeCarryOvers,
   setWeeklyTaskOutcomes,
+  getAllTaskMetadata,
+  upsertTaskMetadata,
 } from '@/lib/user-data-storage';
 
 const ASANA_INTEGRATION = {
@@ -72,6 +76,7 @@ beforeEach(() => {
   (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([SCHEDULED]);
   (getAdHocTasks as jest.Mock).mockResolvedValue([]);
   (getIntegrationById as jest.Mock).mockResolvedValue(ASANA_INTEGRATION);
+  (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
 });
 
 describe('block-member done', () => {
@@ -144,6 +149,70 @@ describe('block-member remove', () => {
     expect(status).toBe(200);
     expect(updateAdHocTask).toHaveBeenCalledWith('a1', { googleEventId: undefined, dueTime: undefined });
     expect(setWeeklyTaskOutcomes).toHaveBeenCalledWith(EXPECTED_WEEK, [{ taskId: 'a1', outcome: 'unscheduled' }]);
+  });
+});
+
+describe('block-member portalDone', () => {
+  it('flags the task portal-done without touching Asana and records the outcome', async () => {
+    const { status, body } = await post({
+      action: 'portalDone',
+      member: { source: 'asana', taskId: 'g1', gid: 'g1', integrationId: 'int-1', scheduleId: 's1', title: 'Publish it' },
+    });
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ success: true });
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(upsertTaskMetadata).toHaveBeenCalledWith(
+      'g1',
+      'int-1',
+      expect.objectContaining({ portalDone: true, portalDoneTitle: 'Publish it' })
+    );
+    expect(removeCarryOvers).toHaveBeenCalledWith(['g1']);
+    expect(setWeeklyTaskOutcomes).toHaveBeenCalledWith(EXPECTED_WEEK, [{ taskId: 'g1', outcome: 'portalDone' }]);
+  });
+
+  it('clears the flag on reopenPortalDone and records a scheduled outcome', async () => {
+    const { status } = await post({
+      action: 'reopenPortalDone',
+      member: { source: 'asana', taskId: 'g1', gid: 'g1', integrationId: 'int-1', scheduleId: 's1' },
+    });
+
+    expect(status).toBe(200);
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(upsertTaskMetadata).toHaveBeenCalledWith(
+      'g1',
+      'int-1',
+      expect.objectContaining({ portalDone: false, portalDoneAt: undefined, portalDoneTitle: undefined })
+    );
+    expect(setWeeklyTaskOutcomes).toHaveBeenCalledWith(EXPECTED_WEEK, [{ taskId: 'g1', outcome: 'scheduled' }]);
+  });
+
+  it('clears a portal-done flag when completing the same task in Asana', async () => {
+    (getAllTaskMetadata as jest.Mock).mockResolvedValue({
+      g1: { asanaTaskGid: 'g1', integrationId: 'int-1', portalDone: true, updatedAt: 'x' },
+    });
+
+    const { status } = await post({
+      action: 'done',
+      member: { source: 'asana', taskId: 'g1', gid: 'g1', integrationId: 'int-1', scheduleId: 's1' },
+    });
+
+    expect(status).toBe(200);
+    expect(completeTask).toHaveBeenCalledWith('tok', 'g1', true);
+    expect(upsertTaskMetadata).toHaveBeenCalledWith(
+      'g1',
+      'int-1',
+      expect.objectContaining({ portalDone: false })
+    );
+  });
+
+  it('rejects portalDone on an ad-hoc member', async () => {
+    const { status } = await post({
+      action: 'portalDone',
+      member: { source: 'adhoc', taskId: 'a1', adhocId: 'a1' },
+    });
+    expect(status).toBe(400);
+    expect(upsertTaskMetadata).not.toHaveBeenCalled();
   });
 });
 

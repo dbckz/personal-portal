@@ -100,6 +100,12 @@ export async function POST(request: NextRequest) {
     // A scheduled gid absent from this set is complete.
     const incompleteByGid = new Map(ctx.asanaCandidates.map(c => [c.task.gid, c.task]));
     const asanaTypeByGid = new Map(ctx.asanaCandidates.map(c => [c.task.gid, c.typeValue]));
+    // Portal-done gids stay incomplete in Asana (the user only finished HIS part),
+    // so the shared incomplete fetch still lists them. For the review they must
+    // read as done, or a block whose members are all portal-done would resurface
+    // as "missed" and be offered for carry-over. Drop them from the incomplete set
+    // so every done check (block done-ness, carryTasksByEvent) treats them as done.
+    for (const gid of ctx.portalDoneGids ?? []) incompleteByGid.delete(gid);
 
     const blocks: ReplanBlock[] = [];
     const appEventIds = new Set<string>();
@@ -704,6 +710,21 @@ export async function POST(request: NextRequest) {
     // carry-over decision per incomplete task instead. Uses the LOGICAL day so
     // the small hours before rollover still belong to the previous day.
     const endOfWeek = isEndOfWeekReview(logicalDayStart, ctx.config.scheduling?.workingDays);
+    // Portal-done tasks ("waiting on others"): finished the user's part, awaiting
+    // someone else to close in Asana. Reviewed at end of week so he can complete
+    // them in Asana too, leave them waiting, or reopen them. Title comes from the
+    // live Asana name where the task is still fetchable, else the snapshot taken
+    // when it was flagged, so the row renders without an extra fetch.
+    const waiting = endOfWeek
+      ? Object.entries(taskMetadata)
+          .filter(([, m]) => m?.portalDone)
+          .map(([gid, m]) => ({
+            gid,
+            integrationId: m.integrationId,
+            title: ctx.asanaNameByGid.get(gid) ?? m.portalDoneTitle ?? 'Task',
+            portalDoneAt: m.portalDoneAt ?? m.updatedAt,
+          }))
+      : [];
     // Missed + unplaceable blocks that are task-backed. Rituals and meeting-prep
     // blocks have no entry in carryTasksByEvent, so they are excluded by
     // construction — next week's plan recreates rituals, and prep belongs to its
@@ -776,7 +797,7 @@ export async function POST(request: NextRequest) {
       review,
       // Only present in end-of-week mode; the rest of the payload is byte-for-byte
       // what a mid-week analyze has always returned.
-      ...(endOfWeek ? { carryBlocks } : {}),
+      ...(endOfWeek ? { carryBlocks, waiting } : {}),
       // Ritual additions (from planReplan) plus prep additions for early-next-week
       // meetings. Both are ProposedBlocks; the confirm route creates each by kind.
       additions: [...result.additions, ...prepAdditions],

@@ -119,6 +119,33 @@ describe('resolveBlockMembers', () => {
     });
   });
 
+  it('flags a portal-done Asana member (present + incomplete → a distinct waiting state)', () => {
+    const members = resolveBlockMembers(
+      'evt-batch',
+      [scheduled({ id: 's1', asanaTaskId: 'g1' }), scheduled({ id: 's2', asanaTaskId: 'g2' })],
+      [],
+      lookup({
+        g1: { title: 'Waiting', completed: false },
+        g2: { title: 'Open', completed: false },
+      }),
+      new Set(['g1'])
+    );
+    // g1 is still incomplete in Asana (done stays false) but carries portalDone.
+    expect(members[0]).toMatchObject({ taskId: 'g1', done: false, portalDone: true });
+    expect(members[1]).toMatchObject({ taskId: 'g2', done: false });
+    expect(members[1]).not.toHaveProperty('portalDone');
+  });
+
+  it('omits portalDone when no set is passed', () => {
+    const members = resolveBlockMembers(
+      'evt-batch',
+      [scheduled({ id: 's1', asanaTaskId: 'g1' })],
+      [],
+      lookup({ g1: { title: 'x', completed: false } })
+    );
+    expect(members[0]).not.toHaveProperty('portalDone');
+  });
+
   it('returns nothing for an event with no members', () => {
     expect(resolveBlockMembers('evt-empty', [scheduled()], [adhoc()], lookup({}))).toEqual([]);
   });

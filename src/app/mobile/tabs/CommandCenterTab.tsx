@@ -6,6 +6,7 @@ import { DashboardCapacityResponse } from '@/lib/api';
 import { CapacityWidget } from '@/components/dashboard/CapacityWidget';
 import { ClientTimeWidget } from '@/components/dashboard/ClientTimeWidget';
 import { DelegationWidget } from '@/components/dashboard/DelegationWidget';
+import { WaitingWidget } from '@/components/dashboard/WaitingWidget';
 import { MobileReviewCard } from '../command-center/MobileReviewCard';
 import { MobileTodayCard } from '../command-center/MobileTodayCard';
 import { MobileTopTasks } from '../command-center/MobileTopTasks';
@@ -127,6 +128,14 @@ export function CommandCenterTab({
         delegationByGid={delegationByGid}
         onTaskClick={onOpenTask}
         onDelegate={onDelegateTask}
+      />
+
+      <WaitingWidget
+        onTaskClick={onOpenTask}
+        onChanged={() => {
+          onReloadMetadata();
+          onDataChanged();
+        }}
       />
 
       {/* Plain wrapper (no h-full flex parent) so the widget sizes to content. */}

@@ -41,4 +41,29 @@ describe('task metadata storage', () => {
     expect(all['gid-2'].energyLevel).toBe('low');
     expect(all['gid-2'].bestTime).toBe('morning');
   });
+
+  it('sets and clears the portal-done flag with its timestamp + title snapshot', async () => {
+    await upsertTaskMetadata('gid-pd', 'int-1', {
+      portalDone: true,
+      portalDoneAt: '2026-08-18T10:00:00.000Z',
+      portalDoneTitle: 'Publish the post',
+    });
+    let all = await getAllTaskMetadata();
+    expect(all['gid-pd'].portalDone).toBe(true);
+    expect(all['gid-pd'].portalDoneAt).toBe('2026-08-18T10:00:00.000Z');
+    expect(all['gid-pd'].portalDoneTitle).toBe('Publish the post');
+
+    // Clear it: false + timestamp/title reset to undefined, other fields intact.
+    await upsertTaskMetadata('gid-pd', 'int-1', { energyLevel: 'high' });
+    await upsertTaskMetadata('gid-pd', 'int-1', {
+      portalDone: false,
+      portalDoneAt: undefined,
+      portalDoneTitle: undefined,
+    });
+    all = await getAllTaskMetadata();
+    expect(all['gid-pd'].portalDone).toBe(false);
+    expect(all['gid-pd'].portalDoneAt).toBeUndefined();
+    expect(all['gid-pd'].portalDoneTitle).toBeUndefined();
+    expect(all['gid-pd'].energyLevel).toBe('high');
+  });
 });

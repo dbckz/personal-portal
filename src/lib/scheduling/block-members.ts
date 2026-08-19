@@ -23,6 +23,11 @@ export interface BlockMember {
   source: 'asana' | 'adhoc';
   title: string;
   done: boolean;
+  // Portal-done ("waiting on others"): the user's work is finished but the Asana
+  // task waits on someone else, so it is neither open nor complete. Rendered as a
+  // distinct "waiting" state. Only Asana members can be portal-done (ad-hoc tasks
+  // have no Asana side).
+  portalDone?: boolean;
   // The weekly-stats task id (Asana gid or ad-hoc id).
   taskId: string;
   // Asana members carry the gid + integration needed to complete the task and to
@@ -51,7 +56,11 @@ export function resolveBlockMembers(
   googleEventId: string,
   scheduledAsanaTasks: ScheduledAsanaTask[],
   adhocTasks: AdHocTask[],
-  lookupAsanaTask: AsanaTaskLookup
+  lookupAsanaTask: AsanaTaskLookup,
+  // Asana gids the user marked portal-done (waiting on others). A portal-done
+  // member is still present + incomplete in Asana, so it needs a third state
+  // distinct from open and done.
+  portalDoneGids?: ReadonlySet<string>
 ): BlockMember[] {
   const members: BlockMember[] = [];
 
@@ -64,6 +73,7 @@ export function resolveBlockMembers(
       title: live?.title ?? s.taskName ?? 'Scheduled task',
       // The live list is incomplete-only; a member missing from it is done.
       done: live ? live.completed : true,
+      ...(portalDoneGids?.has(s.asanaTaskId) ? { portalDone: true } : {}),
       taskId: s.asanaTaskId,
       gid: s.asanaTaskId,
       integrationId: s.integrationId ?? live?.integrationId,

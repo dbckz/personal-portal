@@ -240,6 +240,84 @@ describe('useReplanActions — make-room payload assembly', () => {
   });
 });
 
+describe('useReplanActions — done-waiting (portal-done) payload assembly', () => {
+  it("routes a 'doneWaiting' unplaceable row into the portalDone array with its block id", async () => {
+    const { result } = renderHook(() => useReplanActions(DATA));
+
+    act(() => {
+      result.current.setUnplaceableMode(prev => ({ ...prev, 'evt-x': 'doneWaiting' }));
+    });
+
+    await act(async () => {
+      await result.current.confirm();
+    });
+
+    const args = confirmReplan.mock.calls[0];
+    // portalDone (19th positional, index 18): the task + its block id.
+    expect(args[18]).toEqual([{ gid: 'g1', integrationId: 'gi1', googleEventId: 'evt-x' }]);
+    // It did NOT also mark the block done (index 1) or defer it (index 7).
+    expect(args[1]).toEqual([]);
+    expect(args[7]).toEqual([]);
+  });
+});
+
+// End-of-week analyze with a portal-done task waiting on others.
+const WAITING_DATA: ReplanAnalyzeResponse = {
+  weekStart: '2026-07-20',
+  weekEnd: '2026-07-26',
+  kept: [],
+  moves: [],
+  stale: [],
+  additions: [],
+  deletions: [],
+  unplaceable: [],
+  endOfWeek: true,
+  carryBlocks: [],
+  waiting: [{ gid: 'w1', integrationId: 'gi1', title: 'Blog post', portalDoneAt: '2026-07-18T10:00:00.000Z' }],
+};
+
+describe('useReplanActions — end-of-week waiting-on-others assembly', () => {
+  it('does nothing while a waiting row stays on its leave default', () => {
+    const { result } = renderHook(() => useReplanActions(WAITING_DATA));
+    expect(result.current.actionCount).toBe(0);
+  });
+
+  it("'complete' completes in Asana AND clears the flag (no outcome)", async () => {
+    const { result } = renderHook(() => useReplanActions(WAITING_DATA));
+
+    act(() => {
+      result.current.setWaitingMode(prev => ({ ...prev, w1: 'complete' }));
+    });
+
+    await act(async () => {
+      await result.current.confirm();
+    });
+
+    const args = confirmReplan.mock.calls[0];
+    // completeAsana (index 6) records the 'done'; clearPortalDone (index 19)
+    // just clears the flag, carrying no outcome of its own.
+    expect(args[6]).toEqual([{ gid: 'w1', integrationId: 'gi1' }]);
+    expect(args[19]).toEqual([{ gid: 'w1', integrationId: 'gi1' }]);
+  });
+
+  it("'reopen' clears the flag and records a scheduled outcome", async () => {
+    const { result } = renderHook(() => useReplanActions(WAITING_DATA));
+
+    act(() => {
+      result.current.setWaitingMode(prev => ({ ...prev, w1: 'reopen' }));
+    });
+
+    await act(async () => {
+      await result.current.confirm();
+    });
+
+    const args = confirmReplan.mock.calls[0];
+    // Nothing to complete in Asana, so completeAsana is omitted entirely.
+    expect(args[6]).toBeUndefined();
+    expect(args[19]).toEqual([{ gid: 'w1', integrationId: 'gi1', outcome: 'scheduled' }]);
+  });
+});
+
 // Free space remaining: nothing is scheduled until the user ticks a todo. Ticked
 // todos fill the free slots (earliest first) and ride the backfill confirm path.
 const FREE_SPACE_DATA: ReplanAnalyzeResponse = {

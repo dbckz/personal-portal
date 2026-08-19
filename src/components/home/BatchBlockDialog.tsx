@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { X, Check, Trash2, Loader2, ChevronRight } from 'lucide-react';
+import { X, Check, Trash2, Loader2, ChevronRight, Clock } from 'lucide-react';
 
 import type { CalendarEvent } from '@/types';
 import type { BlockMember } from '@/lib/scheduling/block-members';
@@ -14,6 +14,10 @@ interface BatchBlockDialogProps {
   // so the dialog can roll its optimistic update back.
   onMemberDone: (member: BlockMember) => Promise<void>;
   onMemberRemove: (member: BlockMember) => Promise<void>;
+  // Flag an Asana member "done (waiting on others)": the user's work is finished
+  // but the task can't be closed in Asana yet. Optional so ad-hoc-only callers
+  // need not supply it. Resolves/rejects like the others for optimistic rollback.
+  onMemberPortalDone?: (member: BlockMember) => Promise<void>;
   // Open a member's full task detail dialog (Asana members only).
   onOpenTask: (member: BlockMember) => void;
   onClose: () => void;
@@ -30,6 +34,7 @@ export function BatchBlockDialog({
   members: initialMembers,
   onMemberDone,
   onMemberRemove,
+  onMemberPortalDone,
   onOpenTask,
   onClose,
 }: BatchBlockDialogProps) {
@@ -73,6 +78,23 @@ export function BatchBlockDialog({
       }
     },
     [onMemberDone, setRow]
+  );
+
+  const handlePortalDone = useCallback(
+    async (member: BlockMember) => {
+      if (member.done || member.portalDone || !onMemberPortalDone) return;
+      setRow(member.key, { busy: true });
+      // Optimistically flag waiting.
+      setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, portalDone: true } : m)));
+      try {
+        await onMemberPortalDone(member);
+        setRow(member.key, {});
+      } catch {
+        setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, portalDone: false } : m)));
+        setRow(member.key, { error: true });
+      }
+    },
+    [onMemberPortalDone, setRow]
   );
 
   const handleRemove = useCallback(
@@ -138,24 +160,33 @@ export function BatchBlockDialog({
               {members.map(member => {
                 const row = rows[member.key] ?? {};
                 const clickable = member.source === 'asana' && !!member.gid;
+                // "Done (waiting)" is Asana-only and only while the task is still
+                // open (not done, not already waiting).
+                const canWait =
+                  !!onMemberPortalDone && member.source === 'asana' && !member.done && !member.portalDone;
                 return (
                   <li
                     key={member.key}
                     className="flex items-center gap-2 px-2 py-2.5 group"
                   >
-                    {/* Done checkbox */}
+                    {/* Done checkbox — green when done, amber "waiting" when portal-done */}
                     <button
                       onClick={() => handleDone(member)}
                       disabled={member.done || row.busy}
-                      aria-label={member.done ? 'Done' : 'Mark done'}
+                      aria-label={member.done ? 'Done' : member.portalDone ? 'Waiting on others' : 'Mark done'}
+                      title={member.portalDone ? 'Waiting on others' : undefined}
                       className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
                         member.done
                           ? 'bg-green-500 border-green-500 text-white'
-                          : 'border-gray-300 hover:border-green-500 text-transparent hover:text-green-500'
+                          : member.portalDone
+                            ? 'border-amber-400 bg-amber-50 text-amber-500'
+                            : 'border-gray-300 hover:border-green-500 text-transparent hover:text-green-500'
                       } disabled:opacity-60`}
                     >
                       {row.busy ? (
                         <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+                      ) : member.portalDone && !member.done ? (
+                        <Clock className="w-3.5 h-3.5" />
                       ) : (
                         <Check className="w-3.5 h-3.5" />
                       )}
@@ -171,6 +202,9 @@ export function BatchBlockDialog({
                       } ${clickable ? 'hover:text-orange-600 cursor-pointer' : 'cursor-default'}`}
                     >
                       <span className="truncate">{member.title}</span>
+                      {member.portalDone && !member.done && (
+                        <span className="flex-shrink-0 text-[11px] font-medium text-amber-600">waiting</span>
+                      )}
                       {clickable && (
                         <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-300 group-hover:text-orange-400" />
                       )}
@@ -178,6 +212,19 @@ export function BatchBlockDialog({
 
                     {row.error && (
                       <span className="text-xs text-red-500 flex-shrink-0">Failed</span>
+                    )}
+
+                    {/* Done (waiting on others) */}
+                    {canWait && (
+                      <button
+                        onClick={() => handlePortalDone(member)}
+                        disabled={row.busy}
+                        aria-label="Done (waiting on others)"
+                        title="Done — waiting on others (Asana untouched)"
+                        className="flex-shrink-0 p-1 rounded hover:bg-amber-50 text-gray-300 hover:text-amber-500 transition-colors disabled:opacity-60"
+                      >
+                        <Clock className="w-4 h-4" />
+                      </button>
                     )}
 
                     {/* Remove from block */}

@@ -16,6 +16,7 @@ import { CapacityWidget } from './CapacityWidget';
 import { ClientTimeWidget, formatDuration } from './ClientTimeWidget';
 import { DelegationWidget } from './DelegationWidget';
 import { LeftUnscheduledWidget } from './LeftUnscheduledWidget';
+import { WaitingWidget } from './WaitingWidget';
 import { AiRunnableTasks } from './AiRunnableTasks';
 import { StaleTasksModal } from './StaleTasksModal';
 import { PlanWeekModal } from './PlanWeekModal';
@@ -435,6 +436,13 @@ export function DashboardContent({
               <LeftUnscheduledWidget tasks={unscheduled} />
             </div>
           )}
+          <WaitingWidget
+            onTaskClick={onOpenTask}
+            onChanged={() => {
+              onReloadMetadata?.();
+              onPlanApplied?.();
+            }}
+          />
           <div className="flex-1 min-h-0 min-w-0">
             <DelegationWidget
               delegationByGid={delegationByGid}

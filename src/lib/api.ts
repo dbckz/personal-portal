@@ -1,7 +1,7 @@
 // API utilities with retry logic and proper typing
 
 import { EventAttributionRule } from '@/types';
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate, WeeklyTaskOutcomeKind } from '@/types';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanConversion, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
@@ -299,6 +299,22 @@ export interface ReplanTodoCandidate {
   category: string;
 }
 
+// One portal-done ("waiting on others") task, for the dashboard widget.
+export interface WaitingTask {
+  gid: string;
+  integrationId: string;
+  title: string;
+  portalDoneAt?: string; // ISO — when it was flagged
+}
+
+// One portal-done ("waiting on others") task surfaced in the end-of-week review.
+export interface ReplanWaitingTask {
+  gid: string;
+  integrationId: string;
+  title: string;
+  portalDoneAt?: string; // ISO — when it was flagged
+}
+
 export interface ReplanAnalyzeResponse {
   weekStart: string;
   weekEnd: string;
@@ -347,6 +363,9 @@ export interface ReplanAnalyzeResponse {
   // Unfinished, task-backed blocks to carry over / drop / mark done. Present only
   // in end-of-week mode; never contains ritual or meeting-prep blocks.
   carryBlocks?: ReplanCarryBlock[];
+  // Portal-done tasks ("waiting on others") to review at end of week: complete in
+  // Asana too, leave waiting, or reopen. Present only in end-of-week mode.
+  waiting?: ReplanWaitingTask[];
   // Catch-up context for the review's subtitle. Absent on older responses.
   review?: {
     // Effective review-window start (ISO). Null when this is a first-ever review
@@ -1204,7 +1223,7 @@ export const api = {
   // 'remove' takes it out of the block (task returns to the backlog unscheduled)
   // and records an 'unscheduled' outcome — the same recording paths a review uses.
   async updateBlockMember(
-    action: 'done' | 'remove',
+    action: 'done' | 'remove' | 'portalDone' | 'reopenPortalDone',
     member: {
       source: 'asana' | 'adhoc';
       taskId: string;
@@ -1212,6 +1231,7 @@ export const api = {
       integrationId?: string;
       scheduleId?: string;
       adhocId?: string;
+      title?: string;
     }
   ): Promise<{ success: true }> {
     return fetchWithRetry<{ success: true }>(
@@ -1379,6 +1399,12 @@ export const api = {
   // Task metadata (enrichment layer, keyed by Asana task GID)
   async getTaskMetadata(): Promise<{ metadata: Record<string, TaskMetadata> }> {
     return fetchWithRetry<{ metadata: Record<string, TaskMetadata> }>('/api/user-data/task-metadata');
+  },
+
+  // The "Waiting on others" list: tasks flagged portal-done (finished, awaiting
+  // someone else to close in Asana), newest first.
+  async getWaitingTasks(): Promise<{ tasks: WaitingTask[] }> {
+    return fetchWithRetry<{ tasks: WaitingTask[] }>('/api/dashboard/waiting');
   },
 
   async upsertTaskMetadata(
@@ -1665,7 +1691,14 @@ export const api = {
       start: string;
       durationMinutes: number;
       tasks: Array<{ gid?: string; adhocId?: string; title: string; integrationId?: string }>;
-    }>
+    }>,
+    // "Done (waiting on others)" from the couldn't-fit section: flag each task
+    // portal-done (Asana untouched) and settle its block so it stops nagging.
+    portalDone?: Array<{ gid: string; integrationId: string; title?: string; googleEventId?: string }>,
+    // End-of-week "waiting on others" decisions that clear the flag: 'complete'
+    // (paired with a completeAsana entry) sends no outcome; 'reopen' sends
+    // outcome 'scheduled' so the planner schedules the task again.
+    clearPortalDone?: Array<{ gid: string; integrationId: string; outcome?: WeeklyTaskOutcomeKind }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1676,6 +1709,8 @@ export const api = {
     carryResults?: ReplanCarryResult[];
     displaceResults?: ReplanDisplaceResult[];
     dropResults?: ReplanConfirmResult[];
+    portalDoneResults?: Array<{ gid: string; googleEventId?: string; success: boolean; error?: string }>;
+    clearPortalDoneResults?: Array<{ gid: string; success: boolean; error?: string }>;
     additionResults: ReplanAdditionResult[];
     backfillResults?: ReplanBackfillResult[];
     conversionResults?: ReplanConfirmResult[];
@@ -1690,6 +1725,8 @@ export const api = {
       carryResults?: ReplanCarryResult[];
       displaceResults?: ReplanDisplaceResult[];
       dropResults?: ReplanConfirmResult[];
+      portalDoneResults?: Array<{ gid: string; googleEventId?: string; success: boolean; error?: string }>;
+      clearPortalDoneResults?: Array<{ gid: string; success: boolean; error?: string }>;
       additionResults: ReplanAdditionResult[];
       backfillResults?: ReplanBackfillResult[];
       conversionResults?: ReplanConfirmResult[];
@@ -1712,6 +1749,8 @@ export const api = {
           ...(replacements && replacements.length ? { replacements } : {}),
           ...(delegate && delegate.length ? { delegate } : {}),
           ...(drop && drop.length ? { drop } : {}),
+          ...(portalDone && portalDone.length ? { portalDone } : {}),
+          ...(clearPortalDone && clearPortalDone.length ? { clearPortalDone } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(backfill && backfill.length ? { backfill } : {}),

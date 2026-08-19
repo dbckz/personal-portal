@@ -17,7 +17,7 @@ export type StaleMode = 'leave' | 'done' | 'dismiss' | 'makeRoom';
 // tomorrow's blocks (only when there is one to bump), make room by displacing a
 // chosen block anywhere in the remaining week, or drop it outright — "I'm not
 // doing this at all": the calendar block and the backing Asana task are deleted.
-export type UnplaceableMode = 'defer' | 'leave' | 'done' | 'overflow' | 'prioritise' | 'makeRoom' | 'drop';
+export type UnplaceableMode = 'defer' | 'leave' | 'done' | 'doneWaiting' | 'overflow' | 'prioritise' | 'makeRoom' | 'drop';
 // Disposition of a displaced block's tasks when making room: defer them to next
 // week (default) or leave them unscheduled.
 export type MakeRoomDisposition = 'defer' | 'leave';
@@ -31,6 +31,11 @@ export type MakeRoomDisposition = 'defer' | 'leave';
 // options: 'mustDo' (carry it AND flag it must-do next week) and, when it is
 // AI-runnable, 'delegate' (hand it to an agent instead of carrying it).
 export type CarryMode = 'carry' | 'backlog' | 'done' | 'mustDo' | 'delegate';
+
+// Per-row action in the end-of-week "Waiting on others" section: complete the
+// task in Asana too, leave it waiting (default), or reopen it (needs more work —
+// clears the portal-done flag so the planner schedules it again). Keyed by gid.
+export type WaitingMode = 'complete' | 'leave' | 'reopen';
 
 // Per-task key for a grouped carry block's member row.
 export const carryTaskKey = (googleEventId: string, taskId: string) =>
@@ -62,6 +67,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   const [makeRoomBefore, setMakeRoomBefore] = useState<Record<string, string>>({});
   const [makeRoomDisposition, setMakeRoomDisposition] = useState<Record<string, MakeRoomDisposition>>({});
   const [carryMode, setCarryMode] = useState<Record<string, CarryMode>>({});
+  // End-of-week "Waiting on others" per-row choice, keyed by task gid.
+  const [waitingMode, setWaitingMode] = useState<Record<string, WaitingMode>>({});
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
   const [backfillIncluded, setBackfillIncluded] = useState<Set<string>>(new Set());
@@ -113,6 +120,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         )
       )
     );
+    // Every waiting row defaults to "leave waiting" — no action unless chosen.
+    setWaitingMode(
+      Object.fromEntries((data.waiting ?? []).map(w => [w.gid, 'leave' as WaitingMode]))
+    );
     setAdditionIncluded(new Set((data.additions ?? []).map(a => a.id)));
     setAdditionResults({});
     setBackfillIncluded(new Set((data.backfill ?? []).map(b => b.id)));
@@ -132,6 +143,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   // End-of-week mode: these blocks replace their rows in the moves / couldn't-fit
   // sections with a single carry-over decision each.
   const carryBlocks = useMemo(() => (data?.endOfWeek ? data.carryBlocks ?? [] : []), [data]);
+  // End-of-week "Waiting on others" tasks (portal-done, awaiting someone else).
+  const waiting = useMemo(() => (data?.endOfWeek ? data.waiting ?? [] : []), [data]);
   // Every block folded into a carry card, not just each card's primary: a
   // grouped category's sibling blocks all belong to one card, and none of them
   // should still appear in the moves / couldn't-fit sections.
@@ -185,6 +198,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const carry: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean; mustDo?: boolean }> = [];
     const delegate: Array<{ blockId?: string; gid: string; integrationId: string; title?: string }> = [];
     const completeAsana: Array<{ gid: string; integrationId: string }> = [];
+    // Portal-done ("waiting on others") flags to set (couldn't-fit "Done (waiting)")
+    // and to clear (end-of-week complete / reopen).
+    const portalDone: Array<{ gid: string; integrationId: string; title?: string; googleEventId?: string }> = [];
+    const clearPortalDone: Array<{ gid: string; integrationId: string; outcome?: 'scheduled' }> = [];
     const displace: Array<{
       googleEventId: string;
       googleIntegrationId?: string;
@@ -287,6 +304,18 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
           for (const t of u.tasks ?? []) {
             if (t.integrationId) completeAsana.push({ gid: t.gid, integrationId: t.integrationId });
           }
+        } else if (mode === 'doneWaiting') {
+          // Done in the portal only — flag each Asana-backed task portal-done
+          // (Asana untouched) and let the confirm route settle the block (it marks
+          // the block done for planning via the googleEventId so it stops nagging).
+          for (const t of u.tasks ?? []) {
+            if (t.integrationId)
+              portalDone.push({
+                gid: t.gid,
+                integrationId: t.integrationId,
+                googleEventId: u.googleEventId,
+              });
+          }
         } else if (mode === 'prioritise') {
           // Needs a chosen victim big enough to hold the prioritised block; without
           // one the row is a no-op (nothing queued) so the user is nudged to pick a
@@ -358,6 +387,18 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
           doneIds.push(...(b.mergedEventIds ?? [b.googleEventId]));
         }
       }
+      // End-of-week "Waiting on others" rows. Complete → finish it in Asana too
+      // (records 'done') and clear the flag; reopen → clear the flag and record
+      // 'scheduled' so it schedules again; leave → nothing.
+      for (const w of waiting) {
+        const mode = waitingMode[w.gid] ?? 'leave';
+        if (mode === 'complete') {
+          completeAsana.push({ gid: w.gid, integrationId: w.integrationId });
+          clearPortalDone.push({ gid: w.gid, integrationId: w.integrationId });
+        } else if (mode === 'reopen') {
+          clearPortalDone.push({ gid: w.gid, integrationId: w.integrationId, outcome: 'scheduled' });
+        }
+      }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
     // Auto-backfill blocks the user kept, plus the todo blocks he assigned to the
@@ -372,8 +413,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     // Legacy deep-work blocks the user kept ticked, converted in place to generic
     // "Deep work" containers (event retitled + re-described, membership recorded).
     const conversionBlocks = conversions.filter(c => conversionIncluded.has(c.googleEventId));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, backfillBlocks, deletionBlocks, conversionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, makeRoomVictim, makeRoomDisposition, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded, conversions, conversionIncluded]);
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, portalDone, clearPortalDone, displace, additionBlocks, backfillBlocks, deletionBlocks, conversionBlocks };
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, makeRoomVictim, makeRoomDisposition, carryBlocks, carriedEventIds, carryMode, waiting, waitingMode, additions, additionIncluded, backfill, backfillIncluded, todoBackfillBlocks, deletions, deletionIncluded, removals, removalIncluded, conversions, conversionIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -385,6 +426,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.carry.length +
     payload.delegate.length +
     payload.completeAsana.length +
+    payload.portalDone.length +
+    payload.clearPortalDone.length +
     payload.displace.length +
     payload.additionBlocks.length +
     payload.backfillBlocks.length +
@@ -452,7 +495,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes, backfillResults: bfRes, conversionResults: convRes } = await api.confirmReplan(
+      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, portalDoneResults, clearPortalDoneResults, additionResults: addRes, backfillResults: bfRes, conversionResults: convRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
@@ -470,7 +513,9 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         payload.delegate.length > 0 ? payload.delegate : undefined,
         payload.drop.length > 0 ? payload.drop : undefined,
         payload.backfillBlocks.length > 0 ? payload.backfillBlocks : undefined,
-        payload.conversionBlocks.length > 0 ? payload.conversionBlocks : undefined
+        payload.conversionBlocks.length > 0 ? payload.conversionBlocks : undefined,
+        payload.portalDone.length > 0 ? payload.portalDone : undefined,
+        payload.clearPortalDone.length > 0 ? payload.clearPortalDone : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -497,6 +542,14 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       for (const r of dropResults ?? []) {
         map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
       }
+      // Portal-done "Done (waiting)" rows show status on their couldn't-fit block
+      // (keyed by event id); the end-of-week "Waiting on others" rows key by gid.
+      for (const r of portalDoneResults ?? []) {
+        if (r.googleEventId) map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
+      }
+      for (const r of clearPortalDoneResults ?? []) {
+        map[r.gid] = { googleEventId: r.gid, success: r.success, error: r.error };
+      }
       // Fold conversion results in so a converted deep-work row shows a status icon.
       for (const r of convRes ?? []) {
         map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
@@ -508,7 +561,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       const bfMap: Record<string, ReplanBackfillResult> = {};
       for (const r of bfRes ?? []) bfMap[r.id] = r;
       setBackfillResults(bfMap);
-      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? []), ...(bfRes ?? []), ...(convRes ?? [])].some(r => r.success)) onApplied?.();
+      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(portalDoneResults ?? []), ...(clearPortalDoneResults ?? []), ...(addRes ?? []), ...(bfRes ?? []), ...(convRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
@@ -541,6 +594,9 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     carriedEventIds,
     carryMode,
     setCarryMode,
+    waiting,
+    waitingMode,
+    setWaitingMode,
     additionIncluded,
     additionResults,
     backfill,

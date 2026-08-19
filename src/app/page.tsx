@@ -1068,6 +1068,13 @@ export default function Home() {
   // The member tasks of the block being drilled into, resolved from the same
   // scheduled-task / ad-hoc data the calendar renders. Live title + completion
   // come from the loaded Asana task list (id === gid).
+  // Asana gids the user marked portal-done, so batch members render their
+  // "waiting on others" state.
+  const portalDoneGids = useMemo(
+    () => new Set(Object.entries(metadataByGid).filter(([, m]) => m?.portalDone).map(([gid]) => gid)),
+    [metadataByGid]
+  );
+
   const batchBlockMembers = useMemo<BlockMember[]>(() => {
     if (!batchBlockEvent) return [];
     return resolveBlockMembers(
@@ -1077,17 +1084,20 @@ export default function Home() {
       gid => {
         const t = rawAsanaTasks.find(task => task.id === gid);
         return t ? { title: t.title, completed: !!t.completed, integrationId: t.integrationId } : undefined;
-      }
+      },
+      portalDoneGids
     );
-  }, [batchBlockEvent, scheduledAsanaTasks, allAdhocTasks, rawAsanaTasks]);
+  }, [batchBlockEvent, scheduledAsanaTasks, allAdhocTasks, rawAsanaTasks, portalDoneGids]);
 
   const closeBatchBlock = useCallback(() => {
     setBatchBlockEvent(null);
     if (batchDidMutate.current) {
       batchDidMutate.current = false;
       fetchAllEvents();
+      // A portal-done flag change lands in task metadata, so refresh it too.
+      reloadMetadata();
     }
-  }, [fetchAllEvents]);
+  }, [fetchAllEvents, reloadMetadata]);
 
   const handleBatchMemberDone = useCallback(async (member: BlockMember) => {
     try {
@@ -1119,6 +1129,24 @@ export default function Home() {
       batchDidMutate.current = true;
     } catch (err) {
       toast.error('Could not remove the task from the block');
+      throw err;
+    }
+  }, [toast]);
+
+  const handleBatchMemberPortalDone = useCallback(async (member: BlockMember) => {
+    try {
+      await api.updateBlockMember('portalDone', {
+        source: member.source,
+        taskId: member.taskId,
+        ...(member.gid ? { gid: member.gid } : {}),
+        ...(member.integrationId ? { integrationId: member.integrationId } : {}),
+        ...(member.scheduleId ? { scheduleId: member.scheduleId } : {}),
+        ...(member.adhocId ? { adhocId: member.adhocId } : {}),
+        title: member.title,
+      });
+      batchDidMutate.current = true;
+    } catch (err) {
+      toast.error('Could not mark the task done (waiting)');
       throw err;
     }
   }, [toast]);
@@ -1550,6 +1578,7 @@ export default function Home() {
           members={batchBlockMembers}
           onMemberDone={handleBatchMemberDone}
           onMemberRemove={handleBatchMemberRemove}
+          onMemberPortalDone={handleBatchMemberPortalDone}
           onOpenTask={handleBatchMemberOpen}
           onClose={closeBatchBlock}
         />

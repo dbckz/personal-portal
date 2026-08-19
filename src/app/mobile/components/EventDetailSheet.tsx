@@ -35,10 +35,12 @@ function BlockMemberList({
   members: initialMembers,
   onMemberDone,
   onMemberRemove,
+  onMemberPortalDone,
 }: {
   members: BlockMember[];
   onMemberDone: (member: BlockMember) => Promise<void>;
   onMemberRemove: (member: BlockMember) => Promise<void>;
+  onMemberPortalDone?: (member: BlockMember) => Promise<void>;
 }) {
   const [members, setMembers] = useState<BlockMember[]>(initialMembers);
   const [rows, setRows] = useState<Record<string, RowState>>({});
@@ -55,6 +57,19 @@ function BlockMemberList({
       setRows(prev => ({ ...prev, [member.key]: { error: true } }));
     }
   }, [onMemberDone]);
+
+  const handlePortalDone = useCallback(async (member: BlockMember) => {
+    if (member.done || member.portalDone || !onMemberPortalDone) return;
+    setRows(prev => ({ ...prev, [member.key]: { busy: true } }));
+    setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, portalDone: true } : m)));
+    try {
+      await onMemberPortalDone(member);
+      setRows(prev => ({ ...prev, [member.key]: {} }));
+    } catch {
+      setMembers(prev => prev.map(m => (m.key === member.key ? { ...m, portalDone: false } : m)));
+      setRows(prev => ({ ...prev, [member.key]: { error: true } }));
+    }
+  }, [onMemberPortalDone]);
 
   const handleRemove = useCallback(async (member: BlockMember) => {
     setRows(prev => ({ ...prev, [member.key]: { busy: true } }));
@@ -82,20 +97,30 @@ function BlockMemberList({
         <ul className="mt-2 divide-y divide-gray-100">
           {members.map(member => {
             const row = rows[member.key] ?? {};
+            const canWait =
+              !!onMemberPortalDone && member.source === 'asana' && !member.done && !member.portalDone;
             return (
               <li key={member.key} className="flex items-center gap-2 py-2.5">
                 <button
                   type="button"
                   onClick={() => handleDone(member)}
                   disabled={member.done || row.busy}
-                  aria-label={member.done ? 'Done' : 'Mark done'}
+                  aria-label={member.done ? 'Done' : member.portalDone ? 'Waiting on others' : 'Mark done'}
                   className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border transition-colors ${
                     member.done
                       ? 'border-emerald-500 bg-emerald-500 text-white'
-                      : 'border-gray-300 text-transparent active:text-emerald-500'
+                      : member.portalDone
+                        ? 'border-amber-400 bg-amber-50 text-amber-500'
+                        : 'border-gray-300 text-transparent active:text-emerald-500'
                   } disabled:opacity-60`}
                 >
-                  {row.busy ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : <Check className="h-4 w-4" />}
+                  {row.busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                  ) : member.portalDone && !member.done ? (
+                    <Clock className="h-4 w-4" />
+                  ) : (
+                    <Check className="h-4 w-4" />
+                  )}
                 </button>
                 <span
                   className={`min-w-0 flex-1 truncate text-sm ${
@@ -103,8 +128,22 @@ function BlockMemberList({
                   }`}
                 >
                   {member.title}
+                  {member.portalDone && !member.done && (
+                    <span className="ml-1.5 text-[11px] font-medium text-amber-600">waiting</span>
+                  )}
                 </span>
                 {row.error && <span className="flex-shrink-0 text-xs text-red-500">Failed</span>}
+                {canWait && (
+                  <button
+                    type="button"
+                    onClick={() => handlePortalDone(member)}
+                    disabled={row.busy}
+                    aria-label="Done (waiting on others)"
+                    className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors active:bg-amber-50 active:text-amber-500 disabled:opacity-60"
+                  >
+                    <Clock className="h-4 w-4" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleRemove(member)}
@@ -135,6 +174,7 @@ export function EventDetailSheet({
   members,
   onMemberDone,
   onMemberRemove,
+  onMemberPortalDone,
 }: {
   event: CalendarEvent;
   onClose: () => void;
@@ -150,6 +190,7 @@ export function EventDetailSheet({
   members?: BlockMember[];
   onMemberDone?: (member: BlockMember) => Promise<void>;
   onMemberRemove?: (member: BlockMember) => Promise<void>;
+  onMemberPortalDone?: (member: BlockMember) => Promise<void>;
 }) {
   const description = fullDescription(event.description);
   const sourceStyle = SOURCE_STYLES[event.source];
@@ -300,6 +341,7 @@ export function EventDetailSheet({
               members={members!}
               onMemberDone={onMemberDone!}
               onMemberRemove={onMemberRemove!}
+              onMemberPortalDone={onMemberPortalDone}
             />
           )}
 

@@ -43,6 +43,7 @@ import {
   updateScheduledAsanaTasksByGoogleEvent,
   recordWeeklyTasks,
   markCarryOversScheduled,
+  upsertTaskMetadata,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
 import type {
@@ -212,6 +213,40 @@ interface DropInput {
 
 interface DropResult {
   googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
+// One "done (waiting on others)" decision from the couldn't-fit section: flag the
+// Asana task portal-done (Asana untouched), drop any carry-over, and — when the
+// block is known — mark that block done for planning so it stops nagging. Recorded
+// as a 'portalDone' weekly outcome.
+interface PortalDoneInput {
+  gid: string;
+  integrationId: string;
+  title?: string;
+  googleEventId?: string;
+}
+
+interface PortalDoneResult {
+  gid: string;
+  googleEventId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// One end-of-week "waiting on others" review decision that clears the flag:
+// 'complete' (paired with a completeAsana entry that records 'done') just clears
+// the flag; 'reopen' clears it and records a 'scheduled' outcome so the planner
+// schedules the task again. 'leave' sends nothing.
+interface ClearPortalDoneInput {
+  gid: string;
+  integrationId: string;
+  outcome?: WeeklyTaskOutcomeKind;
+}
+
+interface ClearPortalDoneResult {
+  gid: string;
   success: boolean;
   error?: string;
 }
@@ -389,6 +424,41 @@ export async function POST(request: NextRequest) {
               : [],
           }))
       : [];
+    // "Done (waiting on others)" from the couldn't-fit section: flag each task
+    // portal-done (metadata only, Asana untouched) and settle its block.
+    const portalDoneInputs: PortalDoneInput[] = Array.isArray(body?.portalDone)
+      ? body.portalDone
+          .filter(
+            (p: unknown): p is PortalDoneInput =>
+              !!p &&
+              typeof p === 'object' &&
+              typeof (p as PortalDoneInput).gid === 'string' &&
+              typeof (p as PortalDoneInput).integrationId === 'string'
+          )
+          .map((p: PortalDoneInput) => ({
+            gid: p.gid,
+            integrationId: p.integrationId,
+            title: typeof p.title === 'string' ? p.title : undefined,
+            googleEventId: typeof p.googleEventId === 'string' ? p.googleEventId : undefined,
+          }))
+      : [];
+    // End-of-week "waiting on others" decisions that clear the flag (complete /
+    // reopen). An optional outcome is recorded when clearing.
+    const clearPortalDoneInputs: ClearPortalDoneInput[] = Array.isArray(body?.clearPortalDone)
+      ? body.clearPortalDone
+          .filter(
+            (c: unknown): c is ClearPortalDoneInput =>
+              !!c &&
+              typeof c === 'object' &&
+              typeof (c as ClearPortalDoneInput).gid === 'string' &&
+              typeof (c as ClearPortalDoneInput).integrationId === 'string'
+          )
+          .map((c: ClearPortalDoneInput) => ({
+            gid: c.gid,
+            integrationId: c.integrationId,
+            outcome: typeof c.outcome === 'string' ? (c.outcome as WeeklyTaskOutcomeKind) : undefined,
+          }))
+      : [];
     // Stale prep blocks the user dismissed: the prep record is deleted (its past
     // meeting is over, so there is nothing left to prepare for).
     const dismissEventIds: string[] = Array.isArray(body?.dismiss)
@@ -520,6 +590,8 @@ export async function POST(request: NextRequest) {
       delegateInputs.length === 0 &&
       displaceInputs.length === 0 &&
       dropInputs.length === 0 &&
+      portalDoneInputs.length === 0 &&
+      clearPortalDoneInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
       backfill.length === 0 &&
@@ -1292,6 +1364,58 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // --- Portal-done ("waiting on others"): flag the task, settle its block -----
+    // The user finished his part; the task can't be closed in Asana yet. Flag it
+    // in metadata ONLY (Asana untouched), snapshot the title so the widget renders
+    // without a fetch, drop any carry-over, and — when the block is known — mark it
+    // done for planning so it stops nagging. Recorded as 'portalDone' for the week.
+    const portalDoneResults: PortalDoneResult[] = [];
+    for (const p of portalDoneInputs) {
+      try {
+        await upsertTaskMetadata(p.gid, p.integrationId, {
+          portalDone: true,
+          portalDoneAt: new Date().toISOString(),
+          ...(p.title ? { portalDoneTitle: p.title } : {}),
+        });
+        await removeCarryOvers([p.gid]);
+        if (p.googleEventId) await setBlockDoneOverride(p.googleEventId);
+        recordOutcome(p.gid, 'portalDone', p.googleEventId ? weekStartForEvent(p.googleEventId) : weekStartForTask(p.gid));
+        portalDoneResults.push({ gid: p.gid, googleEventId: p.googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to flag portal-done ${p.gid}:`, err);
+        portalDoneResults.push({
+          gid: p.gid,
+          googleEventId: p.googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to mark done (waiting)',
+        });
+      }
+    }
+
+    // --- Clear portal-done (end-of-week complete / reopen) ---------------------
+    // 'complete' rides alongside a completeAsana entry (which records 'done'), so
+    // it just clears the flag; 'reopen' clears the flag and records 'scheduled' so
+    // the planner picks the task up again.
+    const clearPortalDoneResults: ClearPortalDoneResult[] = [];
+    for (const c of clearPortalDoneInputs) {
+      try {
+        await upsertTaskMetadata(c.gid, c.integrationId, {
+          portalDone: false,
+          portalDoneAt: undefined,
+          portalDoneTitle: undefined,
+        });
+        if (c.outcome) recordOutcome(c.gid, c.outcome, weekStartForTask(c.gid));
+        clearPortalDoneResults.push({ gid: c.gid, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to clear portal-done ${c.gid}:`, err);
+        clearPortalDoneResults.push({
+          gid: c.gid,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to update waiting task',
+        });
+      }
+    }
+
     for (const move of moves) {
       try {
         const resolved = await resolveGoogle(move.googleIntegrationId);
@@ -1500,7 +1624,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, backfillResults, replacementResults, delegateResults, conversionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, portalDoneResults, clearPortalDoneResults, additionResults, backfillResults, replacementResults, delegateResults, conversionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

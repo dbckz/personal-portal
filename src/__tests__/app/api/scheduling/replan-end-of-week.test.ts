@@ -299,3 +299,67 @@ describe('replan analyze — carry escalation signals', () => {
     expect(out.carryBlocks![0].tasks.find(t => t.id === 'g-open')!.carryStreak).toBe(1);
   });
 });
+
+describe('replan analyze — portal-done (waiting on others)', () => {
+  // Grouped block whose remaining open member (g-open) is flagged portal-done.
+  function setPortalDoneContext(now: Date) {
+    mockGather.mockResolvedValue({
+      now,
+      weekStart: WEEK_START,
+      weekStartStr: '2026-07-13',
+      weekEndStr: '2026-07-19',
+      weekEvents: [],
+      nextWeekEarlyEvents: [],
+      asanaCandidates: [
+        // g-open is still incomplete in Asana (only Dave's part is done).
+        { task: { gid: 'g-open', name: 'Draft the brief' }, integrationId: 'ai1', typeValue: null },
+      ],
+      asanaNameByGid: new Map([['g-open', 'Draft the brief'], ['g-done', 'Send the invites']]),
+      quotas: [],
+      config: CONFIG,
+      portalDoneGids: new Set(['g-open']),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    (getAllTaskMetadata as jest.Mock).mockResolvedValue({
+      'g-open': {
+        asanaTaskGid: 'g-open',
+        integrationId: 'ai1',
+        portalDone: true,
+        portalDoneAt: '2026-07-15T09:00:00.000Z',
+        portalDoneTitle: 'Draft the brief',
+        updatedAt: '2026-07-15T09:00:00.000Z',
+      },
+    });
+  }
+
+  it('does not carry a block whose only open member is portal-done', async () => {
+    setPortalDoneContext(FRIDAY_EVENING);
+    const out = await analyze();
+
+    // Both members now read done (g-done complete, g-open portal-done), so the
+    // block never surfaces as a carry / missed block.
+    expect(out.carryBlocks ?? []).toHaveLength(0);
+    expect(out.moves).toEqual([]);
+  });
+
+  it('lists portal-done tasks under `waiting` at end of week', async () => {
+    setPortalDoneContext(FRIDAY_EVENING);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await POST({ json: async () => ({}) } as any);
+    const out = await res.json();
+
+    expect(out.waiting).toEqual([
+      expect.objectContaining({ gid: 'g-open', integrationId: 'ai1', title: 'Draft the brief' }),
+    ]);
+  });
+
+  it('omits `waiting` on a mid-week analyze', async () => {
+    setPortalDoneContext(WEDNESDAY);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await POST({ json: async () => ({}) } as any);
+    const out = await res.json();
+
+    expect(out.endOfWeek).toBe(false);
+    expect(out).not.toHaveProperty('waiting');
+  });
+});

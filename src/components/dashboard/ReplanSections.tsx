@@ -6,7 +6,7 @@ import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookO
 import type { ReplanAnalyzeResponse, ReplanMoveCandidate } from '@/lib/api';
 import type { ReplanCarryTask } from '@/lib/scheduling/replan';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
-import type { CarryMode, MakeRoomDisposition, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
+import type { CarryMode, MakeRoomDisposition, MoveMode, StaleMode, UnplaceableMode, WaitingMode, ReplanActions } from './useReplanActions';
 import { carryTaskKey, todoCandidateKey } from './useReplanActions';
 
 // Shared render of the replan "plan view": moves / stale / missing rituals /
@@ -59,6 +59,9 @@ export function ReplanSections({
     carriedEventIds,
     carryMode,
     setCarryMode,
+    waiting,
+    waitingMode,
+    setWaitingMode,
     toggle,
     toggleAddition,
     toggleBackfill,
@@ -837,6 +840,77 @@ export function ReplanSections({
         </div>
       )}
 
+      {/* End of week — waiting on others (portal-done tasks) */}
+      {waiting.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-amber-500" />
+            Waiting on others ({waiting.length})
+          </h3>
+          <p className="mb-2 text-xs text-gray-400">
+            Your work is done; these wait on someone else. Complete in Asana too, leave waiting, or reopen.
+          </p>
+          <ul className="space-y-2">
+            {waiting.map(w => {
+              const result = results[w.gid];
+              const mode = waitingMode[w.gid] ?? 'leave';
+              const since = w.portalDoneAt
+                ? new Date(w.portalDoneAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+                : null;
+              const options: Array<{ v: WaitingMode; label: string }> = [
+                { v: 'complete', label: 'Complete in Asana' },
+                { v: 'leave', label: 'Leave waiting' },
+                { v: 'reopen', label: 'Reopen' },
+              ];
+              return (
+                <li
+                  key={w.gid}
+                  className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">
+                        waiting
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">{w.title}</span>
+                    </div>
+                    {since && <p className="mt-0.5 text-xs text-gray-400">since {since}</p>}
+                    {!hasResults && (
+                      <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                        {options.map(opt => (
+                          <button
+                            key={opt.v}
+                            onClick={() => setWaitingMode(prev => ({ ...prev, [w.gid]: opt.v }))}
+                            className={`px-2.5 py-1 transition-colors ${
+                              mode === opt.v
+                                ? opt.v === 'complete'
+                                  ? 'bg-emerald-500 text-white'
+                                  : 'bg-orange-500 text-white'
+                                : 'bg-white text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {/* Couldn't fit — choose what to do with each block */}
       {unplaceable.length > 0 && (
         <div>
@@ -891,6 +965,11 @@ export function ReplanSections({
                     ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
                     ...(canMakeRoom ? [{ v: 'makeRoom' as UnplaceableMode, label: 'Make room' }] : []),
                     { v: 'done', label: 'Mark done' },
+                    // "Done (waiting)" only for Asana-backed rows — it flags the
+                    // task portal-done, and ad-hoc tasks have no Asana side.
+                    ...((u.tasks?.length ?? 0) > 0
+                      ? [{ v: 'doneWaiting' as UnplaceableMode, label: 'Done (waiting)' }]
+                      : []),
                     { v: 'drop', label: 'Delete task' },
                   ];
               return (
@@ -1045,6 +1124,11 @@ export function ReplanSections({
                     {mode === 'done' && !hasResults && (
                       <p className="mt-0.5 text-xs text-emerald-600">
                         Marks the block done and completes its task{(u.tasks?.length ?? 0) === 1 ? '' : 's'} in Asana.
+                      </p>
+                    )}
+                    {mode === 'doneWaiting' && !hasResults && (
+                      <p className="mt-0.5 text-xs text-amber-600">
+                        Marks your work done and parks it in &ldquo;Waiting on others&rdquo; — Asana is untouched.
                       </p>
                     )}
                     {mode === 'drop' && !hasResults && (
@@ -1310,6 +1394,8 @@ export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
     ((data.freeSlots?.length ?? 0) > 0 && (data.todoCandidates?.length ?? 0) > 0) ||
     (data.deletions?.length ?? 0) > 0 ||
     (data.removals?.length ?? 0) > 0 ||
-    (data.conversions?.length ?? 0) > 0
+    (data.conversions?.length ?? 0) > 0 ||
+    // End-of-week portal-done tasks to review.
+    (data.waiting?.length ?? 0) > 0
   );
 }

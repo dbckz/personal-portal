@@ -513,6 +513,16 @@ export interface TaskMetadata {
   // This state lives only here, never in Asana.
   groomed?: boolean;
   groomedAt?: string; // ISO timestamp of when it was last marked groomed
+  // Portal-done ("waiting on others"): Dave's work on the task is finished, but
+  // the task can't be completed in Asana yet (awaiting someone else — e.g. a
+  // written piece awaiting publication). A portal-done task is dropped from the
+  // planner's candidate pool and surfaced in the "Waiting on others" widget /
+  // end-of-week review instead. Like `groomed`, this state lives ONLY here,
+  // never in Asana. The title is snapshotted at flag time so the widget renders
+  // without an Asana fetch.
+  portalDone?: boolean;
+  portalDoneAt?: string; // ISO timestamp of when it was last flagged portal-done
+  portalDoneTitle?: string; // task title captured when it was flagged
   updatedAt: string;
 }
 
@@ -556,7 +566,11 @@ export type WeeklyTaskOutcomeKind =
   | 'done'
   | 'carried'
   | 'unscheduled'
-  | 'dropped';
+  | 'dropped'
+  // Dave finished his part but the task waits on someone else to close in Asana
+  // (see TaskMetadata.portalDone). Not done — it stays out of the completed
+  // count — but no longer scheduled or carried.
+  | 'portalDone';
 
 export interface WeeklyTaskOutcome {
   taskId: string; // Asana gid or ad-hoc id
