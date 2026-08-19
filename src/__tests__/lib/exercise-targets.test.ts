@@ -412,6 +412,62 @@ describe('selectPlanProgressions', () => {
     const progressions = [prog('Lat pulldown'), prog('Leg press')];
     expect(selectPlanProgressions(progressions, ['Mobility flow'])).toEqual(progressions);
   });
+
+  it('budgets each group independently on a combined day, yielding more candidates', () => {
+    // A combined Pull + Legs day is its own two mini-sessions: each group gets its
+    // own budget (6 strength), so a pull-heavy history still keeps every leg piece
+    // AND the total is larger than a single-group day drawing on the same history.
+    const progressions = [
+      prog('Lat pulldown'),
+      prog('Cable row'),
+      prog('Cable bicep curl'),
+      prog('Face pull'),
+      prog('Chin-up'),
+      prog('Barbell shrug'),
+      prog('Rear delt fly'),
+      prog('Leg extension'),
+      prog('Glute bridge'),
+      prog('Standing calf raise'),
+      prog('Reverse lunge'),
+    ];
+    const legNames = ['Leg extension', 'Glute bridge', 'Standing calf raise', 'Reverse lunge'];
+    const combined = selectPlanProgressions(progressions, ['Pull (back & arms)', 'Legs']).map(p => p.name);
+    // Pull budget 6 (of 7 available) + all 4 legs = 10 candidates.
+    expect(combined).toHaveLength(10);
+    expect(combined.filter(n => legNames.includes(n))).toEqual(legNames);
+    expect(combined.filter(n => !legNames.includes(n))).toHaveLength(6);
+    // The same history on a single-group day yields fewer — the combined day is
+    // intentionally longer, not squeezed into one shared cap.
+    const pullOnly = selectPlanProgressions(progressions, ['Pull (back & arms)']).map(p => p.name);
+    expect(pullOnly).toHaveLength(7);
+    expect(combined.length).toBeGreaterThan(pullOnly.length);
+  });
+
+  it('caps the core group lower so core never balloons a combined day', () => {
+    const progressions = [
+      prog('Lat pulldown'),
+      prog('Cable row'),
+      prog('Plank'),
+      prog('Dead bug'),
+      prog('Hanging leg raise'),
+      prog('Pallof press'),
+      prog('Cable crunch'),
+      prog('Hollow hold'),
+    ];
+    const coreNames = ['Plank', 'Dead bug', 'Hanging leg raise', 'Pallof press', 'Cable crunch', 'Hollow hold'];
+    const names = selectPlanProgressions(progressions, ['Pull (back)', 'core']).map(p => p.name);
+    // Six core exercises available, but core is capped at 4.
+    expect(names.filter(n => coreNames.includes(n))).toHaveLength(4);
+    // The pull group is unaffected by the core cap.
+    expect(names).toContain('Lat pulldown');
+    expect(names).toContain('Cable row');
+  });
+
+  it('leaves a single-group day as the top-N by frequency', () => {
+    const progressions = Array.from({ length: 10 }, (_, i) => prog(`Cable row ${i}`));
+    const names = selectPlanProgressions(progressions, ['Pull (back)']).map(p => p.name);
+    expect(names).toEqual(progressions.slice(0, 8).map(p => p.name));
+  });
 });
 
 describe('buildSessionTargets', () => {

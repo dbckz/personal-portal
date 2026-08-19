@@ -440,8 +440,59 @@ export function selectPlanProgressions(
   components: string[] = [],
   limit = 8
 ): ExerciseProgression[] {
-  const relevant = components.length > 0 ? filterToPlan(progressions, components) : progressions;
-  return relevant.slice(0, limit);
+  if (components.length === 0) return progressions.slice(0, limit);
+  const relevant = filterToPlan(progressions, components);
+  const groups = activeGroups(components);
+  // A single-group day (or an unfamiliar plan with no recognised group) keeps the
+  // caller's flat limit — today's behaviour. A COMBINED day (Pull + Legs) treats
+  // each group as its own mini-session: every group gets its own budget and the
+  // day's total is their sum, so a combined day is deliberately longer than a
+  // single-group day rather than squeezing both groups into one shared cap.
+  if (groups.length <= 1) return relevant.slice(0, limit);
+  return selectPerGroup(relevant, groups);
+}
+
+// The groups the day's components activate, in first-seen order, de-duplicated.
+function activeGroups(components: string[]): Group[] {
+  const groups: Group[] = [];
+  for (const component of components) {
+    for (const group of componentGroups(component)) {
+      if (!groups.includes(group)) groups.push(group);
+    }
+  }
+  return groups;
+}
+
+// Per-group candidate budgets for a combined day. Each strength group gets the
+// fuller budget so it is programmed as a proper mini-session; core is capped
+// lower — it is accessory work, not a group to fill out, so it never balloons.
+const STRENGTH_GROUP_BUDGET = 6;
+const CORE_GROUP_BUDGET = 4;
+
+function groupBudget(group: Group): number {
+  return group === 'core' ? CORE_GROUP_BUDGET : STRENGTH_GROUP_BUDGET;
+}
+
+// Select each active group's most-trained exercises up to that group's own
+// budget, independently — no shared cap, so no group crowds another out and the
+// total grows with the number of groups. The result keeps overall-frequency
+// order so downstream ordering (cardio first, then the rest) is unchanged.
+function selectPerGroup(
+  relevant: ExerciseProgression[],
+  groups: Group[]
+): ExerciseProgression[] {
+  const byGroup = new Map<Group, ExerciseProgression[]>();
+  for (const group of groups) byGroup.set(group, []);
+  for (const p of relevant) {
+    const group = classifyExercise(p.name);
+    if (group && byGroup.has(group)) byGroup.get(group)!.push(p);
+  }
+
+  const taken = new Set<string>();
+  for (const group of groups) {
+    for (const p of byGroup.get(group)!.slice(0, groupBudget(group))) taken.add(p.key);
+  }
+  return relevant.filter(p => taken.has(p.key));
 }
 
 // The cardio words a plan/routine component can use to name which piece the

@@ -25,6 +25,8 @@ import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { normalizeExerciseName } from '@/lib/exercise-names';
 import {
   buildProgrammerInput,
+  enforceToFailure,
+  orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
   type ProgrammerGoal,
@@ -100,7 +102,14 @@ export async function resolveSessionTargets(
   const cached = getCachedProgramme(date, hash);
 
   if (cached) {
-    return { plan, components, targets: cached.map(programmeRowToTarget), source: 'ai', input, hash };
+    // Reorder already-cached rows so days cached before the ordering rule (or by
+    // a model that interleaved fixed exercises with accessories) fix themselves
+    // without regeneration: cardio, then anchors, then staples, then the rest.
+    // Re-apply enforceToFailure afterwards so the single to-failure marker lands
+    // on the last safe row of the FINAL order — keeping the cached path identical
+    // to what validateProgramme produces for a freshly generated programme.
+    const ordered = enforceToFailure(orderProgrammeRows(cached, routineDay));
+    return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 
   // The deterministic fallback for a cache miss is unchanged: history-driven

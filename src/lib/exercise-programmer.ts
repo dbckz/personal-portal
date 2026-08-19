@@ -251,7 +251,8 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
-- Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session.
+- Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
+- Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
 - Treadmill and cardio targets. A treadmill piece is targeted in MINUTES, never distance (a logged number like "9.2" is a speed, not a distance). When you add duration to a cardio piece, add at most 5 minutes over the last logged duration — never back-solve a jump from a calendar title.
 - Finish to failure — safely. Mark exactly ONE exercise as the last set to failure, and make it the final row. It MUST be an exercise that is safe to push to failure alone: a machine, cable or bodyweight movement. Never a barbell or heavy dumbbell exercise where failing means dropping a weight.
 - Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights and reps, seconds for a hold, or minutes/distance for cardio).
@@ -430,7 +431,45 @@ export function validateProgramme(
     });
   }
 
-  return enforceToFailure(guaranteeFixed(rows, seen, input));
+  return enforceToFailure(orderProgrammeRows(guaranteeFixed(rows, seen, input), input.plan.routineDay));
+}
+
+// Deterministic row order for the checklist, independent of the order the model
+// returned: cardio rows first (keeping their relative order — there is at most
+// one after the single-cardio rule), then the day's anchors in routine order,
+// then its staples in routine order, then everything else in its original order.
+// Anchors and staples are matched to rows by exerciseKey(). Without a routine day
+// there is no fixed order to impose, so the rows are returned unchanged.
+export function orderProgrammeRows(
+  rows: ProgrammeRow[],
+  day?: ProgrammerRoutineDay
+): ProgrammeRow[] {
+  if (!day) return rows;
+
+  const rankOf = (names: string[]): Map<string, number> => {
+    const rank = new Map<string, number>();
+    names.forEach((name, i) => {
+      const key = exerciseKey(name);
+      if (key && !rank.has(key)) rank.set(key, i);
+    });
+    return rank;
+  };
+  const anchorRank = rankOf(day.anchors);
+  const stapleRank = rankOf(day.staples);
+
+  // Bucket each row (0 cardio, 1 anchor, 2 staple, 3 the rest); within a bucket
+  // the rank is the routine order for anchors/staples and the original index for
+  // cardio and the rest. A stable sort by (bucket, rank) is the whole rule.
+  const ranked = rows.map((row, index) => {
+    if (row.kind === 'cardio') return { row, bucket: 0, rank: index };
+    const anchor = anchorRank.get(row.key);
+    if (anchor !== undefined) return { row, bucket: 1, rank: anchor };
+    const staple = stapleRank.get(row.key);
+    if (staple !== undefined) return { row, bucket: 2, rank: staple };
+    return { row, bucket: 3, rank: index };
+  });
+  ranked.sort((a, b) => a.bucket - b.bucket || a.rank - b.rank);
+  return ranked.map(r => r.row);
 }
 
 // The routine's anchors and staples are FIXED: whatever the model returned, any
@@ -502,7 +541,7 @@ function fallbackTarget(e: ProgrammerExercise): ProgrammeTarget {
 // Exactly one to-failure marker, on the last safe row. Clears every model-set
 // marker, then re-marks the final row that is safe to fail — so the guarantee
 // holds however the model tagged things.
-function enforceToFailure(rows: ProgrammeRow[]): ProgrammeRow[] {
+export function enforceToFailure(rows: ProgrammeRow[]): ProgrammeRow[] {
   const cleared = rows.map(r => ({ ...r, toFailure: false }));
   for (let i = cleared.length - 1; i >= 0; i--) {
     if (isSafeToFailure(cleared[i].name)) {

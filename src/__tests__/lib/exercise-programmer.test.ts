@@ -10,9 +10,11 @@ import {
   buildProgrammerInput,
   buildProgrammerPrompt,
   generateProgramme,
+  orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
   validateProgramme,
+  type ProgrammeRow,
   type ProgrammerInput,
 } from '@/lib/exercise-programmer';
 import type { ProgrammerRoutineDay } from '@/lib/exercise-programmer';
@@ -408,6 +410,116 @@ describe('the weekly routine drives the programmer', () => {
     const anchor = rows.find(r => r.name === 'Converging chest press machine')!;
     expect(anchor.kind).toBe('core');
     expect(anchor.target).toEqual({ sets: 3, reps: 8, weightKg: 34 });
+  });
+});
+
+describe('orderProgrammeRows', () => {
+  function row(name: string, kind: ProgrammeRow['kind'] = 'core'): ProgrammeRow {
+    return {
+      name,
+      key: exerciseKey(name),
+      kind,
+      toFailure: false,
+      target: {},
+      rationale: '',
+      lastSummary: 'no history',
+    };
+  }
+
+  const day = {
+    title: 'Push',
+    anchors: ['Anchor one', 'Anchor two'],
+    staples: ['Staple one'],
+  };
+
+  it('hoists anchors above accessories in routine order, staples after, cardio first', () => {
+    const ordered = orderProgrammeRows(
+      [
+        row('Accessory', 'rotation'),
+        row('Staple one'),
+        row('Anchor two'),
+        row('Treadmill run', 'cardio'),
+        row('Anchor one'),
+      ],
+      day
+    );
+    expect(ordered.map(r => r.name)).toEqual([
+      'Treadmill run',
+      'Anchor one',
+      'Anchor two',
+      'Staple one',
+      'Accessory',
+    ]);
+  });
+
+  it('leaves the order untouched when there is no routine day', () => {
+    const rows = [row('Accessory', 'rotation'), row('Anchor one'), row('Treadmill run', 'cardio')];
+    expect(orderProgrammeRows(rows, undefined)).toBe(rows);
+  });
+});
+
+describe('validateProgramme deterministic ordering', () => {
+  function orderingInput(): ProgrammerInput {
+    return buildProgrammerInput(
+      [
+        ...pushProgressions(),
+        progression('Incline dumbbell press', [{ date: '2026-08-02', sets: 3, reps: 8, weightKg: 20 }], 3),
+        progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
+        progression('Lateral raise', [{ date: '2026-08-02', sets: 3, reps: 12, weightKg: 8 }], 3),
+      ],
+      {
+        label: 'Push',
+        // Empty components keep the full vocabulary (including the treadmill run)
+        // so the ordering under test isn't skewed by plan-group filtering; the
+        // routineDay is what drives the anchor/staple ordering.
+        components: [],
+        routineDay: {
+          title: 'Push (chest & arms)',
+          anchors: ['Converging chest press machine', 'Incline dumbbell press'],
+          staples: ['Dead bug'],
+        },
+      },
+      '2026-08-06',
+      6
+    );
+  }
+
+  it('reorders cardio → anchors → staples → accessories however the model interleaved them', () => {
+    // The model interleaves an accessory pull-up between the two anchors.
+    const rows = validateProgramme(
+      [
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+        { name: 'Converging chest press machine', kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 35 } },
+        { name: 'Lateral raise', kind: 'rotation', toFailure: true, target: { sets: 3, reps: 12, weightKg: 9 } },
+        { name: 'Incline dumbbell press', kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 22 } },
+        { name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 16 } },
+        { name: 'Dead bug', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } },
+      ],
+      orderingInput()
+    );
+    expect(rows.map(r => r.name)).toEqual([
+      'Treadmill run',
+      'Converging chest press machine',
+      'Incline dumbbell press',
+      'Dead bug',
+      'Cable tricep pushdown',
+      'Lateral raise',
+    ]);
+  });
+
+  it('lands the single to-failure marker on the last row of the final order', () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: true, target: { sets: 3, reps: 12, weightKg: 22 } },
+        { name: 'Converging chest press machine', kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 35 } },
+        { name: 'Lateral raise', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 9 } },
+      ],
+      orderingInput()
+    );
+    const failing = rows.filter(r => r.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(rows[rows.length - 1].name);
+    expect(rows[rows.length - 1].name).toBe('Lateral raise');
   });
 });
 
