@@ -20,6 +20,7 @@ import {
   Repeat,
   Target,
   TrendingUp,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -41,6 +42,7 @@ const ICONS: Record<string, LucideIcon> = {
   Repeat,
   Target,
   TrendingUp,
+  Users,
 };
 
 // Falls back to Target rather than throwing: a typo in the registry should cost

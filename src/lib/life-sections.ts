@@ -68,6 +68,15 @@ export const LIFE_SECTIONS: LifeSection[] = [
     subTabs: [{ id: 'goals', label: 'Goals', icon: 'Target' }],
   },
   {
+    id: 'relationships',
+    label: 'Relationships',
+    icon: 'Users',
+    holdsGoals: true,
+    // Goals-only, like Music: the section exists so relationship goals can be
+    // set and reflected on alongside everything else.
+    subTabs: [{ id: 'goals', label: 'Goals', icon: 'Target' }],
+  },
+  {
     id: 'wellbeing',
     label: 'Wellbeing',
     icon: 'HeartPulse',

@@ -8,6 +8,7 @@ import { resolveIcon } from '@/components/section-icons';
 import { ExerciseSection } from '@/components/sections/ExerciseSection';
 import { GoalsSection } from '@/components/sections/GoalsSection';
 import { MusicSection } from '@/components/sections/MusicSection';
+import { RelationshipsSection } from '@/components/sections/RelationshipsSection';
 import { WellbeingSection } from '@/components/sections/WellbeingSection';
 import { ProjectsTab } from '@/components/sections/work/ProjectsTab';
 import {
@@ -1393,6 +1394,10 @@ export default function Home() {
       ) : activeSection === 'music' ? (
         <div className="flex-1 overflow-y-auto bg-gray-50">
           <MusicSection />
+        </div>
+      ) : activeSection === 'relationships' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <RelationshipsSection />
         </div>
       ) : activeSection === 'wellbeing' ? (
         <div className="flex-1 overflow-y-auto bg-gray-50">
