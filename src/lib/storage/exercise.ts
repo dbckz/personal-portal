@@ -363,6 +363,40 @@ export async function removeSessionEntry(
   return next;
 }
 
+// Whether an entry is an UNTOUCHED seeded row — one pre-filled from a programme
+// the user has not yet acted on. The robust, simple signal: not ticked done, no
+// note, no reps-in-reserve rating, and not a swap. Such rows carry no user input,
+// so when the programme changes underneath them (a venue swap regenerates it)
+// they can be dropped and re-seeded from the new targets. A ticked, noted, rated
+// or swapped row is the user's own work and is always kept.
+export function isUntouchedSeededEntry(e: ExerciseEntry): boolean {
+  return e.done !== true && !e.notes?.trim() && e.rir === undefined && !e.substitutedFor;
+}
+
+// Drop untouched seeded entries from the date's in-progress logged session, so a
+// venue swap (which regenerates the programme) doesn't leave stale rows seeded
+// from the OLD programme on the board — e.g. a treadmill run on a home day. The
+// merge path then re-seeds the live rows from the new targets. Entries the user
+// has ticked, noted, rated or swapped are kept. A no-op when there is no
+// in-progress session for the date, or nothing is prunable.
+export async function pruneUntouchedSeededEntries(
+  date: string,
+  now = new Date().toISOString()
+): Promise<{ removed: number }> {
+  const sessions = await getAllSessions();
+  const session = sessions.find(s => s.date === date && s.completed && s.source === 'manual');
+  if (!session?.exercises?.length) return { removed: 0 };
+
+  const kept = session.exercises.filter(e => !isUntouchedSeededEntry(e));
+  const removed = session.exercises.length - kept.length;
+  if (removed === 0) return { removed: 0 };
+
+  const patched: ExerciseSession = { ...session, exercises: kept, updatedAt: now };
+  const next = withDerivedLabel(patched, sessions);
+  await writeSessions(sessions.map(s => (s.id === session.id ? next : s)));
+  return { removed };
+}
+
 // Set or clear a session's venue. Kept separate from updateSession because it is
 // the one field that needs to be REMOVED (switching back to the gym), which a
 // merge-only patch can't do — a field left off a spread stays, so clearing has

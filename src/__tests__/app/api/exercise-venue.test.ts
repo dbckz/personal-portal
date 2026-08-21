@@ -14,6 +14,7 @@ jest.mock('@/lib/storage/exercise', () => ({
   getAllSessions: jest.fn(),
   createSession: jest.fn(),
   setSessionVenue: jest.fn(),
+  pruneUntouchedSeededEntries: jest.fn().mockResolvedValue({ removed: 0 }),
 }));
 
 jest.mock('@/lib/storage/weekly-routine', () => ({
@@ -36,13 +37,19 @@ jest.mock('@/lib/exercise-programmer', () => ({
 }));
 
 import { POST } from '@/app/api/exercise/venue/route';
-import { getAllSessions, createSession, setSessionVenue } from '@/lib/storage/exercise';
+import {
+  getAllSessions,
+  createSession,
+  setSessionVenue,
+  pruneUntouchedSeededEntries,
+} from '@/lib/storage/exercise';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
 import { NextRequest } from 'next/server';
 
 const mockGetAll = getAllSessions as jest.Mock;
 const mockCreate = createSession as jest.Mock;
 const mockSetVenue = setSessionVenue as jest.Mock;
+const mockPrune = pruneUntouchedSeededEntries as jest.Mock;
 const mockRoutine = getWeeklyRoutine as jest.Mock;
 
 // 21 Aug 2026 is a Friday (getDay() === 5): a Push (shoulders) day whose anchor
@@ -111,6 +118,14 @@ describe('POST /api/exercise/venue', () => {
     // A home programme generation was kicked (the anchor stub alone makes the
     // vocabulary non-empty).
     expect(mockGenerate).toHaveBeenCalled();
+    // Stale seeded rows from the old programme are pruned for the date.
+    expect(mockPrune).toHaveBeenCalledWith('2026-08-21');
+  });
+
+  it('prunes stale seeded rows when swapping back to the gym too', async () => {
+    mockGetAll.mockResolvedValue([plan('home')]);
+    await post({ date: '2026-08-21', venue: 'gym' });
+    expect(mockPrune).toHaveBeenCalledWith('2026-08-21');
   });
 
   it('clears the venue when swapping back to the gym', async () => {

@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { format } from 'date-fns';
 
-import { createSession, getAllSessions, setSessionVenue } from '@/lib/storage/exercise';
+import {
+  createSession,
+  getAllSessions,
+  pruneUntouchedSeededEntries,
+  setSessionVenue,
+} from '@/lib/storage/exercise';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
 import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
@@ -60,6 +65,16 @@ export async function POST(request: NextRequest) {
       }
     } catch (error) {
       console.error('Failed to kick off home programme generation:', error);
+    }
+
+    // Drop untouched rows seeded from the OLD programme so the board doesn't show
+    // stale entries after the swap (e.g. a treadmill run on a home day). The merge
+    // path re-seeds the live rows from the new targets; ticked/noted/swapped rows
+    // are kept. Best-effort — never fail the swap over a prune.
+    try {
+      await pruneUntouchedSeededEntries(date);
+    } catch (error) {
+      console.error('Failed to prune stale seeded entries after venue swap:', error);
     }
 
     return NextResponse.json({ session, venue: venue ?? 'gym' });
