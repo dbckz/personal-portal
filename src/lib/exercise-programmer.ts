@@ -114,6 +114,14 @@ export interface ProgrammerInput {
   goals?: ProgrammerGoal[];
 }
 
+// Resistance-band exercises are a home-workout last resort, not part of a
+// planned gym session: they only appear in the log from the occasional home
+// fallback. The word boundary keeps "Band rows"/"band-assisted pull-ups" in
+// while leaving "broadband" (no boundary) out.
+export function isBandExercise(name: string): boolean {
+  return /\bband\b/i.test(name);
+}
+
 // Gather the model's input from the plan and history: the plan's exercises,
 // each with a frequency count and its last three sessions.
 export function buildProgrammerInput(
@@ -133,9 +141,13 @@ export function buildProgrammerInput(
   // The rotation vocabulary: the plan's implied exercises, selected from history.
   // A one-group-plus-core day can carry ~7 pull staples plus ~4 core, right at
   // the old cap of 12; 16 gives the model the full relevant vocabulary.
-  const vocab = selectPlanProgressions(progressions, plan.components, 16).map(p =>
-    toProgrammerExercise(p, totalSessions)
-  );
+  // Band exercises are filtered out of the derived vocabulary: they exist in the
+  // log only as a home-workout last resort, and must never be programmed into a
+  // planned gym session. The routine's fixed anchors/staples (extra) are NOT
+  // filtered — if Dave explicitly puts a band exercise in the routine, it stays.
+  const vocab = selectPlanProgressions(progressions, plan.components, 16)
+    .filter(p => !isBandExercise(p.name))
+    .map(p => toProgrammerExercise(p, totalSessions));
 
   // The routine's fixed anchors and staples MUST be available to the model even
   // when they have no history yet, so validateProgramme can guarantee them.
@@ -258,6 +270,7 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
+- Resistance band exercises are a home-workout fallback only, never to be included in a planned gym session; do not substitute band variants for gym lifts.
 - Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
 - Treadmill and cardio targets. A treadmill piece is targeted in MINUTES, never distance (a logged number like "9.2" is a speed, not a distance). When you add duration to a cardio piece, add at most 5 minutes over the last logged duration — never back-solve a jump from a calendar title.

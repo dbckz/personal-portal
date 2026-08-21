@@ -10,6 +10,7 @@ import {
   buildProgrammerInput,
   buildProgrammerPrompt,
   generateProgramme,
+  isBandExercise,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -72,6 +73,58 @@ describe('buildProgrammerInput', () => {
     const run = built.exercises.find(e => e.key === exerciseKey('Treadmill run'))!;
     // The cardio last summary must carry real numbers, not "the same".
     expect(run.lastSummary).toBe('2 Aug · 15 min · 2.5 km');
+  });
+});
+
+describe('isBandExercise', () => {
+  it('matches band exercises on the whole word', () => {
+    expect(isBandExercise('Band rows')).toBe(true);
+    expect(isBandExercise('Band curls')).toBe(true);
+    expect(isBandExercise('Pull-ups or band-assisted pull-ups')).toBe(true);
+  });
+
+  it('does not match when "band" is only part of another word', () => {
+    expect(isBandExercise('broadband sprints')).toBe(false);
+    expect(isBandExercise('Converging chest press machine')).toBe(false);
+  });
+});
+
+describe('band exercises stay out of planned gym sessions', () => {
+  it('excludes a band progression from the vocabulary but keeps non-band ones', () => {
+    const built = buildProgrammerInput(
+      [
+        progression('Converging chest press machine', [{ date: '2026-08-02', sets: 3, reps: 8, weightKg: 34 }], 6),
+        progression('Band rows', [{ date: '2026-08-02', sets: 3, reps: 15 }], 2),
+      ],
+      { label: 'Push', components: [] },
+      '2026-08-06',
+      6
+    );
+    const names = built.exercises.map(e => e.name);
+    expect(names).toContain('Converging chest press machine');
+    expect(names).not.toContain('Band rows');
+  });
+
+  it('keeps a band exercise named as a routine anchor', () => {
+    const built = buildProgrammerInput(
+      [
+        progression('Converging chest press machine', [{ date: '2026-08-02', sets: 3, reps: 8, weightKg: 34 }], 6),
+        progression('Band rows', [{ date: '2026-08-02', sets: 3, reps: 15 }], 2),
+      ],
+      {
+        label: 'Push',
+        components: ['Push (chest & arms)'],
+        routineDay: {
+          title: 'Push (chest & arms)',
+          anchors: ['Band rows'],
+          staples: [],
+        },
+      },
+      '2026-08-06',
+      6
+    );
+    // Filtered out of the derived vocab, but the explicit routine anchor stays.
+    expect(built.exercises.map(e => e.name)).toContain('Band rows');
   });
 });
 
