@@ -459,9 +459,20 @@ export function isBandExercise(name: string): boolean {
 // gym-only — running needs no equipment — so "Treadmill run" is deliberately
 // left in: a home session keeps the same run, done outdoors.
 export function isGymOnlyExercise(name: string): boolean {
-  return /\b(machine|cable|barbell|dumbbell|db|smith|leg press|leg extension|leg curl|hack squat|pulldown|pull-?down|pec deck|pec-deck|chest press|converging|hammer strength|lat raise machine)\b/i.test(
+  return /\b(machine|cable|barbell|dumbbell|db|smith|leg press|leg extension|leg curl|hack squat|pulldown|pull-?down|pec deck|pec-deck|pec fly|chest fly|fly|flye|chest press|converging|hammer strength|lat raise machine)\b/i.test(
     name
   );
+}
+
+// Whether an exercise can be done in a home session — bands, a pull-up bar and
+// bodyweight. Two signals combine: the NAME must not read as gym-only equipment,
+// and the HISTORY must not be loaded (any logged weightKg means it needs plates,
+// a stack or dumbbells). Band and bodyweight work never carries an external
+// weight, so the loaded signal is a robust catch for gym lifts a name misses
+// (a "Pec fly" logged at 27kg). Cardio is judged separately by the caller.
+export function isHomeStrengthExercise(name: string, points: ProgressionPoint[] = []): boolean {
+  if (isGymOnlyExercise(name)) return false;
+  return !points.some(p => p.weightKg !== undefined);
 }
 
 // Options shared by the plan-selection paths: which venue the session is done at.
@@ -489,7 +500,7 @@ export function selectPlanProgressions(
   // unfiltered (the model needs them to know what to substitute for).
   const eligible =
     options.venue === 'home'
-      ? progressions.filter(p => !isGymOnlyExercise(p.name) || isCardioName(p.name))
+      ? progressions.filter(p => isCardioName(p.name) || isHomeStrengthExercise(p.name, p.points))
       : progressions.filter(p => !isBandExercise(p.name));
   if (components.length === 0) return eligible.slice(0, limit);
   const relevant = filterToPlan(eligible, components);

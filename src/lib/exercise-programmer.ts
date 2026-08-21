@@ -25,12 +25,20 @@ import {
   activeGroups,
   classifyExercise,
   describeLast,
-  isGymOnlyExercise,
+  isHomeStrengthExercise,
   selectPlanProgressions,
   type ExerciseKind,
   type ExerciseTarget,
   type Group,
 } from './exercise-targets';
+
+// Whether a vocabulary exercise can be done in a home session: a cardio piece
+// (running needs no kit) or a band/bodyweight strength movement (not gym-only by
+// name, and never loaded with an external weight in its history). The guard the
+// home append paths use so no gym lift is forced into a home session.
+function isHomeExercise(e: ProgrammerExercise): boolean {
+  return isCardioName(e.name) || isHomeStrengthExercise(e.name, e.recent);
+}
 
 // What to aim for on one exercise. Any of the measures may be present: a press
 // has sets/reps/weight, a plank sets/holdSeconds, a run duration/distance;
@@ -560,7 +568,7 @@ function guaranteeGroupCoverage(
     for (const known of input.exercises) {
       if (count >= min) break;
       if (seen.has(known.key) || classifyExercise(known.name) !== group) continue;
-      if (home && isGymOnlyExercise(known.name)) continue;
+      if (home && !isHomeExercise(known)) continue;
       seen.add(known.key);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({
@@ -666,13 +674,13 @@ function guaranteeFixed(
     for (const name of names) {
       const key = exerciseKey(name);
       if (!key || seen.has(key)) continue;
-      // Home: never force a gym-only anchor/staple into the session (it can't be
-      // done at home), and skip one a stand-in already covers. The prompt asks
-      // the model to substitute for every gym anchor, so this is the rare
-      // fallback where it dropped one entirely.
-      if (home && (standInKeys.has(key) || isGymOnlyExercise(name))) continue;
       const known = byKey.get(key);
       if (!known) continue; // buildProgrammerInput guarantees it, but stay safe
+      // Home: never force a gym anchor/staple into the session (it can't be done
+      // at home — by name or by a loaded history), and skip one a stand-in
+      // already covers. The prompt asks the model to substitute for every gym
+      // anchor, so this is the rare fallback where it dropped one entirely.
+      if (home && (standInKeys.has(key) || !isHomeExercise(known))) continue;
       seen.add(key);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({

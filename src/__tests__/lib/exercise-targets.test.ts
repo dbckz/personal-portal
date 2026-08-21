@@ -587,17 +587,23 @@ describe('isGymOnlyExercise', () => {
 });
 
 describe('selectPlanProgressions — home venue', () => {
-  function prog(name: string): ExerciseProgression {
+  // A band/bodyweight movement: sets and reps, never an external weight.
+  function bwProg(name: string): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', sets: 3, reps: 8 };
+    return { name, key: name.toLowerCase(), sessions: 1, points: [point], first: point, latest: point };
+  }
+  // A loaded gym movement: carries a weightKg, so it can't be done at home.
+  function loadedProg(name: string): ExerciseProgression {
     const point: ProgressionPoint = { date: '2026-08-01', sets: 3, reps: 8, weightKg: 20 };
     return { name, key: name.toLowerCase(), sessions: 1, points: [point], first: point, latest: point };
   }
 
   it('keeps band and bodyweight work and drops gym-only equipment at home', () => {
     const progressions = [
-      prog('Lat pulldown'),
-      prog('Band row'),
-      prog('Pull-ups'),
-      prog('Cable row'),
+      loadedProg('Lat pulldown'),
+      bwProg('Band row'),
+      bwProg('Pull-ups'),
+      loadedProg('Cable row'),
     ];
     const home = selectPlanProgressions(progressions, ['Pull (back & arms)'], 8, {
       venue: 'home',
@@ -606,9 +612,19 @@ describe('selectPlanProgressions — home venue', () => {
   });
 
   it('keeps a cardio piece even though a treadmill is gym kit', () => {
-    const progressions = [prog('Lat pulldown'), cardioProg('Treadmill run')];
+    const progressions = [loadedProg('Lat pulldown'), cardioProg('Treadmill run')];
     const home = selectPlanProgressions(progressions, ['Run'], 8, { venue: 'home' }).map(p => p.name);
     expect(home).toContain('Treadmill run');
+  });
+
+  it('drops a loaded lift whose name does not read as gym-only (a 20kg goblet squat)', () => {
+    // "Goblet squat" isn't caught by the gym-only NAME list, but a logged weight
+    // means it needs a dumbbell/kettlebell — the loaded-history signal catches it.
+    const progressions = [bwProg('Reverse lunge'), loadedProg('Goblet squat')];
+    const home = selectPlanProgressions(progressions, ['Legs'], 8, { venue: 'home' }).map(
+      p => p.name
+    );
+    expect(home).toEqual(['Reverse lunge']);
   });
 
   function cardioProg(name: string): ExerciseProgression {
