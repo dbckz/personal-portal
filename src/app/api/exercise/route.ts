@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
       planned: body.planned,
       completed: body.completed,
       label: body.label,
+      venue: body.venue,
       exercises: body.exercises,
       components: body.components,
     });

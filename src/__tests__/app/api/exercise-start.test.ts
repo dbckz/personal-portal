@@ -172,4 +172,27 @@ describe('POST /api/exercise/start — seeding the session', () => {
     await start();
     expect(mockGenerate).not.toHaveBeenCalled();
   });
+
+  it('copies a home venue from the plan onto the logged session', async () => {
+    // A planned home session for the day; the logged session started against it
+    // must record it was a home session, so history keeps the venue.
+    mockGetAll.mockResolvedValue([
+      previousSession(),
+      {
+        id: 'plan-home',
+        date: '2026-08-06',
+        type: 'strength',
+        label: 'Push (shoulders)',
+        components: ['Push (shoulders)'],
+        planned: true,
+        completed: false,
+        venue: 'home',
+        source: 'manual',
+        createdAt: '2026-08-05T00:00:00.000Z',
+        updatedAt: '2026-08-05T00:00:00.000Z',
+      },
+    ]);
+    await start();
+    expect(mockCreate.mock.calls[0][0].venue).toBe('home');
+  });
 });

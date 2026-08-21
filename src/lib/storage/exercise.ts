@@ -91,6 +91,10 @@ export interface CreateSessionInput {
   notes?: string;
   planned?: boolean;
   completed?: boolean;
+  // 'home' marks a session swapped to a home workout; absent means the gym. Set
+  // on the planned session (via the venue route) and copied onto the logged
+  // session when it is started. See setSessionVenue for clearing it.
+  venue?: 'home';
   label?: string;
   // Per-exercise detail; ids are assigned here so callers (importers, the UI)
   // don't have to invent them.
@@ -139,6 +143,7 @@ export async function createSession(
       : {}),
     ...(input.intensity ? { intensity: input.intensity } : {}),
     ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
+    ...(input.venue ? { venue: input.venue } : {}),
     ...(input.label?.trim() ? { label: input.label.trim() } : {}),
     ...(input.exercises?.length
       ? { exercises: input.exercises.map(e => ({ ...canonicalise(e), id: randomUUID() })) }
@@ -355,6 +360,27 @@ export async function removeSessionEntry(
   };
   const next = withDerivedLabel(patched, sessions);
   await writeSessions(sessions.map(s => (s.id === sessionId ? next : s)));
+  return next;
+}
+
+// Set or clear a session's venue. Kept separate from updateSession because it is
+// the one field that needs to be REMOVED (switching back to the gym), which a
+// merge-only patch can't do — a field left off a spread stays, so clearing has
+// to delete it explicitly. `venue` undefined clears it (gym); 'home' sets it.
+export async function setSessionVenue(
+  id: string,
+  venue: 'home' | undefined,
+  now = new Date().toISOString()
+): Promise<ExerciseSession | null> {
+  const sessions = await getAllSessions();
+  const existing = sessions.find(s => s.id === id);
+  if (!existing) return null;
+
+  const next: ExerciseSession = { ...existing, updatedAt: now };
+  if (venue) next.venue = venue;
+  else delete next.venue;
+
+  await writeSessions(sessions.map(s => (s.id === id ? next : s)));
   return next;
 }
 

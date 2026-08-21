@@ -12,6 +12,7 @@ import {
   describeLast,
   describeVolumeLoad,
   formatEntryDuration,
+  isGymOnlyExercise,
   readEffort,
   selectPlanProgressions,
 } from '@/lib/exercise-targets';
@@ -546,4 +547,72 @@ describe('buildSessionTargets', () => {
     expect(cardio).toHaveLength(1);
     expect(cardio[0].name).toBe('Treadmill run');
   });
+});
+
+describe('isGymOnlyExercise', () => {
+  it('flags loaded machine/cable/barbell/dumbbell lifts as gym-only', () => {
+    for (const name of [
+      'Leg press',
+      'Lat pulldown',
+      'Cable tricep pushdown',
+      'Barbell squat',
+      'Seated DB shoulder press',
+      'Converging chest press machine',
+      'Pec deck',
+      'Smith machine squat',
+      'Leg curl',
+    ]) {
+      expect(isGymOnlyExercise(name)).toBe(true);
+    }
+  });
+
+  it('leaves band, bodyweight and cardio work in', () => {
+    for (const name of [
+      'Band overhead press',
+      'Pull-ups',
+      'Press-ups',
+      'Pike press-ups',
+      'Plank',
+      'Dead hang',
+      'Reverse lunge',
+      'Glute bridge',
+      'Outdoor run',
+      // Treadmill is gym kit, but a run needs no equipment: kept so a home
+      // session keeps the same cardio (run outdoors).
+      'Treadmill run',
+    ]) {
+      expect(isGymOnlyExercise(name)).toBe(false);
+    }
+  });
+});
+
+describe('selectPlanProgressions — home venue', () => {
+  function prog(name: string): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', sets: 3, reps: 8, weightKg: 20 };
+    return { name, key: name.toLowerCase(), sessions: 1, points: [point], first: point, latest: point };
+  }
+
+  it('keeps band and bodyweight work and drops gym-only equipment at home', () => {
+    const progressions = [
+      prog('Lat pulldown'),
+      prog('Band row'),
+      prog('Pull-ups'),
+      prog('Cable row'),
+    ];
+    const home = selectPlanProgressions(progressions, ['Pull (back & arms)'], 8, {
+      venue: 'home',
+    }).map(p => p.name);
+    expect(home).toEqual(['Band row', 'Pull-ups']);
+  });
+
+  it('keeps a cardio piece even though a treadmill is gym kit', () => {
+    const progressions = [prog('Lat pulldown'), cardioProg('Treadmill run')];
+    const home = selectPlanProgressions(progressions, ['Run'], 8, { venue: 'home' }).map(p => p.name);
+    expect(home).toContain('Treadmill run');
+  });
+
+  function cardioProg(name: string): ExerciseProgression {
+    const point: ProgressionPoint = { date: '2026-08-01', durationMinutes: 15, distanceKm: 3 };
+    return { name, key: name.toLowerCase(), sessions: 3, points: [point], first: point, latest: point };
+  }
 });

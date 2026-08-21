@@ -30,7 +30,9 @@ export async function GET(request: NextRequest) {
     const resolved = await resolveSessionTargets(date, sessions);
     const { plan, components, targets, input, hash } = resolved;
 
-    const planPayload = plan ? { plan: { label: plan.label, components } } : {};
+    const planPayload = plan
+      ? { plan: { label: plan.label, components, ...(plan.venue ? { venue: plan.venue } : {}) } }
+      : {};
 
     if (resolved.source === 'ai') {
       return NextResponse.json({

@@ -35,6 +35,8 @@ export async function POST(request: NextRequest) {
       type: plan?.type ?? 'session',
       ...(plan?.label ? { label: plan.label } : {}),
       ...(plan?.components ? { components: plan.components } : {}),
+      // History records it was a home session (or gym, when absent).
+      ...(plan?.venue ? { venue: plan.venue } : {}),
       exercises: targets.map(toEntry),
       // The explicit link back to the plan this session is being done against.
       ...(plan ? { plannedSessionId: plan.id } : {}),

@@ -2076,7 +2076,7 @@ export const api = {
   // What to aim for in a session, from the last time each exercise was trained.
   async getExerciseTargets(date?: string): Promise<{
     date: string;
-    plan?: { label?: string; components: string[] };
+    plan?: { label?: string; components: string[]; venue?: 'home' };
     targets: ExerciseTarget[];
     // 'ai' once the Claude programme is cached, 'fallback' while it generates or
     // when Claude is unavailable. `generating` flags that a refetch will upgrade.
@@ -2086,6 +2086,24 @@ export const api = {
     const params = new URLSearchParams();
     if (date) params.set('date', date);
     return fetchWithRetry(`/api/exercise/targets?${params.toString()}`);
+  },
+
+  // Swap a day's planned session to a home workout (bands, pull-up bar,
+  // bodyweight) or back to the gym. Sets `venue` on the plan and kicks off a
+  // fresh home programme server-side; the caller reloads targets to pick it up.
+  async setExerciseVenue(
+    venue: 'home' | 'gym',
+    date?: string
+  ): Promise<{ session: ExerciseSession; venue: 'home' | 'gym' }> {
+    return fetchWithRetry(
+      '/api/exercise/venue',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venue, ...(date ? { date } : {}) }),
+      },
+      { maxRetries: 0 }
+    );
   },
 
   async getExerciseProgressions(): Promise<{ progressions: ExerciseProgression[] }> {

@@ -25,6 +25,7 @@ import {
   activeGroups,
   classifyExercise,
   describeLast,
+  isGymOnlyExercise,
   selectPlanProgressions,
   type ExerciseKind,
   type ExerciseTarget,
@@ -54,6 +55,11 @@ export interface ProgrammeRow {
   // against the routine day. Threaded to the checklist's "Anchor"/"Staple"
   // badge. Absent on rotating accessories.
   fixed?: 'anchor' | 'staple';
+  // On a HOME session, the exact name of the routine anchor/staple this row is a
+  // home stand-in for (e.g. "Band overhead press" stands in for "Seated DB
+  // shoulder press"). Lets validation, ordering and the fixed badge treat the
+  // stand-in as the anchor it replaces. Absent on gym rows and non-substitutes.
+  standsInFor?: string;
   target: ProgrammeTarget;
   rationale: string;
   // Always concrete: filled from real history server-side, never from the model.
@@ -79,6 +85,12 @@ export interface ProgrammerPlan {
   // The routine day this session is built from: anchors and staples are fixed,
   // accessories are AI-rotated. Absent for an ad-hoc session with no routine day.
   routineDay?: ProgrammerRoutineDay;
+  // Set to 'home' when Dave has swapped this day to a home session: the
+  // vocabulary keeps band/bodyweight work and drops gym-only equipment, and the
+  // prompt asks the model to substitute a home stand-in for each gym anchor.
+  // Absent (the default) is a gym session. Folded into the hash only when set, so
+  // existing gym-day hashes are unchanged.
+  venue?: 'home';
 }
 
 // One exercise's history as the model sees it: how often it has appeared (the
@@ -133,13 +145,14 @@ export function buildProgrammerInput(
   // The rotation vocabulary: the plan's implied exercises, selected from history.
   // A one-group-plus-core day can carry ~7 pull staples plus ~4 core, right at
   // the old cap of 12; 16 gives the model the full relevant vocabulary.
-  // Band exercises are excluded inside selectPlanProgressions: they exist in the
-  // log only as a home-workout last resort, and must never be programmed into a
-  // planned gym session. The routine's fixed anchors/staples (extra) are NOT
-  // filtered — if Dave explicitly puts a band exercise in the routine, it stays.
-  const vocab = selectPlanProgressions(progressions, plan.components, 16).map(p =>
-    toProgrammerExercise(p, totalSessions)
-  );
+  // On a GYM session band exercises are excluded inside selectPlanProgressions
+  // (a home-workout last resort, never programmed into the gym); on a HOME
+  // session it is reversed — band and bodyweight work is kept and gym-only
+  // equipment dropped. The routine's fixed anchors/staples (extra) are NOT
+  // filtered either way — the model needs them to know what to substitute for.
+  const vocab = selectPlanProgressions(progressions, plan.components, 16, {
+    venue: plan.venue,
+  }).map(p => toProgrammerExercise(p, totalSessions));
 
   // The routine's fixed anchors and staples MUST be available to the model even
   // when they have no history yet, so validateProgramme can guarantee them.
@@ -204,6 +217,10 @@ export function programmeHash(input: ProgrammerInput): string {
     // A changed routine day (anchors, staples, title, note edited in the portal)
     // must regenerate the programme.
     routineDay: routineFingerprint(input.plan.routineDay),
+    // Swapping the day to a home session (or back to the gym) must regenerate.
+    // Included ONLY when set, so every existing gym-day hash is byte-identical to
+    // before this field existed and its cached programme still applies.
+    ...(input.plan.venue ? { venue: input.plan.venue } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }
@@ -262,7 +279,7 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
-- Resistance band exercises are a home-workout fallback only, never to be included in a planned gym session; do not substitute band variants for gym lifts.
+- Resistance band exercises are a home-workout tool: in a planned GYM session never include them or substitute band variants for gym lifts. (If a HOME SESSION block appears below, that rule is reversed — follow the home block.)
 - Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
 - Treadmill and cardio targets. A treadmill piece is targeted in MINUTES, never distance (a logged number like "9.2" is a speed, not a distance). When you add duration to a cardio piece, add at most 5 minutes over the last logged duration — never back-solve a jump from a calendar title.
@@ -270,7 +287,7 @@ Program the session as a coach would. Apply this judgement:
 - Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights and reps, seconds for a hold, or minutes/distance for cardio).
 
 Return ONLY a JSON array, in the order the exercises should be done, no prose, no code fences:
-[{"name":"<exact exercise name from the input>","kind":"core|rotation|cardio|hold","toFailure":true|false,"target":{"sets":N,"reps":N,"holdSeconds":N,"perSide":true,"weightKg":N,"durationMinutes":N,"distanceKm":N},"rationale":"<one sentence, cites last time's numbers>"}]
+[{"name":"<exact exercise name from the input>","kind":"core|rotation|cardio|hold","toFailure":true|false,"target":{"sets":N,"reps":N,"holdSeconds":N,"perSide":true,"weightKg":N,"durationMinutes":N,"distanceKm":N},"standsInFor":"<the exact routine anchor/staple name this is a HOME stand-in for, only on a home session>","rationale":"<one sentence, cites last time's numbers>"}]
 
 Include in "target" only the measures that fit the exercise: sets/reps/weightKg for a loaded lift, sets/reps for rep-based bodyweight, sets/holdSeconds for a timed hold (plank, hang, wall sit), durationMinutes/distanceKm for cardio. Add "perSide": true for anything worked one side at a time. Omit the rest.
 
@@ -288,6 +305,31 @@ function goalBlock(g: ProgrammerGoal): string {
 const GOALS_HEADER = `Active goals for this person's training. Where an exercise in this session maps to a goal — a run-distance goal to the run/treadmill piece, a strength goal to that lift — steer this session's target toward the goal's next milestone: enough to make progress toward it, never a reckless jump past what the history and effort notes support. If the person is behind on a goal, lean into it; if ahead, hold steady.
 
 `;
+
+// The equipment a home session has to work with. Exported so the copy is written
+// once and reused by the prompt (and available to tests / the UI if needed).
+export const HOME_EQUIPMENT = 'resistance bands, a pull-up bar and bodyweight only';
+
+// The home-session block: appended to the prompt when the day has been swapped to
+// a home workout. It reverses the band rule, fixes the equipment, and asks the
+// model to substitute a band/bodyweight stand-in for each gym anchor/staple while
+// holding the day's muscle focus and its cardio piece.
+function buildHomeBlock(day?: ProgrammerRoutineDay): string {
+  const anchors = day ? [...day.anchors, ...day.staples] : [];
+  const lines: string[] = [
+    `HOME SESSION — this session is done at home. Equipment is ${HOME_EQUIPMENT}. This overrides the band rule above: bands and bodyweight are now your PRIMARY tools.`,
+    'Never programme a machine, cable, dumbbell or barbell lift — none of that exists here.',
+    "For each REQUIRED routine anchor/staple that needs gym equipment, programme the closest home stand-in and set \"standsInFor\" to that anchor's exact name. Good stand-ins: band overhead press for seated DB shoulder press; pike press-ups for incline DB press; band rows or pull-ups for lat pulldown and machine rows; reverse lunges or glute bridges for leg press and leg curl.",
+    'Band and bodyweight targets use sets and reps (or holdSeconds for a hold) — no weightKg.',
+    "Keep the day's muscle focus (a Push day stays push — do not bolt on core unless the routine day already has core staples).",
+    'Keep the same run/cardio piece as planned — running needs no equipment.',
+    'Still finish on exactly ONE safe to-failure row.',
+  ];
+  if (anchors.length) {
+    lines.push(`Anchors/staples to stand in for: ${anchors.join(', ')}.`);
+  }
+  return lines.join('\n');
+}
 
 // The routine block: the standing week's shape for this day. Anchors and staples
 // are REQUIRED and must appear; accessories are the model's to rotate from the
@@ -322,13 +364,14 @@ export function buildProgrammerPrompt(input: ProgrammerInput): string {
     ? `Components: ${input.plan.components.join(', ')}`
     : 'Components: (none recorded)';
   const routine = input.plan.routineDay ? `\n\n${buildRoutineBlock(input.plan.routineDay)}` : '';
+  const home = input.plan.venue === 'home' ? `\n\n${buildHomeBlock(input.plan.routineDay)}` : '';
   const exercises = input.exercises.map(exerciseBlock).join('\n');
   const goals =
     input.goals && input.goals.length > 0
       ? `\n\n${GOALS_HEADER}${input.goals.map(goalBlock).join('\n')}`
       : '';
   return `${PROMPT_HEADER}Session: ${planLabel}
-${components}${routine}
+${components}${routine}${home}
 
 Exercises available (with recent history):
 ${exercises}${goals}`;
@@ -403,6 +446,17 @@ export function validateProgramme(
 ): ProgrammeRow[] {
   const byKey = new Map(input.exercises.map(e => [e.key, e]));
 
+  // The day's FIXED lifts, so a "standsInFor" the model returns is only honoured
+  // when it names a real anchor or staple (a stray value is dropped). Home only.
+  const day = input.plan.routineDay;
+  const fixedKeyToName = new Map<string, string>();
+  if (input.plan.venue === 'home' && day) {
+    for (const name of [...day.anchors, ...day.staples]) {
+      const key = exerciseKey(name);
+      if (key && !fixedKeyToName.has(key)) fixedKeyToName.set(key, name);
+    }
+  }
+
   const rows: ProgrammeRow[] = [];
   const seen = new Set<string>();
   // At most one cardio piece per session: the first survives, the rest are
@@ -432,11 +486,21 @@ export function validateProgramme(
         ? record.rationale.trim().slice(0, 200)
         : `Last time: ${known.lastSummary}.`;
 
+    // A home stand-in: honoured only when it names a real anchor/staple and the
+    // row is not itself that fixed lift (a fixed lift already covers itself).
+    const standsInForKey =
+      typeof record.standsInFor === 'string' ? exerciseKey(record.standsInFor) : '';
+    const standsInFor =
+      standsInForKey && standsInForKey !== key && fixedKeyToName.has(standsInForKey)
+        ? fixedKeyToName.get(standsInForKey)
+        : undefined;
+
     rows.push({
       name: known.name,
       key,
       kind,
       toFailure: record.toFailure === true,
+      ...(standsInFor ? { standsInFor } : {}),
       target,
       rationale,
       lastSummary: known.lastSummary,
@@ -484,6 +548,10 @@ function guaranteeGroupCoverage(
   // combined "Pull + Legs" surfaces both even when components arrive empty.
   const groups = activeGroups([...input.plan.components, day.title]);
   const out = [...rows];
+  // Home: never pad a group with gym-only equipment (a machine/cable/barbell/
+  // dumbbell lift) — the vocabulary carries the routine's gym anchors as no-history
+  // stubs so the model can substitute for them, but they must not be appended.
+  const home = input.plan.venue === 'home';
 
   for (const group of groups) {
     const min = groupMinimum(group);
@@ -492,6 +560,7 @@ function guaranteeGroupCoverage(
     for (const known of input.exercises) {
       if (count >= min) break;
       if (seen.has(known.key) || classifyExercise(known.name) !== group) continue;
+      if (home && isGymOnlyExercise(known.name)) continue;
       seen.add(known.key);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({
@@ -520,9 +589,14 @@ export function markFixed(rows: ProgrammeRow[], day?: ProgrammerRoutineDay): Pro
   if (!day) return rows;
   const anchorKeys = new Set(day.anchors.map(exerciseKey).filter(Boolean));
   const stapleKeys = new Set(day.staples.map(exerciseKey).filter(Boolean));
+  // A home stand-in is badged as the anchor/staple it stands in for, matched by
+  // its `standsInFor` key when the row itself is not a fixed lift.
   return rows.map(row => {
-    if (anchorKeys.has(row.key)) return { ...row, fixed: 'anchor' as const };
-    if (stapleKeys.has(row.key)) return { ...row, fixed: 'staple' as const };
+    const standInKey = row.standsInFor ? exerciseKey(row.standsInFor) : '';
+    if (anchorKeys.has(row.key) || (standInKey && anchorKeys.has(standInKey)))
+      return { ...row, fixed: 'anchor' as const };
+    if (stapleKeys.has(row.key) || (standInKey && stapleKeys.has(standInKey)))
+      return { ...row, fixed: 'staple' as const };
     return row;
   });
 }
@@ -553,11 +627,14 @@ export function orderProgrammeRows(
   // Bucket each row (0 cardio, 1 anchor, 2 staple, 3 the rest); within a bucket
   // the rank is the routine order for anchors/staples and the original index for
   // cardio and the rest. A stable sort by (bucket, rank) is the whole rule.
+  // A home stand-in orders in the bucket of the anchor/staple it replaces, so it
+  // sits where that fixed lift would have — matched by key, or by standsInFor.
   const ranked = rows.map((row, index) => {
     if (row.kind === 'cardio') return { row, bucket: 0, rank: index };
-    const anchor = anchorRank.get(row.key);
+    const standInKey = row.standsInFor ? exerciseKey(row.standsInFor) : '';
+    const anchor = anchorRank.get(row.key) ?? (standInKey ? anchorRank.get(standInKey) : undefined);
     if (anchor !== undefined) return { row, bucket: 1, rank: anchor };
-    const staple = stapleRank.get(row.key);
+    const staple = stapleRank.get(row.key) ?? (standInKey ? stapleRank.get(standInKey) : undefined);
     if (staple !== undefined) return { row, bucket: 2, rank: staple };
     return { row, bucket: 3, rank: index };
   });
@@ -578,11 +655,22 @@ function guaranteeFixed(
   if (!day) return rows;
   const byKey = new Map(input.exercises.map(e => [e.key, e]));
   const out = [...rows];
+  const home = input.plan.venue === 'home';
+  // On a home session a fixed lift is already satisfied by a row that stands in
+  // for it, so it must not be appended a second time.
+  const standInKeys = new Set(
+    rows.map(r => (r.standsInFor ? exerciseKey(r.standsInFor) : '')).filter(Boolean)
+  );
 
   const appendMissing = (names: string[], anchor: boolean) => {
     for (const name of names) {
       const key = exerciseKey(name);
       if (!key || seen.has(key)) continue;
+      // Home: never force a gym-only anchor/staple into the session (it can't be
+      // done at home), and skip one a stand-in already covers. The prompt asks
+      // the model to substitute for every gym anchor, so this is the rare
+      // fallback where it dropped one entirely.
+      if (home && (standInKeys.has(key) || isGymOnlyExercise(name))) continue;
       const known = byKey.get(key);
       if (!known) continue; // buildProgrammerInput guarantees it, but stay safe
       seen.add(key);
@@ -674,6 +762,7 @@ export function programmeRowToTarget(row: ProgrammeRow): ExerciseTarget {
     rationale: row.rationale,
     lastSummary: row.lastSummary,
     ...(row.fixed ? { fixed: row.fixed } : {}),
+    ...(row.standsInFor ? { standsInFor: row.standsInFor } : {}),
     ...(row.target.sets !== undefined ? { sets: row.target.sets } : {}),
     ...(row.target.reps !== undefined ? { reps: row.target.reps } : {}),
     ...(row.target.holdSeconds !== undefined ? { holdSeconds: row.target.holdSeconds } : {}),

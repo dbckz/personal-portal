@@ -260,6 +260,12 @@ export interface ExerciseSession {
   notes?: string;
   planned: boolean;
   completed: boolean;
+  // Where the session is done. Absent means the gym (the default); 'home' marks a
+  // session Dave swapped to a home equivalent — resistance bands, a pull-up bar
+  // and bodyweight only. Set on the PLANNED session and copied onto the logged
+  // session when it is started, so history records it was a home session. Drives
+  // the programmer's home vocabulary and prompt (see exercise-programmer).
+  venue?: 'home';
   // A name for the session as a whole ("Home workout").
   label?: string;
   // The exercises done, in the order they were done.

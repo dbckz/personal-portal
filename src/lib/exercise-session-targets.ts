@@ -80,6 +80,10 @@ export async function resolveSessionTargets(
   const routineParsed = routineDay ? parsePlannedTitle(`🏋️ ${routineDay.title}`) : null;
   const components = routineParsed?.components ?? plan?.components ?? [];
   const label = routineParsed?.title ?? plan?.label;
+  // The venue Dave set on the plan (absent = gym). Flows into the programmer
+  // input (and therefore the hash) and the deterministic fallback so a home day
+  // is programmed from band/bodyweight work, not gym lifts.
+  const venue = plan?.venue;
 
   // Exclude the target date so "last time" is the previous workout, not a session
   // already logged today.
@@ -94,7 +98,7 @@ export async function resolveSessionTargets(
 
   const input = buildProgrammerInput(
     progressions,
-    { label, components, ...(routineDay ? { routineDay } : {}) },
+    { label, components, ...(routineDay ? { routineDay } : {}), ...(venue ? { venue } : {}) },
     date,
     totalSessions,
     goals
@@ -120,7 +124,10 @@ export async function resolveSessionTargets(
   // already surface here through component selection; ones with no history yet
   // are not represented in this fallback — only in the AI path, which guarantees
   // them. Left as-is because building no-history targets here is not cheap.)
-  const targets = markFixedTargets(buildSessionTargets(progressions, components), routineDay);
+  const targets = markFixedTargets(
+    buildSessionTargets(progressions, components, 8, venue ? { venue } : {}),
+    routineDay
+  );
   return { plan, components, targets, source: 'fallback', input, hash };
 }
 

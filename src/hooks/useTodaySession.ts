@@ -63,6 +63,9 @@ export interface TodayRow {
   // Routine anchor/staple provenance (AI programme or deterministic fallback),
   // shown as an "Anchor"/"Staple" badge on the fixed lifts at the top.
   fixed?: 'anchor' | 'staple';
+  // On a home session, the routine anchor/staple this row is a home stand-in for,
+  // shown as "stands in for …".
+  standsInFor?: string;
   rationale?: string;
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — last time with numbers, shown on the row.
@@ -72,6 +75,9 @@ export interface TodayRow {
 export interface TodayPlan {
   label?: string;
   components: string[];
+  // 'home' when the day has been swapped to a home workout (bands, pull-up bar,
+  // bodyweight). Absent means the gym.
+  venue?: 'home';
 }
 
 export type FieldPatch = Partial<
@@ -139,6 +145,7 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     section: t.section,
     isAnchor: t.isAnchor,
     fixed: t.fixed,
+    standsInFor: t.standsInFor,
     rationale: t.rationale,
     last: t.last,
     lastSummary: t.lastSummary,
@@ -248,6 +255,8 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // True while a venue swap (home ⇄ gym) is in flight, for the header control.
+  const [venueBusy, setVenueBusy] = useState(false);
   // True while the AI programme is being generated server-side; the checklist
   // shows the deterministic targets and quietly upgrades when it lands.
   const [generating, setGenerating] = useState(false);
@@ -594,6 +603,35 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     [rows, ensureSession, resolveEntryId, onSessionChanged]
   );
 
+  // Swap the whole day to a home workout, or back to the gym. Optimistically
+  // badges the plan, then calls the venue route and reloads — the reload picks up
+  // the freshly generated home programme (or the deterministic fallback while it
+  // lands, with `generating` set as usual).
+  const setVenue = useCallback(
+    async (venue: 'home' | 'gym') => {
+      setVenueBusy(true);
+      setError(null);
+      setPlan(p => ({
+        label: p?.label,
+        components: p?.components ?? [],
+        ...(venue === 'home' ? { venue: 'home' as const } : {}),
+      }));
+      // A venue change moves the programme hash; let the poll budget refill so the
+      // checklist chases the new programme even if it chased an earlier one today.
+      pollsRef.current = 0;
+      try {
+        await api.setExerciseVenue(venue, date);
+      } catch (err) {
+        console.error('Failed to change the session venue:', err);
+        setError('Could not change the session venue.');
+      } finally {
+        setVenueBusy(false);
+        await load();
+      }
+    },
+    [date, load]
+  );
+
   const doneCount = rows.filter(r => r.done).length;
 
   return {
@@ -606,6 +644,7 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     generating,
     error,
     busyKey,
+    venueBusy,
     knownNames,
     reload: load,
     toggleDone,
@@ -616,5 +655,6 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     restoreSwap,
     addExercise,
     removeRow,
+    setVenue,
   };
 }

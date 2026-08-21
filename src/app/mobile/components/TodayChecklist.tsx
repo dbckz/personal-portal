@@ -15,6 +15,7 @@ import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
 import { ActionBadge, FailureTag, FixedTag, KindTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
+import { VenueControl } from '@/components/sections/exercise/venue-control';
 
 // The in-the-gym checklist on mobile: today's workout, one tickable row per
 // exercise, each carrying its guidance (what to aim for and why, from last
@@ -31,6 +32,7 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
     generating,
     error,
     busyKey,
+    venueBusy,
     knownNames,
     toggleDone,
     commitField,
@@ -40,6 +42,7 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
     restoreSwap,
     addExercise,
     removeRow,
+    setVenue,
   } = useTodaySession(undefined, onSessionChanged);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -60,6 +63,8 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
           </span>
         )}
       </div>
+
+      <VenueControl venue={plan?.venue} busy={venueBusy} onSet={setVenue} />
 
       {generating && (
         <p className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -215,6 +220,9 @@ function RowCard({
           </div>
           {row.substitutedFor && (
             <p className="mt-0.5 text-[11px] text-amber-600">was: {row.substitutedFor}</p>
+          )}
+          {row.standsInFor && (
+            <p className="mt-0.5 text-[11px] text-indigo-500">stands in for {row.standsInFor}</p>
           )}
           <p className="mt-0.5 text-xs tabular-nums text-gray-600">
             {current || row.targetText || '—'}

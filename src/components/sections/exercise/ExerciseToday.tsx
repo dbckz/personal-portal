@@ -26,6 +26,7 @@ import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
 import { ActionBadge, FailureTag, FixedTag, KindTag } from './action-badge';
 import { RirChips } from './rir-chips';
+import { VenueControl } from './venue-control';
 
 // The desktop "Today" tab: today's workout as an interactive checklist. Every
 // row carries the guidance (what to aim for and why, from last time) alongside
@@ -41,6 +42,7 @@ export function ExerciseToday() {
     generating,
     error,
     busyKey,
+    venueBusy,
     knownNames,
     toggleDone,
     commitField,
@@ -50,6 +52,7 @@ export function ExerciseToday() {
     restoreSwap,
     addExercise,
     removeRow,
+    setVenue,
   } = useTodaySession();
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -72,6 +75,10 @@ export function ExerciseToday() {
             {doneCount}/{totalCount} done
           </span>
         )}
+      </div>
+
+      <div className="mb-4">
+        <VenueControl venue={plan?.venue} busy={venueBusy} onSet={setVenue} />
       </div>
 
       {generating && (
@@ -234,6 +241,9 @@ function RowCard({
 
           {row.substitutedFor && (
             <p className="mt-0.5 pl-6 text-[11px] text-amber-600">was: {row.substitutedFor}</p>
+          )}
+          {row.standsInFor && (
+            <p className="mt-0.5 pl-6 text-[11px] text-indigo-500">stands in for {row.standsInFor}</p>
           )}
           <p className="mt-0.5 pl-6 text-xs tabular-nums text-gray-600">
             {current || row.targetText || '—'}

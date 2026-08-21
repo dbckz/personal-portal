@@ -10,6 +10,7 @@ import {
   buildProgrammerInput,
   buildProgrammerPrompt,
   generateProgramme,
+  HOME_EQUIPMENT,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -784,6 +785,108 @@ describe('programmeRowToTarget', () => {
     expect(target.kind).toBe('hold');
     expect(target.holdSeconds).toBe(40);
     expect(target.perSide).toBe(true);
+  });
+});
+
+describe('home session — vocabulary, hash, prompt and stand-ins', () => {
+  // A shoulders day whose anchor is a gym-only DB press. At home the model
+  // substitutes a band press for it; the vocabulary carries band/bodyweight work.
+  function homeProgressions(): ExerciseProgression[] {
+    return [
+      progression('Band overhead press', [{ date: '2026-08-14', sets: 3, reps: 12 }], 3),
+      progression('Band lateral raise', [{ date: '2026-08-14', sets: 3, reps: 15 }], 3),
+      progression('Pike press-ups', [{ date: '2026-08-14', sets: 3, reps: 10 }], 2),
+      // A gym lift in the history — must be dropped from the home vocabulary.
+      progression('Seated DB shoulder press', [{ date: '2026-08-14', sets: 3, reps: 8, weightKg: 14 }], 4),
+    ];
+  }
+
+  function homeInput(venue?: 'home'): ProgrammerInput {
+    return buildProgrammerInput(
+      homeProgressions(),
+      {
+        label: 'Push (shoulders)',
+        components: ['Push (shoulders)'],
+        routineDay: {
+          title: 'Push (shoulders)',
+          anchors: ['Seated DB shoulder press'],
+          staples: ['Band lateral raise'],
+        },
+        ...(venue ? { venue } : {}),
+      },
+      '2026-08-21',
+      8
+    );
+  }
+
+  it('keeps band/bodyweight work and drops gym-only lifts from the vocabulary', () => {
+    const names = homeInput('home').exercises.map(e => e.name);
+    expect(names).toContain('Band overhead press');
+    expect(names).toContain('Pike press-ups');
+    // The gym DB press is dropped from the derived vocab — but is re-added as the
+    // no-history routine anchor stub (the model needs to know what to sub for).
+    // It appears once, as the anchor, not as a rotating vocab entry.
+    expect(names.filter(n => n === 'Seated DB shoulder press')).toHaveLength(1);
+  });
+
+  it('moves the hash when the venue is set, and leaves the gym hash unchanged', () => {
+    const gym = programmeHash(homeInput());
+    // An explicit-undefined venue is identical to no venue — the field is folded
+    // in only when set, so every existing gym hash is byte-identical to before.
+    expect(programmeHash(homeInput())).toBe(gym);
+    expect(programmeHash(homeInput('home'))).not.toBe(gym);
+  });
+
+  it('adds a HOME SESSION block to the prompt only when home', () => {
+    const homePrompt = buildProgrammerPrompt(homeInput('home'));
+    // The block itself starts "HOME SESSION —" (the header only references it).
+    expect(homePrompt).toContain('HOME SESSION —');
+    expect(homePrompt).toContain(HOME_EQUIPMENT);
+    expect(homePrompt).toContain('standsInFor');
+    const gymPrompt = buildProgrammerPrompt(homeInput());
+    expect(gymPrompt).not.toContain('HOME SESSION —');
+  });
+
+  it('badges a stand-in as its anchor, orders it in the anchor slot, and never leaks the gym lift', () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Pike press-ups', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 10 } },
+        {
+          name: 'Band overhead press',
+          kind: 'core',
+          toFailure: false,
+          standsInFor: 'Seated DB shoulder press',
+          target: { sets: 3, reps: 12 },
+        },
+        { name: 'Band lateral raise', kind: 'core', toFailure: false, target: { sets: 3, reps: 15 } },
+      ],
+      homeInput('home')
+    );
+    const standIn = rows.find(r => r.name === 'Band overhead press')!;
+    expect(standIn.fixed).toBe('anchor');
+    expect(standIn.standsInFor).toBe('Seated DB shoulder press');
+    // The staple, matched directly by key, is badged too.
+    expect(rows.find(r => r.name === 'Band lateral raise')!.fixed).toBe('staple');
+    // The gym anchor is never appended into a home session.
+    expect(rows.some(r => r.name === 'Seated DB shoulder press')).toBe(false);
+    // The stand-in orders in the anchor slot — ahead of the accessory.
+    const order = rows.map(r => r.name);
+    expect(order.indexOf('Band overhead press')).toBeLessThan(order.indexOf('Pike press-ups'));
+    // programmeRowToTarget carries the provenance to the checklist.
+    expect(programmeRowToTarget(standIn).standsInFor).toBe('Seated DB shoulder press');
+  });
+
+  it('does not force a dropped gym anchor into a home session (no stand-in given)', () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Band overhead press', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } },
+        { name: 'Band lateral raise', kind: 'core', toFailure: false, target: { sets: 3, reps: 15 } },
+      ],
+      homeInput('home')
+    );
+    // The model dropped the anchor and gave no stand-in; guaranteeFixed and
+    // guaranteeGroupCoverage must both refuse to append the gym-only DB press.
+    expect(rows.some(r => r.name === 'Seated DB shoulder press')).toBe(false);
   });
 });
 

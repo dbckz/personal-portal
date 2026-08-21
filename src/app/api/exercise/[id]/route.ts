@@ -22,6 +22,7 @@ export async function PATCH(
       notes: body.notes,
       planned: body.planned,
       completed: body.completed,
+      venue: body.venue,
     });
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     // A session edit (completing a plan, correcting a date) changes today's

@@ -153,6 +153,11 @@ export interface ExerciseTarget {
   // always present). Drives the "Anchor"/"Staple" checklist badge. Absent on
   // rotating accessories and ad-hoc rows.
   fixed?: 'anchor' | 'staple';
+  // On a HOME session, the exact name of the routine anchor/staple this row is a
+  // home stand-in for (e.g. "Band overhead press" stands in for "Seated DB
+  // shoulder press"). Shown on the row so the substitution is legible. Absent on
+  // gym sessions and on rows that are not substitutes.
+  standsInFor?: string;
   // Last time out, for context.
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — what was actually done last time, with numbers, so
@@ -429,20 +434,41 @@ function describeVolumeWords(point: {
 export function buildSessionTargets(
   progressions: ExerciseProgression[],
   components: string[] = [],
-  limit = 8
+  limit = 8,
+  options: SelectOptions = {}
 ): ExerciseTarget[] {
   return orderTargets(
-    selectPlanProgressions(progressions, components, limit).map(buildTarget),
+    selectPlanProgressions(progressions, components, limit, options).map(buildTarget),
     components
   );
 }
 
-// Resistance-band exercises are a home-workout last resort, not part of a
-// planned gym session: they only appear in the log from the occasional home
-// fallback. The word boundary keeps "Band rows"/"band-assisted pull-ups" in
-// while leaving "broadband" (no boundary) out.
+// Resistance-band exercises are a home-workout tool: never part of a planned GYM
+// session (they only appear in the log from the occasional home fallback), but
+// they are the PRIMARY tool of a HOME session. The word boundary keeps "Band
+// rows"/"band-assisted pull-ups" in while leaving "broadband" (no boundary) out.
 export function isBandExercise(name: string): boolean {
   return /\bband\b/i.test(name);
+}
+
+// Names that read as GYM-ONLY equipment — a loaded machine, cable, barbell or
+// dumbbell lift that can't be done at home with bands, a pull-up bar and
+// bodyweight. Used to strip a home session's vocabulary down to what the
+// equipment can actually make; the AI programmer substitutes a band/bodyweight
+// stand-in for each gym-only routine anchor instead. Cardio (a run) is NOT
+// gym-only — running needs no equipment — so "Treadmill run" is deliberately
+// left in: a home session keeps the same run, done outdoors.
+export function isGymOnlyExercise(name: string): boolean {
+  return /\b(machine|cable|barbell|dumbbell|db|smith|leg press|leg extension|leg curl|hack squat|pulldown|pull-?down|pec deck|pec-deck|chest press|converging|hammer strength|lat raise machine)\b/i.test(
+    name
+  );
+}
+
+// Options shared by the plan-selection paths: which venue the session is done at.
+// Absent venue (the default) is the gym; 'home' keeps band/bodyweight work and
+// strips gym-only equipment out of the vocabulary.
+export interface SelectOptions {
+  venue?: 'home';
 }
 
 // The exercises a session's plan implies, most-relevant first and capped. Shared
@@ -451,13 +477,20 @@ export function isBandExercise(name: string): boolean {
 export function selectPlanProgressions(
   progressions: ExerciseProgression[],
   components: string[] = [],
-  limit = 8
+  limit = 8,
+  options: SelectOptions = {}
 ): ExerciseProgression[] {
-  // Band exercises are a home-workout last resort, never programmed into a
-  // planned gym session — filtered here so every caller (both branches below,
-  // and the AI programmer's vocabulary) excludes them. The routine's fixed
-  // anchors/staples are added by callers separately and stay unfiltered.
-  const eligible = progressions.filter(p => !isBandExercise(p.name));
+  // Gym vs home decides the eligible vocabulary. A GYM session drops band
+  // exercises (a home-workout last resort, never programmed into the gym). A
+  // HOME session does the opposite: it KEEPS band and bodyweight work and drops
+  // gym-only equipment (machines, cables, barbells, dumbbells) that can't be done
+  // at home — cardio is kept either way, running needs no equipment. The
+  // routine's fixed anchors/staples are added by callers separately and stay
+  // unfiltered (the model needs them to know what to substitute for).
+  const eligible =
+    options.venue === 'home'
+      ? progressions.filter(p => !isGymOnlyExercise(p.name) || isCardioName(p.name))
+      : progressions.filter(p => !isBandExercise(p.name));
   if (components.length === 0) return eligible.slice(0, limit);
   const relevant = filterToPlan(eligible, components);
   const groups = activeGroups(components);
