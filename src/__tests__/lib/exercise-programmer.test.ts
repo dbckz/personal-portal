@@ -10,7 +10,6 @@ import {
   buildProgrammerInput,
   buildProgrammerPrompt,
   generateProgramme,
-  isBandExercise,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -19,7 +18,7 @@ import {
   type ProgrammerInput,
 } from '@/lib/exercise-programmer';
 import type { ProgrammerRoutineDay } from '@/lib/exercise-programmer';
-import { classifyExercise } from '@/lib/exercise-targets';
+import { classifyExercise, isBandExercise } from '@/lib/exercise-targets';
 import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from '@/lib/exercise-progression';
 import { getCachedProgramme, saveCachedProgramme } from '@/lib/storage/exercise-programmes';
 import { __resetDbForTests } from '@/lib/storage/db';

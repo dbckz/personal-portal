@@ -114,14 +114,6 @@ export interface ProgrammerInput {
   goals?: ProgrammerGoal[];
 }
 
-// Resistance-band exercises are a home-workout last resort, not part of a
-// planned gym session: they only appear in the log from the occasional home
-// fallback. The word boundary keeps "Band rows"/"band-assisted pull-ups" in
-// while leaving "broadband" (no boundary) out.
-export function isBandExercise(name: string): boolean {
-  return /\bband\b/i.test(name);
-}
-
 // Gather the model's input from the plan and history: the plan's exercises,
 // each with a frequency count and its last three sessions.
 export function buildProgrammerInput(
@@ -141,13 +133,13 @@ export function buildProgrammerInput(
   // The rotation vocabulary: the plan's implied exercises, selected from history.
   // A one-group-plus-core day can carry ~7 pull staples plus ~4 core, right at
   // the old cap of 12; 16 gives the model the full relevant vocabulary.
-  // Band exercises are filtered out of the derived vocabulary: they exist in the
+  // Band exercises are excluded inside selectPlanProgressions: they exist in the
   // log only as a home-workout last resort, and must never be programmed into a
   // planned gym session. The routine's fixed anchors/staples (extra) are NOT
   // filtered — if Dave explicitly puts a band exercise in the routine, it stays.
-  const vocab = selectPlanProgressions(progressions, plan.components, 16)
-    .filter(p => !isBandExercise(p.name))
-    .map(p => toProgrammerExercise(p, totalSessions));
+  const vocab = selectPlanProgressions(progressions, plan.components, 16).map(p =>
+    toProgrammerExercise(p, totalSessions)
+  );
 
   // The routine's fixed anchors and staples MUST be available to the model even
   // when they have no history yet, so validateProgramme can guarantee them.

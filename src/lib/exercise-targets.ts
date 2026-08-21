@@ -437,6 +437,14 @@ export function buildSessionTargets(
   );
 }
 
+// Resistance-band exercises are a home-workout last resort, not part of a
+// planned gym session: they only appear in the log from the occasional home
+// fallback. The word boundary keeps "Band rows"/"band-assisted pull-ups" in
+// while leaving "broadband" (no boundary) out.
+export function isBandExercise(name: string): boolean {
+  return /\bband\b/i.test(name);
+}
+
 // The exercises a session's plan implies, most-relevant first and capped. Shared
 // by the deterministic targets and the AI programmer's input so both reason over
 // the same set of lifts.
@@ -445,8 +453,13 @@ export function selectPlanProgressions(
   components: string[] = [],
   limit = 8
 ): ExerciseProgression[] {
-  if (components.length === 0) return progressions.slice(0, limit);
-  const relevant = filterToPlan(progressions, components);
+  // Band exercises are a home-workout last resort, never programmed into a
+  // planned gym session — filtered here so every caller (both branches below,
+  // and the AI programmer's vocabulary) excludes them. The routine's fixed
+  // anchors/staples are added by callers separately and stay unfiltered.
+  const eligible = progressions.filter(p => !isBandExercise(p.name));
+  if (components.length === 0) return eligible.slice(0, limit);
+  const relevant = filterToPlan(eligible, components);
   const groups = activeGroups(components);
   // A single-group day (or an unfamiliar plan with no recognised group) keeps the
   // caller's flat limit — today's behaviour. A COMBINED day (Pull + Legs) treats

@@ -153,7 +153,22 @@ async function resolveRoutineDay(
   try {
     const routine = await getWeeklyRoutine();
     const dayOfWeek = new Date(`${date}T12:00:00`).getDay();
-    const day = routine.find(d => d.dayOfWeek === dayOfWeek);
+
+    // A plan moved to another day should be programmed as THAT routine day, not
+    // as the weekday it happens to land on. If there is a planned session today
+    // whose label matches a routine day's title, use that routine day — so the
+    // moved session carries its routine's anchors/staples (and doesn't get
+    // programmed as, say, a Rest day just because it was dropped on a Friday).
+    // An exact title match wins over the weekday.
+    const plan = sessions.find(s => s.date === date && s.planned);
+    const planTitle = (parsePlannedTitle(`🏋️ ${plan?.label ?? ''}`)?.title ?? plan?.label ?? '')
+      .trim()
+      .toLowerCase();
+    const byLabel = planTitle
+      ? routine.find(d => d.title.trim().toLowerCase() === planTitle)
+      : undefined;
+
+    const day = byLabel ?? routine.find(d => d.dayOfWeek === dayOfWeek);
     return day ? distillRoutineDay(day, sessions, date) : undefined;
   } catch (error) {
     console.error('Failed to load the weekly routine for the programmer:', error);

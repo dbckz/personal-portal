@@ -478,6 +478,18 @@ describe('selectPlanProgressions', () => {
     const names = selectPlanProgressions(progressions, ['Pull (back)']).map(p => p.name);
     expect(names).toEqual(progressions.slice(0, 8).map(p => p.name));
   });
+
+  it('drops band exercises in both the no-components and components branches', () => {
+    // Bands are a home-workout last resort, never programmed into a planned gym
+    // session — excluded whether or not the day has a plan.
+    // "Band row" classifies as pull, so on a pull day only the band filter (not
+    // the group filter) can drop it — proving the exclusion in that branch too.
+    const progressions = [prog('Lat pulldown'), prog('Band row'), prog('Cable row')];
+    const noComponents = selectPlanProgressions(progressions, []).map(p => p.name);
+    expect(noComponents).toEqual(['Lat pulldown', 'Cable row']);
+    const pullDay = selectPlanProgressions(progressions, ['Pull (back & arms)']).map(p => p.name);
+    expect(pullDay).toEqual(['Lat pulldown', 'Cable row']);
+  });
 });
 
 describe('buildSessionTargets', () => {
@@ -492,6 +504,18 @@ describe('buildSessionTargets', () => {
       ['Pull (back & arms)', 'core']
     );
     expect(targets.map(t => t.name)).toEqual(['Lat pulldown', 'Pallof press']);
+  });
+
+  it('never surfaces a band exercise in the fallback targets', () => {
+    // Bands are a home-workout last resort, so the deterministic fallback must
+    // not surface one even when it is the plan-relevant, most-trained lift.
+    const targets = buildSessionTargets(
+      [prog('Band row'), prog('Lat pulldown'), prog('Cable row')],
+      ['Pull (back & arms)']
+    );
+    const names = targets.map(t => t.name);
+    expect(names).not.toContain('Band row');
+    expect(names).toEqual(['Lat pulldown', 'Cable row']);
   });
 
   function cardioProg(name: string, sessions: number): ExerciseProgression {
