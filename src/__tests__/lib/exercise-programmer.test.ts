@@ -876,17 +876,112 @@ describe('home session — vocabulary, hash, prompt and stand-ins', () => {
     expect(programmeRowToTarget(standIn).standsInFor).toBe('Seated DB shoulder press');
   });
 
-  it('does not force a dropped gym anchor into a home session (no stand-in given)', () => {
+  it('guarantees a stand-in for a gym anchor the model dropped without one', () => {
     const rows = validateProgramme(
       [
-        { name: 'Band overhead press', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } },
         { name: 'Band lateral raise', kind: 'core', toFailure: false, target: { sets: 3, reps: 15 } },
       ],
       homeInput('home')
     );
-    // The model dropped the anchor and gave no stand-in; guaranteeFixed and
-    // guaranteeGroupCoverage must both refuse to append the gym-only DB press.
+    // The model dropped the anchor and gave no stand-in; guaranteeFixed must
+    // append the canonical home stand-in (Band overhead press) for it — every
+    // anchor/staple is covered on a home day. The gym lift itself never appears.
+    const standIn = rows.find(r => r.standsInFor === 'Seated DB shoulder press');
+    expect(standIn).toBeDefined();
+    expect(standIn!.name).toBe('Band overhead press');
+    expect(standIn!.fixed).toBe('anchor');
+    expect(standIn!.target).toMatchObject({ sets: 3, reps: 12 });
+    expect(standIn!.rationale).toBe('Home stand-in for Seated DB shoulder press.');
     expect(rows.some(r => r.name === 'Seated DB shoulder press')).toBe(false);
+  });
+
+  it('skips a gym anchor that has no known stand-in (never forces gym kit)', () => {
+    const input = buildProgrammerInput(
+      [progression('Press-ups', [{ date: '2026-08-14', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Push (shoulders)',
+        components: ['Push (shoulders)'],
+        venue: 'home',
+        routineDay: {
+          title: 'Push (shoulders)',
+          // A gym-only machine lift with no entry in HOME_STAND_INS.
+          anchors: ['Shoulder press machine'],
+          staples: [],
+        },
+      },
+      '2026-08-21',
+      8
+    );
+    const rows = validateProgramme(
+      [{ name: 'Press-ups', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } }],
+      input
+    );
+    // No stand-in known and can't be done at home → the anchor is simply left out,
+    // never forced in as a machine lift.
+    expect(rows.some(r => /machine/i.test(r.name))).toBe(false);
+    expect(rows.some(r => r.standsInFor === 'Shoulder press machine')).toBe(false);
+  });
+
+  it('offers a built-in home vocabulary on home days, filtered to the day’s focus', () => {
+    const homeNames = homeInput('home').exercises.map(e => e.name);
+    const gymNames = homeInput().exercises.map(e => e.name);
+    // A push bodyweight move is offered as a stub on the home day but not the gym.
+    expect(homeNames).toContain('Diamond press-ups');
+    expect(gymNames).not.toContain('Diamond press-ups');
+    // A leg move is NOT offered on a push day — the palette stays on focus.
+    expect(homeNames).not.toContain('Bulgarian split squat');
+  });
+});
+
+describe('home session — outdoor run', () => {
+  function runHomeInput(over: { venue?: 'home'; targetDistanceKm?: number } = {}): ProgrammerInput {
+    return buildProgrammerInput(
+      [progression('Press-ups', [{ date: '2026-08-14', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Push (shoulders) + Run',
+        components: ['Push (shoulders)', 'Run'],
+        routineDay: { title: 'Push (shoulders) + Run', anchors: [], staples: [] },
+        ...(over.venue ? { venue: over.venue } : {}),
+        ...(over.targetDistanceKm !== undefined ? { targetDistanceKm: over.targetDistanceKm } : {}),
+      },
+      '2026-08-21',
+      8
+    );
+  }
+
+  it('offers an Outdoor run stub and puts the distance in the home block', () => {
+    const input = runHomeInput({ venue: 'home', targetDistanceKm: 4.5 });
+    expect(input.exercises.map(e => e.name)).toContain('Outdoor run');
+    const prompt = buildProgrammerPrompt(input);
+    expect(prompt).toContain('Outdoor run');
+    expect(prompt).toContain('4.5 km');
+    // The home block explicitly tells the model to name the run Outdoor, not
+    // Treadmill.
+    expect(prompt).toContain('never "Treadmill run"');
+  });
+
+  it('renames a treadmill row to Outdoor run and fills the planned distance', () => {
+    const rows = validateProgramme(
+      [
+        // The model slips and names the run "Treadmill run" with no distance.
+        { name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 25 } },
+        { name: 'Press-ups', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } },
+      ],
+      runHomeInput({ venue: 'home', targetDistanceKm: 4.5 })
+    );
+    const run = rows.find(r => r.kind === 'cardio')!;
+    expect(run.name).toBe('Outdoor run');
+    expect(run.target.distanceKm).toBe(4.5);
+  });
+
+  it('folds the run distance into the home hash but never a gym hash', () => {
+    const homeNoDist = programmeHash(runHomeInput({ venue: 'home' }));
+    const homeDist = programmeHash(runHomeInput({ venue: 'home', targetDistanceKm: 4.5 }));
+    expect(homeDist).not.toBe(homeNoDist);
+    // A gym plan is never passed a targetDistanceKm, so gym hashes are unaffected.
+    const gym = programmeHash(runHomeInput());
+    const gymWithDistanceIgnored = programmeHash(runHomeInput());
+    expect(gymWithDistanceIgnored).toBe(gym);
   });
 });
 

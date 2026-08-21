@@ -84,6 +84,13 @@ export async function resolveSessionTargets(
   // input (and therefore the hash) and the deterministic fallback so a home day
   // is programmed from band/bodyweight work, not gym lifts.
   const venue = plan?.venue;
+  // The run distance, threaded in only on a HOME session so the outdoor run keeps
+  // the planned distance (and never on a gym plan, so gym hashes don't move). The
+  // routine title's distance wins when it parses one, else the plan's stored one.
+  const targetDistanceKm =
+    venue === 'home'
+      ? (routineParsed?.targetDistanceKm ?? plan?.targetDistanceKm)
+      : undefined;
 
   // Exclude the target date so "last time" is the previous workout, not a session
   // already logged today.
@@ -98,7 +105,13 @@ export async function resolveSessionTargets(
 
   const input = buildProgrammerInput(
     progressions,
-    { label, components, ...(routineDay ? { routineDay } : {}), ...(venue ? { venue } : {}) },
+    {
+      label,
+      components,
+      ...(routineDay ? { routineDay } : {}),
+      ...(venue ? { venue } : {}),
+      ...(targetDistanceKm !== undefined ? { targetDistanceKm } : {}),
+    },
     date,
     totalSessions,
     goals

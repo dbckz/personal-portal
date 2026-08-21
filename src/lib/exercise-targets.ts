@@ -500,7 +500,13 @@ export function selectPlanProgressions(
   // unfiltered (the model needs them to know what to substitute for).
   const eligible =
     options.venue === 'home'
-      ? progressions.filter(p => isCardioName(p.name) || isHomeStrengthExercise(p.name, p.points))
+      ? // Home: cardio done OUTDOORS (a treadmill is gym kit — dropped), plus band
+        // and bodyweight strength (never gym-only by name, never loaded).
+        progressions.filter(
+          p =>
+            (isCardioName(p.name) && !/treadmill/i.test(p.name)) ||
+            isHomeStrengthExercise(p.name, p.points)
+        )
       : progressions.filter(p => !isBandExercise(p.name));
   if (components.length === 0) return eligible.slice(0, limit);
   const relevant = filterToPlan(eligible, components);

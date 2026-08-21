@@ -99,6 +99,10 @@ export interface ProgrammerPlan {
   // Absent (the default) is a gym session. Folded into the hash only when set, so
   // existing gym-day hashes are unchanged.
   venue?: 'home';
+  // The plan's run distance, threaded in only on a HOME session so the outdoor
+  // run keeps the planned distance. Folded into the hash only when defined, so a
+  // gym day's hash never moves (it is never passed for a gym plan).
+  targetDistanceKm?: number;
 }
 
 // One exercise's history as the model sees it: how often it has appeared (the
@@ -174,6 +178,22 @@ export function buildProgrammerInput(
     extra.push(toProgrammerExerciseFor(name, progressions, totalSessions));
   }
 
+  // On a HOME day, offer a built-in band/bodyweight vocabulary as no-history
+  // stubs so the model can build a full session even though Dave has logged few
+  // home workouts. Filtered to the day's active groups (plus unclassifiable
+  // band/bodyweight accessories) so the palette stays on the day's muscle focus.
+  if (plan.venue === 'home') {
+    const groups = activeGroups([...plan.components, ...(routine ? [routine.title] : [])]);
+    for (const name of HOME_EXERCISES) {
+      const key = exerciseKey(name);
+      if (!key || have.has(key)) continue;
+      const group = classifyExercise(name);
+      if (group !== null && groups.length > 0 && !groups.includes(group)) continue;
+      have.add(key);
+      extra.push(toProgrammerExerciseFor(name, progressions, totalSessions));
+    }
+  }
+
   return { date, plan, exercises: [...vocab, ...extra], ...(goals.length > 0 ? { goals } : {}) };
 }
 
@@ -227,8 +247,13 @@ export function programmeHash(input: ProgrammerInput): string {
     routineDay: routineFingerprint(input.plan.routineDay),
     // Swapping the day to a home session (or back to the gym) must regenerate.
     // Included ONLY when set, so every existing gym-day hash is byte-identical to
-    // before this field existed and its cached programme still applies.
+    // before this field existed and its cached programme still applies. The run
+    // distance rides along (home-only, defined-only) so a change to it regenerates
+    // the home programme without touching any gym hash.
     ...(input.plan.venue ? { venue: input.plan.venue } : {}),
+    ...(input.plan.targetDistanceKm !== undefined
+      ? { targetDistanceKm: input.plan.targetDistanceKm }
+      : {}),
   });
   return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }
@@ -318,19 +343,119 @@ const GOALS_HEADER = `Active goals for this person's training. Where an exercise
 // once and reused by the prompt (and available to tests / the UI if needed).
 export const HOME_EQUIPMENT = 'resistance bands, a pull-up bar and bodyweight only';
 
+// A band/bodyweight stand-in for a gym lift: the movement plus a sensible home
+// target (sets and reps, or seconds for a hold; perSide for unilateral work).
+export interface HomeStandIn {
+  name: string;
+  sets: number;
+  reps?: number;
+  holdSeconds?: number;
+  perSide?: boolean;
+}
+
+// The canonical home stand-ins for the common gym lifts, as rules mapping one or
+// more gym-lift spellings to a single stand-in. This is the single source of
+// truth: it drives the prompt's suggestions AND the server-side guarantee that
+// every routine anchor/staple is covered on a home day (see guaranteeFixed).
+const STAND_IN_RULES: Array<{ gym: string[]; standIn: HomeStandIn }> = [
+  { gym: ['Seated DB shoulder press'], standIn: { name: 'Band overhead press', sets: 3, reps: 12 } },
+  { gym: ['Incline DB press'], standIn: { name: 'Pike press-ups', sets: 3, reps: 8 } },
+  {
+    gym: ['Flat DB press', 'Converging chest press', 'Chest press'],
+    standIn: { name: 'Press-ups', sets: 3, reps: 12 },
+  },
+  {
+    gym: ['Wide-grip lat pulldown', 'Neutral-grip lat pulldown', 'Lat pulldown'],
+    standIn: { name: 'Pull-ups or band-assisted pull-ups', sets: 3, reps: 6 },
+  },
+  {
+    gym: ['Chest-supported DB row', 'Seated cable row', 'Cable row'],
+    standIn: { name: 'Band rows', sets: 3, reps: 12 },
+  },
+  { gym: ['Leg press'], standIn: { name: 'Reverse lunge', sets: 3, reps: 10, perSide: true } },
+  { gym: ['Seated leg curl'], standIn: { name: 'Glute bridge', sets: 3, reps: 15 } },
+  {
+    gym: ['Cable lateral raise', 'DB lateral raise'],
+    standIn: { name: 'Band lateral raise', sets: 3, reps: 15 },
+  },
+  {
+    gym: ['Cable pushdown', 'Cable tricep pushdown'],
+    standIn: { name: 'Band tricep pressdowns or overhead extensions', sets: 3, reps: 12 },
+  },
+];
+
+// The stand-in map keyed by the exerciseKey of each gym lift, so a routine
+// anchor/staple (however spelled) can be looked up and covered. Exported for the
+// prompt, the guarantee and tests.
+export const HOME_STAND_INS: Record<string, HomeStandIn> = STAND_IN_RULES.reduce(
+  (acc, rule) => {
+    for (const gym of rule.gym) {
+      const key = exerciseKey(gym);
+      if (key) acc[key] = rule.standIn;
+    }
+    return acc;
+  },
+  {} as Record<string, HomeStandIn>
+);
+
+// A built-in band/bodyweight vocabulary offered as no-history stubs on home days,
+// so the model has enough to build a full session even though Dave has logged few
+// home workouts. The stand-in movements plus a spread of common band/bodyweight
+// and core work; 'Outdoor run' so a home run has a name to use.
+export const HOME_EXERCISES: string[] = [
+  ...STAND_IN_RULES.map(r => r.standIn.name),
+  'Band face pulls',
+  'Band pull-aparts',
+  'Band front raise',
+  'Band curls',
+  'Dead hang',
+  'Plank',
+  'Side plank',
+  'Dead bug',
+  'Press-ups',
+  'Slow push-ups',
+  'Diamond press-ups',
+  'Pike press-ups',
+  'Bulgarian split squat',
+  'Bodyweight squat',
+  'Glute bridge',
+  'Reverse lunge',
+  'Calf raise',
+  'Outdoor run',
+];
+
+// The stand-in suggestion lines for the prompt, rendered from the canonical map.
+function standInSuggestions(): string {
+  return STAND_IN_RULES.map(r => {
+    const vol = r.standIn.holdSeconds
+      ? `${r.standIn.sets}×${r.standIn.holdSeconds}s`
+      : `${r.standIn.sets}×${r.standIn.reps}`;
+    const side = r.standIn.perSide ? ' each side' : '';
+    return `    - ${r.gym[0]} → ${r.standIn.name} (${vol}${side})`;
+  }).join('\n');
+}
+
 // The home-session block: appended to the prompt when the day has been swapped to
-// a home workout. It reverses the band rule, fixes the equipment, and asks the
-// model to substitute a band/bodyweight stand-in for each gym anchor/staple while
-// holding the day's muscle focus and its cardio piece.
-function buildHomeBlock(day?: ProgrammerRoutineDay): string {
+// a home workout. It reverses the band rule, fixes the equipment, gives the
+// canonical stand-ins, moves cardio outdoors, and asks for a full session that
+// holds the day's muscle focus.
+function buildHomeBlock(
+  day: ProgrammerRoutineDay | undefined,
+  targetDistanceKm: number | undefined
+): string {
   const anchors = day ? [...day.anchors, ...day.staples] : [];
+  const runTarget = targetDistanceKm
+    ? `target ${targetDistanceKm} km as the run's distanceKm`
+    : "match the plan's distance";
   const lines: string[] = [
     `HOME SESSION — this session is done at home. Equipment is ${HOME_EQUIPMENT}. This overrides the band rule above: bands and bodyweight are now your PRIMARY tools.`,
     'Never programme a machine, cable, dumbbell or barbell lift — none of that exists here.',
-    "For each REQUIRED routine anchor/staple that needs gym equipment, programme the closest home stand-in and set \"standsInFor\" to that anchor's exact name. Good stand-ins: band overhead press for seated DB shoulder press; pike press-ups for incline DB press; band rows or pull-ups for lat pulldown and machine rows; reverse lunges or glute bridges for leg press and leg curl.",
+    "For each REQUIRED routine anchor/staple that needs gym equipment, programme the closest home stand-in and set \"standsInFor\" to that anchor's exact name. Canonical stand-ins:",
+    standInSuggestions(),
     'Band and bodyweight targets use sets and reps (or holdSeconds for a hold) — no weightKg.',
+    `Cardio is done outdoors — name the run "Outdoor run" (never "Treadmill run") and ${runTarget}.`,
     "Keep the day's muscle focus (a Push day stays push — do not bolt on core unless the routine day already has core staples).",
-    'Keep the same run/cardio piece as planned — running needs no equipment.',
+    'Build a FULL session — aim for the same number of rows a gym session of this day would have, typically 6–8, all within the day’s muscle focus.',
     'Still finish on exactly ONE safe to-failure row.',
   ];
   if (anchors.length) {
@@ -372,7 +497,10 @@ export function buildProgrammerPrompt(input: ProgrammerInput): string {
     ? `Components: ${input.plan.components.join(', ')}`
     : 'Components: (none recorded)';
   const routine = input.plan.routineDay ? `\n\n${buildRoutineBlock(input.plan.routineDay)}` : '';
-  const home = input.plan.venue === 'home' ? `\n\n${buildHomeBlock(input.plan.routineDay)}` : '';
+  const home =
+    input.plan.venue === 'home'
+      ? `\n\n${buildHomeBlock(input.plan.routineDay, input.plan.targetDistanceKm)}`
+      : '';
   const exercises = input.exercises.map(exerciseBlock).join('\n');
   const goals =
     input.goals && input.goals.length > 0
@@ -465,14 +593,19 @@ export function validateProgramme(
     }
   }
 
+  const home = input.plan.venue === 'home';
+
   const rows: ProgrammeRow[] = [];
   const seen = new Set<string>();
   // At most one cardio piece per session: the first survives, the rest are
   // dropped so a day never carries two runs.
   let sawCardio = false;
   for (const record of records) {
-    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    let name = typeof record.name === 'string' ? record.name.trim() : '';
     if (!name) continue;
+    // At home there is no treadmill: any treadmill row is the outdoor run, so
+    // rename it (and recompute its key) before looking it up.
+    if (home && /treadmill/i.test(name)) name = 'Outdoor run';
     const key = exerciseKey(name);
     const known = byKey.get(key);
     if (!known || seen.has(key)) continue; // unknown or duplicate exercise
@@ -489,6 +622,15 @@ export function validateProgramme(
       record.target,
       kind === 'cardio' ? { name: known.name, recent: known.recent } : undefined
     );
+    // A home run keeps the plan's distance when the model omitted one.
+    if (
+      home &&
+      kind === 'cardio' &&
+      input.plan.targetDistanceKm !== undefined &&
+      target.distanceKm === undefined
+    ) {
+      target.distanceKm = input.plan.targetDistanceKm;
+    }
     const rationale =
       typeof record.rationale === 'string' && record.rationale.trim()
         ? record.rationale.trim().slice(0, 200)
@@ -676,11 +818,41 @@ function guaranteeFixed(
       if (!key || seen.has(key)) continue;
       const known = byKey.get(key);
       if (!known) continue; // buildProgrammerInput guarantees it, but stay safe
-      // Home: never force a gym anchor/staple into the session (it can't be done
-      // at home — by name or by a loaded history), and skip one a stand-in
-      // already covers. The prompt asks the model to substitute for every gym
-      // anchor, so this is the rare fallback where it dropped one entirely.
-      if (home && (standInKeys.has(key) || !isHomeExercise(known))) continue;
+
+      if (home) {
+        // Already covered by a model stand-in — nothing to add.
+        if (standInKeys.has(key)) continue;
+        const canDoAtHome = isHomeExercise(known);
+        // A gym lift that can't be done at home: cover it with its canonical home
+        // stand-in (badged as the fixed lift by markFixed). This GUARANTEES every
+        // anchor/staple is covered on a home day, however the model behaved.
+        if (!canDoAtHome) {
+          const mapping = HOME_STAND_INS[key];
+          if (!mapping) continue; // no stand-in known — the only case we skip
+          const standKey = exerciseKey(mapping.name);
+          seen.add(key);
+          if (!standKey || seen.has(standKey)) continue;
+          seen.add(standKey);
+          out.push({
+            name: mapping.name,
+            key: standKey,
+            kind: 'core',
+            toFailure: false,
+            standsInFor: name,
+            target: {
+              sets: mapping.sets,
+              ...(mapping.reps !== undefined ? { reps: mapping.reps } : {}),
+              ...(mapping.holdSeconds !== undefined ? { holdSeconds: mapping.holdSeconds } : {}),
+              ...(mapping.perSide ? { perSide: true } : {}),
+            },
+            rationale: `Home stand-in for ${name}.`,
+            lastSummary: 'no history',
+          });
+          continue;
+        }
+        // Otherwise it is a band/bodyweight fixed lift — append it as normal below.
+      }
+
       seen.add(key);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({
