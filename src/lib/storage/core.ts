@@ -19,6 +19,7 @@ import type {
   MeetingPrepDecision,
   WeeklyStatsRecord,
   EventAttributionRule,
+  BoardTaskState,
 } from '@/types';
 
 export const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -167,6 +168,10 @@ export interface UserData {
   // Dave's standing weekly training routine — the repeating shape of the week the
   // plan is built from. Seeded and read/written through lib/storage/weekly-routine.
   weeklyRoutine?: WeeklyRoutineDay[];
+  // Per-task status for the weekly task board, keyed by BoardTaskState.key (the
+  // week-suffixed key for rituals, the plain card key for asana/adhoc). See
+  // lib/storage/board and lib/board.
+  boardTasks?: Record<string, BoardTaskState>;
 }
 
 export interface DailyReviewState {
@@ -238,6 +243,7 @@ const DEFAULT_USER_DATA: UserData = {
   exerciseSyncState: {},
   dailyReviewState: {},
   weeklyRoutine: [],
+  boardTasks: {},
 };
 
 export async function getUserData(): Promise<UserData> {
@@ -310,6 +316,16 @@ export async function getUserData(): Promise<UserData> {
       exerciseSyncState: parsed.exerciseSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
       weeklyRoutine: parsed.weeklyRoutine || [],
+      // Tolerant load: keep only well-formed { status } entries keyed by string.
+      boardTasks: Object.fromEntries(
+        Object.entries(parsed.boardTasks || {}).filter(
+          ([k, v]) =>
+            typeof k === 'string' &&
+            !!v &&
+            typeof v === 'object' &&
+            typeof (v as BoardTaskState).status === 'string'
+        )
+      ),
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into

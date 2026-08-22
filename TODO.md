@@ -53,3 +53,10 @@
 - Reflection reminder: month/quarter-end browser nudge mirroring the weekly
   review nudge (once per period, 17:00+ working days, suppressed once the
   reflection is done).
+- Mobile Board placement: exposed as a segmented "Timeline | Board" toggle at
+  the top of the Day tab (not a 7th tab bar entry). Reasoning: seven tabs at
+  ~360px give ~51px per tab, below the ~60px the existing single-word labels
+  ("Reminders", "Wellbeing") already use without wrapping/ellipsis, so a 7th tab
+  risks clipping them. The toggle keeps the tab bar intact and sits the weekly
+  board next to the day's planning. `dayMode` state lives in MobileShell; the
+  coloured header's day-nav is hidden in board mode.

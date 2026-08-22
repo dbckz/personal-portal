@@ -16,7 +16,7 @@ import { useTasks } from '@/hooks/useTasks';
 import { useTimeAttribution } from '@/hooks/useTimeAttribution';
 import { useToast } from '@/hooks/useToast';
 import { DelegateModal } from '@/components/DelegateModal';
-import { CalendarEvent, DelegationQueueEntry, SettingsResponse } from '@/types';
+import { CalendarEvent, CustomTaskType, DelegationQueueEntry, SettingsResponse } from '@/types';
 import { MOBILE_COLOR_SCHEMES, MobileHeader } from './components/MobileHeader';
 import { MOBILE_TABS, MobileTab, MobileTabBar } from './components/MobileTabBar';
 import { EventDetailSheet } from './components/EventDetailSheet';
@@ -29,6 +29,7 @@ import { MobileDailyReviewFlow, type MobileReviewEntry } from './components/Mobi
 import { CommandCenterTab } from './tabs/CommandCenterTab';
 import { MobilePlanWeekWizard } from './plan-week/MobilePlanWeekWizard';
 import { DayTab } from './tabs/DayTab';
+import { MobileBoardTab } from './tabs/MobileBoardTab';
 import { RemindersTab } from './tabs/RemindersTab';
 import { ExerciseTab } from './tabs/ExerciseTab';
 import { GoalsTab } from './tabs/GoalsTab';
@@ -74,6 +75,10 @@ export function MobileShell() {
     }
   }, []);
 
+  // The Day tab shows either the day's timeline or the weekly task board.
+  const [dayMode, setDayMode] = useState<'timeline' | 'board'>('timeline');
+  const [customTypes, setCustomTypes] = useState<CustomTaskType[]>([]);
+
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [now, setNow] = useState(() => new Date());
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
@@ -102,7 +107,7 @@ export function MobileShell() {
   // Which planning flow is open over the shell, if any.
   const [reviewEntry, setReviewEntry] = useState<MobileReviewEntry | null>(null);
 
-  const { getTasksForDate, addTask } = useTasks();
+  const { tasks: adHocTasks, getTasksForDate, addTask, updateTask } = useTasks();
   const {
     googleEvents,
     allAsanaTasks,
@@ -155,6 +160,13 @@ export function MobileShell() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // Custom ad-hoc task types, for the board's add-task type picker.
+  useEffect(() => {
+    api.getCustomTaskTypes()
+      .then(({ customTypes: types }) => setCustomTypes(types))
+      .catch(err => console.error('Failed to load custom task types:', err));
+  }, []);
 
   const loadWeekState = useCallback(() => {
     api.getWeekState()
@@ -704,12 +716,12 @@ export function MobileShell() {
     <div className="min-h-dvh touch-manipulation bg-slate-100 text-gray-950">
       <MobileHeader
         colorScheme={colorScheme}
-        subtitle={TAB_SUBTITLES[activeTab]}
+        subtitle={activeTab === 'day' && dayMode === 'board' ? 'Task Board' : TAB_SUBTITLES[activeTab]}
         googleEvents={googleEvents}
         onRefresh={handleRefresh}
         isRefreshing={showLoading}
       >
-        {activeTab === 'day' && (
+        {activeTab === 'day' && dayMode === 'timeline' && (
           <>
             <div className="mt-4 flex items-center gap-2">
               <button
@@ -785,19 +797,58 @@ export function MobileShell() {
         )}
 
         {activeTab === 'day' && (
-          <DayTab
-            selectedDate={selectedDate}
-            now={now}
-            events={dayEvents}
-            dueTodayTasks={dueTodayTasks}
-            isLoading={showLoading}
-            onSelectEvent={handleSelectEvent}
-            onSelectTask={handleOpenTask}
-            onCreateEvent={connectedGoogleIntegrations.length > 0 ? handleCreateEvent : undefined}
-            onScheduleTask={handleScheduleTask}
-            onMoveEvent={handleMoveEvent}
-            onUnscheduleEvent={handleUnscheduleEvent}
-          />
+          <>
+            <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-200/70 p-1">
+              <button
+                type="button"
+                onClick={() => setDayMode('timeline')}
+                className={`h-9 rounded-md text-sm font-medium transition-colors ${
+                  dayMode === 'timeline' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 active:text-gray-700'
+                }`}
+              >
+                Timeline
+              </button>
+              <button
+                type="button"
+                onClick={() => setDayMode('board')}
+                className={`h-9 rounded-md text-sm font-medium transition-colors ${
+                  dayMode === 'board' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 active:text-gray-700'
+                }`}
+              >
+                Board
+              </button>
+            </div>
+
+            {dayMode === 'timeline' ? (
+              <DayTab
+                selectedDate={selectedDate}
+                now={now}
+                events={dayEvents}
+                dueTodayTasks={dueTodayTasks}
+                isLoading={showLoading}
+                onSelectEvent={handleSelectEvent}
+                onSelectTask={handleOpenTask}
+                onCreateEvent={connectedGoogleIntegrations.length > 0 ? handleCreateEvent : undefined}
+                onScheduleTask={handleScheduleTask}
+                onMoveEvent={handleMoveEvent}
+                onUnscheduleEvent={handleUnscheduleEvent}
+              />
+            ) : (
+              <MobileBoardTab
+                asanaTasks={incompleteAsanaTasks}
+                adHocTasks={adHocTasks}
+                scheduledAsanaTasks={scheduledAsanaTasks}
+                metadataByGid={metadataByGid}
+                customTypes={customTypes}
+                saveMetadata={saveMetadata}
+                onCompleteAsana={(gid, integrationId, completed) =>
+                  completeAsanaTask(gid, integrationId, completed).then(() => {})
+                }
+                onUpdateAdhoc={updateTask}
+                onCreateAdhoc={handleCreateAdhoc}
+              />
+            )}
+          </>
         )}
 
         {activeTab === 'goals' && (

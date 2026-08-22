@@ -11,6 +11,7 @@ import { MusicSection } from '@/components/sections/MusicSection';
 import { RelationshipsSection } from '@/components/sections/RelationshipsSection';
 import { WellbeingSection } from '@/components/sections/WellbeingSection';
 import { ProjectsTab } from '@/components/sections/work/ProjectsTab';
+import { BoardTab } from '@/components/sections/work/BoardTab';
 import {
   DEFAULT_SECTION_ID,
   defaultSubTab,
@@ -109,11 +110,12 @@ const COLOR_SCHEMES = [
   },
 ];
 
-type WorkTab = 'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'projects' | 'analysis';
+type WorkTab = 'dashboard' | 'calendar' | 'board' | 'rituals' | 'reminders' | 'projects' | 'analysis';
 
 const WORK_TABS: WorkTab[] = [
   'dashboard',
   'calendar',
+  'board',
   'rituals',
   'reminders',
   'projects',
@@ -1470,6 +1472,19 @@ export default function Home() {
               onReturnToAiQueue={handleReturnToAiQueue}
             />
           )}
+        </div>
+      ) : activeTab === 'board' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <BoardTab
+            asanaTasks={allAsanaTasks}
+            adHocTasks={allAdhocTasks}
+            scheduledAsanaTasks={scheduledAsanaTasks}
+            metadataByGid={metadataByGid}
+            saveMetadata={saveMetadata}
+            completeAsanaTask={completeAsanaTask}
+            addTask={addTask}
+            updateTask={updateTask}
+          />
         </div>
       ) : activeTab === 'rituals' ? (
         <div className="flex-1 overflow-y-auto">

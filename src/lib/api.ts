@@ -1,7 +1,8 @@
 // API utilities with retry logic and proper typing
 
 import { EventAttributionRule } from '@/types';
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate, WeeklyTaskOutcomeKind } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, BoardStatus, BoardTaskState, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate, WeeklyTaskOutcomeKind } from '@/types';
+import type { RitualBlock } from '@/lib/storage/core';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanConversion, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
@@ -305,6 +306,19 @@ export interface WaitingTask {
   integrationId: string;
   title: string;
   portalDoneAt?: string; // ISO — when it was flagged
+}
+
+// The local stores the weekly task board needs for a week (see GET /api/board).
+// Live Asana tasks + task metadata are fetched separately and combined with
+// this via buildBoardCards.
+export interface BoardResponse {
+  weekStart: string; // yyyy-MM-dd Monday (the requested date normalised)
+  states: Record<string, BoardTaskState>;
+  ritualBlocks: RitualBlock[]; // this week's ritual blocks (lib excludes furniture)
+  scheduledAsanaTasks: ScheduledAsanaTask[]; // this week's scheduled Asana blocks
+  adHocTasks: AdHocTask[]; // all ad-hoc tasks (lib decides inclusion per week)
+  portalDoneGids: string[]; // gids flagged portal-done → Waiting
+  startedTaskIds: string[]; // weekly-stats 'started' this week → In progress
 }
 
 // One portal-done ("waiting on others") task surfaced in the end-of-week review.
@@ -1416,6 +1430,33 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asanaTaskGid, integrationId, ...updates }),
+    });
+  },
+
+  // Weekly task board: the local stores for a week (normalised to its Monday).
+  async getBoard(weekStart?: string): Promise<BoardResponse> {
+    const url = weekStart
+      ? `/api/board?weekStart=${encodeURIComponent(weekStart)}`
+      : '/api/board';
+    return fetchWithRetry<BoardResponse>(url);
+  },
+
+  // Weekly task board: upsert one card's status. Dumb persistence only — status
+  // side effects (complete in Asana, flag portal-done) are done via the other
+  // api methods in useBoard.
+  async setBoardStatus(args: {
+    stateKey: string;
+    key: string;
+    status: BoardStatus;
+    weekStart?: string;
+    title?: string;
+    typeLabel?: string;
+    integrationId?: string;
+  }): Promise<{ state: BoardTaskState }> {
+    return fetchWithRetry<{ state: BoardTaskState }>('/api/board/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
     });
   },
 

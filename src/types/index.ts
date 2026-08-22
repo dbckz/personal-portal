@@ -1,5 +1,8 @@
 // Core types for the daily planner app
 
+// Weekly task board types (BoardStatus, BOARD_COLUMNS, BoardTaskState, BoardCard).
+export * from './board';
+
 export interface CalendarEvent {
   id: string;
   title: string;

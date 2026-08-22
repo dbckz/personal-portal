@@ -38,6 +38,7 @@ export const LIFE_SECTIONS: LifeSection[] = [
     subTabs: [
       { id: 'dashboard', label: 'Command Center', icon: 'LayoutDashboard' },
       { id: 'calendar', label: 'Daily Calendar', icon: 'Calendar' },
+      { id: 'board', label: 'Board', icon: 'Kanban' },
       { id: 'rituals', label: 'Rituals', icon: 'Repeat' },
       { id: 'reminders', label: 'Reminders', icon: 'Bell' },
       { id: 'projects', label: 'Projects', icon: 'FolderGit2' },

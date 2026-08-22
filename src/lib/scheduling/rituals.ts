@@ -186,7 +186,7 @@ export function isRitualTitle(title: string): boolean {
 
 // Drop any leading pictographs / variation selectors / ZWJs and surrounding
 // whitespace, so "📧 Emails", "Emails" and " emails " all reduce to "emails".
-function ritualBaseName(title: string): string {
+export function ritualBaseName(title: string): string {
   return title
     .replace(/^[\s\p{Extended_Pictographic}️‍]+/u, '')
     .trim()
