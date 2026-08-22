@@ -80,7 +80,7 @@ export function BoardTab({
     [updateTask]
   );
 
-  const { cards, isLoading, error, moveCard, pinToWeek, busyKeys } = useBoard({
+  const { cards, isLoading, error, moveCard, toggleMember, pinToWeek, busyKeys } = useBoard({
     weekStart,
     asanaTasks,
     adHocTasks,
@@ -97,8 +97,8 @@ export function BoardTab({
     const byDate: Record<string, number> = {};
     let unplanned = 0;
     for (const card of cards) {
-      if (card.plannedDates.length === 0) unplanned += 1;
-      for (const date of card.plannedDates) byDate[date] = (byDate[date] ?? 0) + 1;
+      if (!card.date) unplanned += 1;
+      else byDate[card.date] = (byDate[card.date] ?? 0) + 1;
     }
     return { all: cards.length, unplanned, byDate };
   }, [cards]);
@@ -210,9 +210,9 @@ export function BoardTab({
               label={col.label}
               status={col.id}
               cards={cardsByStatus[col.id]}
-              weekStart={weekStart}
               busyKeys={busyKeys}
               onMove={moveCard}
+              onToggleMember={toggleMember}
               onCardDragStart={setDraggingCard}
               onCardDragEnd={() => setDraggingCard(null)}
               draggingCard={draggingCard}

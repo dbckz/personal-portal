@@ -1,7 +1,9 @@
-// Weekly task board types. A kanban-style view over the same tasks the
-// calendar schedules — every task is a card in one of four status columns,
-// filterable by day of the week. See src/lib/board.ts for how cards are built
-// and src/lib/storage/board.ts for the persisted per-task status.
+// Weekly task board types. The board mirrors the calendar: every app-created
+// WORK block for a week is one card, filterable by day of the week, in one of
+// four status columns. A single-task block is one card; a grouped block (several
+// Asana/ad-hoc tasks sharing one calendar event) is one card with its member
+// tasks listed underneath. See src/lib/board.ts for how cards are built and
+// src/lib/storage/board.ts for the persisted per-card status.
 
 // The four board columns, in display order.
 export type BoardStatus = 'todo' | 'in_progress' | 'waiting' | 'done';
@@ -15,10 +17,10 @@ export const BOARD_COLUMNS: Array<{ id: BoardStatus; label: string }> = [
 
 // Persisted board status for one card (UserData.boardTasks, keyed by `key`).
 //
-// `key` is the storage key: for rituals it carries the week suffix
-// (`ritual:<base>:<weekStart>`) because a recurring card's status is per week;
-// for asana/adhoc it is the plain card key (`asana:<gid>` / `adhoc:<id>`), so
-// the status follows the task across weeks.
+// `key` is the storage key (=== the card key). It is stable across weeks only
+// for pinned Asana cards (`asana:<gid>`, which also carry `weekStart`); every
+// calendar-backed card is keyed by its Google event id (`block:<id>`), so its
+// status is inherently per-occurrence.
 export interface BoardTaskState {
   key: string;
   status: BoardStatus;
@@ -33,35 +35,57 @@ export interface BoardTaskState {
   updatedAt: string;
 }
 
-// A block backing a card — a planned occurrence on a day.
-export interface BoardCardBlock {
-  date: string; // yyyy-MM-dd
-  start?: string; // HH:mm
-  durationMinutes?: number;
-  googleEventId?: string;
+// What backs a card:
+//  * 'task'      — a single-task block (one Asana or ad-hoc task).
+//  * 'group'     — a grouped block: several member tasks under one calendar event.
+//  * 'ritual'    — a WORK ritual block (emails, kindle notes, grooming, …).
+//  * 'prep'      — a meeting-prep block.
+//  * 'unplanned' — a task with no block this week (a pinned Asana task, or an
+//                  ad-hoc task with no due date).
+export type BoardCardSource = 'task' | 'group' | 'ritual' | 'prep' | 'unplanned';
+
+// One member task of a card. A 'task' card has exactly one; a 'group' has two or
+// more; ritual/prep cards have none. `key` is a stable React key (the scheduled-
+// record id for Asana members, the ad-hoc task id for ad-hoc members).
+export interface BoardCardMember {
+  key: string;
+  source: 'asana' | 'adhoc';
+  title: string;
+  done: boolean;
+  // Portal-done ("waiting on others"): the user's part is finished but the Asana
+  // task waits on someone else. Only Asana members can be portal-done.
+  portalDone?: boolean;
+  gid?: string; // asana
+  integrationId?: string; // asana
+  adhocId?: string; // ad-hoc
+  typeLabel?: string;
+  projectName?: string;
 }
 
-// The client-side view model for a card, built by buildBoardCards.
+// The client-side view model for a card, built by buildBoardCards. A card is one
+// calendar block (or one task with no block this week), reconstructed from the
+// local stores + live Asana tasks.
 export interface BoardCard {
-  key: string; // BoardCardKey (without week suffix)
-  stateKey: string; // key used in boardTasks (with week suffix for rituals)
-  source: 'asana' | 'adhoc' | 'ritual';
-  title: string;
-  typeLabel?: string; // 'Writing/Deep Work', 'Email', 'Batch' …
+  key: string; // block identity (see BoardTaskState.key)
+  stateKey: string; // === key
+  source: BoardCardSource;
+  title: string; // the reconstructed calendar-event title
+  typeLabel?: string;
   typeEmoji?: string;
   status: BoardStatus;
   statusSource: 'explicit' | 'derived';
-  recurring: boolean; // ritual cards
-  cadence?: 'daily' | 'weekly';
-  // Planned dates, sorted by date then start.
-  blocks: BoardCardBlock[];
-  plannedDates: string[]; // distinct dates from blocks (sorted)
-  totalMinutes: number;
-  // identity for actions
+  // The block — a single occurrence, not an array. Absent for unplanned cards.
+  date?: string; // yyyy-MM-dd
+  start?: string; // HH:mm
+  durationMinutes?: number;
+  googleEventId?: string;
+  // 1 for task blocks, N for groups, 0 for ritual/prep.
+  members: BoardCardMember[];
+  // Convenience for single-task / pinned-asana cards.
+  projectName?: string;
+  priority?: 'low' | 'medium' | 'high';
+  dueOn?: string;
   gid?: string;
   integrationId?: string;
   adhocId?: string;
-  projectName?: string; // asana first project
-  priority?: 'low' | 'medium' | 'high'; // adhoc
-  dueOn?: string; // asana due date
 }

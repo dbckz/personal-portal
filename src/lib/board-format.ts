@@ -1,11 +1,9 @@
 // Pure, I/O-free formatting helpers shared by the desktop and mobile weekly
-// task boards. Kept out of the components so the label logic (planned-date
-// labels, day-letter chips, the week-range label) is unit-tested in isolation
-// and the two views cannot drift apart. Everything works on
+// task boards. Kept out of the components so the label logic (the card's
+// date/time chip, the week-range label, the day-filter chips) is unit-tested in
+// isolation and the two views cannot drift apart. Everything works on
 // yyyy-MM-dd strings built from local parts, so a bare date never drifts across
 // a timezone boundary.
-
-import type { BoardCardBlock } from '@/types';
 
 const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const MONTH_ABBR = [
@@ -61,12 +59,17 @@ export function shortDayLabel(dateStr: string, withMonth = false): string {
   return withMonth ? `${base} ${MONTH_ABBR[d.getMonth()]}` : base;
 }
 
-// A single block's planned-date chip: "Tue 19", "Tue 19 · 09:00", or
-// "Tue 19 · 09:00 · 45m".
-export function plannedBlockLabel(block: BoardCardBlock): string {
-  const parts = [shortDayLabel(block.date)];
-  if (block.start) parts.push(block.start);
-  if (block.durationMinutes) parts.push(formatDuration(block.durationMinutes));
+// A card's date/time chip: "Tue 19", "Tue 19 · 09:00", or
+// "Tue 19 · 09:00 · 45m". Returns null when the card has no date (unplanned).
+export function boardWhenLabel(when: {
+  date?: string;
+  start?: string;
+  durationMinutes?: number;
+}): string | null {
+  if (!when.date) return null;
+  const parts = [shortDayLabel(when.date)];
+  if (when.start) parts.push(when.start);
+  if (when.durationMinutes) parts.push(formatDuration(when.durationMinutes));
   return parts.join(' · ');
 }
 
@@ -78,23 +81,6 @@ export function weekRangeLabel(weekStart: string): string {
   const endD = dateFromStr(end);
   const sameMonth = startD.getMonth() === endD.getMonth() && startD.getFullYear() === endD.getFullYear();
   return `${shortDayLabel(weekStart, !sameMonth)} – ${shortDayLabel(end, true)}`;
-}
-
-export interface DayLetterChip {
-  date: string; // yyyy-MM-dd
-  letter: string; // M T W T F S S
-  filled: boolean; // a planned date falls on this day
-}
-
-// Mon..Sun day-letter chips for a recurring card, each marked filled when the
-// card is planned on that day.
-export function dayLetterChips(weekStart: string, plannedDates: string[]): DayLetterChip[] {
-  const planned = new Set(plannedDates);
-  return weekDates(weekStart).map((date, i) => ({
-    date,
-    letter: DAY_LETTERS[i],
-    filled: planned.has(date),
-  }));
 }
 
 export interface DayFilterChip {

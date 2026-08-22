@@ -9,6 +9,7 @@ import { MobileBoardTab } from '@/app/mobile/tabs/MobileBoardTab';
 // Control the board contents by mocking the hook; buildBoardCards is covered by
 // its own lib tests.
 const moveCard = jest.fn().mockResolvedValue(undefined);
+const toggleMember = jest.fn().mockResolvedValue(undefined);
 const pinToWeek = jest.fn().mockResolvedValue(undefined);
 let mockCards: BoardCard[] = [];
 
@@ -19,6 +20,7 @@ jest.mock('@/hooks/useBoard', () => ({
     error: null,
     reload: jest.fn(),
     moveCard,
+    toggleMember,
     pinToWeek,
     busyKeys: new Set<string>(),
   }),
@@ -30,14 +32,11 @@ function makeCard(overrides: Partial<BoardCard>): BoardCard {
   return {
     key: 'adhoc:x',
     stateKey: 'adhoc:x',
-    source: 'adhoc',
+    source: 'unplanned',
     title: 'A task',
     status: 'todo',
     statusSource: 'derived',
-    recurring: false,
-    blocks: [],
-    plannedDates: [],
-    totalMinutes: 0,
+    members: [],
     ...overrides,
   };
 }
@@ -61,6 +60,7 @@ function renderTab() {
 describe('MobileBoardTab', () => {
   beforeEach(() => {
     moveCard.mockClear();
+    toggleMember.mockClear();
     pinToWeek.mockClear();
   });
 
@@ -74,7 +74,7 @@ describe('MobileBoardTab', () => {
 
   it('narrows the visible cards when the day filter changes', () => {
     mockCards = [
-      makeCard({ key: 'adhoc:planned', stateKey: 'adhoc:planned', title: 'Planned task', plannedDates: [weekStart], blocks: [{ date: weekStart }] }),
+      makeCard({ key: 'adhoc:planned', stateKey: 'adhoc:planned', source: 'task', title: 'Planned task', date: weekStart }),
       makeCard({ key: 'adhoc:floating', stateKey: 'adhoc:floating', title: 'Floating task' }),
     ];
     renderTab();
@@ -90,7 +90,7 @@ describe('MobileBoardTab', () => {
   });
 
   it('calls moveCard when a status button is tapped in the card sheet', async () => {
-    const card = makeCard({ key: 'adhoc:go', stateKey: 'adhoc:go', title: 'Draft the report', status: 'todo', adhocId: 'go' });
+    const card = makeCard({ key: 'adhoc:go', stateKey: 'adhoc:go', source: 'task', title: 'Draft the report', status: 'todo', adhocId: 'go' });
     mockCards = [card];
     renderTab();
 
@@ -102,5 +102,28 @@ describe('MobileBoardTab', () => {
     fireEvent.click(doneButton);
 
     await waitFor(() => expect(moveCard).toHaveBeenCalledWith(card, 'done'));
+  });
+
+  it('calls toggleMember when a member is tapped in a group card sheet', async () => {
+    const card = makeCard({
+      key: 'block:evg',
+      stateKey: 'block:evg',
+      source: 'group',
+      title: '🤝 Engagement/Outreach',
+      status: 'todo',
+      members: [
+        { key: 's1', source: 'asana', title: 'Email the funder', done: false, gid: 'g1', integrationId: 'om' },
+        { key: 's2', source: 'asana', title: 'Call the partner', done: false, gid: 'g2', integrationId: 'om' },
+      ],
+    });
+    mockCards = [card];
+    renderTab();
+
+    // Open the group card's sheet.
+    fireEvent.click(screen.getByRole('button', { name: /Engagement\/Outreach/ }));
+
+    // Tapping a member ticks it done through toggleMember.
+    fireEvent.click(screen.getByRole('button', { name: /Email the funder/ }));
+    await waitFor(() => expect(toggleMember).toHaveBeenCalledWith(card, card.members[0]));
   });
 });

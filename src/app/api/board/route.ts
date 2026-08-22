@@ -6,6 +6,7 @@ import {
   getScheduledAsanaTasks,
   getAdHocTasks,
   getRitualBlocks,
+  getPrepBlocks,
   getAllTaskMetadata,
   getWeeklyStats,
   getBlockDoneOverrides,
@@ -41,12 +42,13 @@ export async function GET(request: NextRequest) {
     );
     const inWeek = (date?: string) => !!date && date >= weekStart && date <= weekEnd;
 
-    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, metadata, weekStats, blockDone] =
+    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, prepBlocksAll, metadata, weekStats, blockDone] =
       await Promise.all([
         getBoardTaskStates(),
         getScheduledAsanaTasks(),
         getAdHocTasks(),
         getRitualBlocks(),
+        getPrepBlocks(),
         getAllTaskMetadata(),
         getWeeklyStats(weekStart),
         getBlockDoneOverrides(),
@@ -54,6 +56,7 @@ export async function GET(request: NextRequest) {
 
     const scheduledAsanaTasks = scheduledAsanaAll.filter(s => inWeek(s.scheduledDate));
     const ritualBlocks = ritualBlocksAll.filter(r => inWeek(r.date));
+    const prepBlocks = prepBlocksAll.filter(p => inWeek(p.date));
     const portalDoneGids = Object.entries(metadata)
       .filter(([, m]) => m?.portalDone)
       .map(([gid]) => gid);
@@ -83,6 +86,7 @@ export async function GET(request: NextRequest) {
       weekStart,
       states,
       ritualBlocks,
+      prepBlocks,
       scheduledAsanaTasks,
       adHocTasks,
       portalDoneGids,

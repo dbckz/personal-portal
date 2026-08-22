@@ -20,10 +20,12 @@ jest.mock('@/lib/api', () => ({
       weekStart: '2026-08-17',
       states: {},
       ritualBlocks: [],
+      prepBlocks: [],
       scheduledAsanaTasks: [],
       adHocTasks: [],
       portalDoneGids: [],
-      startedTaskIds: [],
+      weeklyOutcomes: {},
+      blockDoneGoogleEventIds: [],
     }),
     getCustomTaskTypes: jest.fn().mockResolvedValue({ customTypes: [] }),
     setBoardStatus: (...args: unknown[]) => setBoardStatus(...args),
@@ -117,8 +119,52 @@ describe('BoardTab', () => {
 
     await waitFor(() => expect(setBoardStatus).toHaveBeenCalled());
     expect(setBoardStatus.mock.calls[0][0]).toMatchObject({
-      key: 'asana:g1',
+      key: 'sched:s1',
       status: 'in_progress',
     });
+  });
+});
+
+const asanaTask2: CalendarEvent = {
+  id: 'g2',
+  title: 'Call the partner',
+  startTime: new Date(),
+  endTime: new Date(),
+  source: 'asana',
+  integrationId: 'int-1',
+};
+
+const groupScheduled: ScheduledAsanaTask[] = [
+  { id: 's1', asanaTaskId: 'g1', integrationId: 'int-1', scheduledDate: MONDAY, scheduledTime: '09:00', duration: 45, googleEventId: 'evg', category: 'Engagement/Outreach', taskName: 'Write report' },
+  { id: 's2', asanaTaskId: 'g2', integrationId: 'int-1', scheduledDate: MONDAY, scheduledTime: '09:00', duration: 45, googleEventId: 'evg', category: 'Engagement/Outreach', taskName: 'Call the partner' },
+];
+
+describe('BoardTab — grouped block', () => {
+  const completeAsanaTask = jest.fn().mockResolvedValue(undefined);
+  beforeEach(() => completeAsanaTask.mockClear());
+
+  it('renders a group card with its members, and a member checkbox completes the task', async () => {
+    render(
+      <BoardTab
+        asanaTasks={[asanaTask, asanaTask2]}
+        adHocTasks={[]}
+        scheduledAsanaTasks={groupScheduled}
+        metadataByGid={{}}
+        saveMetadata={jest.fn().mockResolvedValue(undefined)}
+        completeAsanaTask={completeAsanaTask}
+        addTask={jest.fn().mockResolvedValue(null)}
+        updateTask={jest.fn().mockResolvedValue(null)}
+      />
+    );
+
+    // The group card's title is the category block title, with both members listed.
+    expect(await screen.findByText('🤝 Engagement/Outreach')).toBeInTheDocument();
+    const card = screen.getByText('🤝 Engagement/Outreach').closest('[data-testid="board-card"]')! as HTMLElement;
+    expect(within(card).getByText('Write report')).toBeInTheDocument();
+    expect(within(card).getByText('Call the partner')).toBeInTheDocument();
+
+    // Ticking a member completes that Asana task.
+    fireEvent.click(within(card).getByText('Write report'));
+    await waitFor(() => expect(completeAsanaTask).toHaveBeenCalledWith('g1', 'int-1', true));
   });
 });

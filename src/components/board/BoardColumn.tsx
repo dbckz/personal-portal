@@ -2,16 +2,16 @@
 
 import { useState } from 'react';
 
-import type { BoardCard as BoardCardModel, BoardStatus } from '@/types';
+import type { BoardCard as BoardCardModel, BoardCardMember, BoardStatus } from '@/types';
 import { BoardCard } from './BoardCard';
 
 interface BoardColumnProps {
   label: string;
   status: BoardStatus;
   cards: BoardCardModel[];
-  weekStart: string;
   busyKeys: Set<string>;
   onMove: (card: BoardCardModel, status: BoardStatus) => void;
+  onToggleMember: (card: BoardCardModel, member: BoardCardMember) => void;
   onCardDragStart: (card: BoardCardModel) => void;
   onCardDragEnd: () => void;
   // The card currently being dragged (null when none), so a drop onto its own
@@ -23,9 +23,9 @@ export function BoardColumn({
   label,
   status,
   cards,
-  weekStart,
   busyKeys,
   onMove,
+  onToggleMember,
   onCardDragStart,
   onCardDragEnd,
   draggingCard,
@@ -67,9 +67,9 @@ export function BoardColumn({
             <BoardCard
               key={card.stateKey}
               card={card}
-              weekStart={weekStart}
-              busy={busyKeys.has(card.key)}
+              busyKeys={busyKeys}
               onMove={onMove}
+              onToggleMember={onToggleMember}
               onDragStart={onCardDragStart}
               onDragEnd={onCardDragEnd}
             />

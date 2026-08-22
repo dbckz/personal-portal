@@ -1,10 +1,15 @@
 // Pure view-model builder for the weekly task board.
 //
-// The board shows every task that touches a week — scheduled Asana tasks,
-// ad-hoc tasks and daily/weekly rituals — as a card in one of four status
-// columns (To start / In progress / Waiting / Done). This module is I/O-free
-// and deterministic so the route/hook stay thin and the logic is unit-tested;
-// every input is passed in.
+// The board mirrors the calendar: every app-created WORK block that touches a
+// week becomes one card. A single-task block is one card; a grouped block (a
+// calendar event holding several Asana / ad-hoc tasks) is one card with its
+// member tasks listed underneath. Rituals that are work (emails, kindle notes,
+// grooming, retro, delegation review, reading) each get a card; meeting-prep
+// blocks get a card; a task with no block this week (a pinned Asana task, or an
+// ad-hoc task with no due date) shows as an unplanned card.
+//
+// This module is I/O-free and deterministic so the route/hook stay thin and the
+// logic is unit-tested; every input is passed in.
 
 import {
   BUILT_IN_TASK_TYPE_EMOJIS,
@@ -16,7 +21,7 @@ import type {
   AdHocTask,
   AsanaCustomField,
   BoardCard,
-  BoardCardBlock,
+  BoardCardMember,
   BoardStatus,
   BoardTaskState,
   BuiltInTaskType,
@@ -26,26 +31,30 @@ import type {
   TaskMetadata,
   WeeklyTaskOutcomeKind,
 } from '@/types';
-import type { RitualBlock } from '@/lib/storage/core';
-import { categoryEmoji } from '@/lib/scheduling/event-titles';
-import { ritualBaseName, ritualCadenceForTitle, ritualKindForTitle } from '@/lib/scheduling/rituals';
+import type { PrepBlock, RitualBlock } from '@/lib/storage/core';
+import { categoryBlockTitle, categoryEmoji, prepTitle } from '@/lib/scheduling/event-titles';
+import { ritualBaseName, ritualKindForTitle, type RitualKind } from '@/lib/scheduling/rituals';
+import { resolveBlockMembers, type BlockMember } from '@/lib/scheduling/block-members';
 
 // --- Card keys --------------------------------------------------------------
 
+// A pinned Asana task (added from the board): stable across weeks, carries a
+// weekStart in its state.
 export function boardKeyForAsana(gid: string): string {
   return `asana:${gid}`;
 }
+// An ad-hoc task with no calendar event (board-added, or unplanned).
 export function boardKeyForAdhoc(id: string): string {
   return `adhoc:${id}`;
 }
-// The plain ritual key (no week): groups a ritual's blocks into one card.
-export function boardKeyForRitual(title: string): string {
-  return `ritual:${ritualBaseName(title)}`;
+// A calendar-backed block, keyed by its Google event id (task / group / ritual /
+// prep). Its status is inherently per-occurrence.
+export function boardKeyForBlock(googleEventId: string): string {
+  return `block:${googleEventId}`;
 }
-// The ritual STORAGE key: a ritual's status is per week, so the persisted key
-// carries the week suffix.
-export function boardStateKeyForRitual(title: string, weekStart: string): string {
-  return `${boardKeyForRitual(title)}:${weekStart}`;
+// A scheduled Asana entry with no Google event id yet.
+export function boardKeyForSched(scheduleId: string): string {
+  return `sched:${scheduleId}`;
 }
 
 // --- Shared getters ---------------------------------------------------------
@@ -57,12 +66,16 @@ export function asanaTypeLabel(task: { customFields?: AsanaCustomField[] }): str
   return field?.displayValue ?? undefined;
 }
 
-// Ritual titles whose kind is NOT a task (calendar furniture): excluded.
-const NON_TASK_RITUAL_KINDS: ReadonlySet<string> = new Set([
-  'getReady',
-  'commute',
-  'travel',
-  'break',
+// The ritual kinds that count as WORK, so they belong on the board. Everything
+// else (lunch, exercise, walk, commute, get-ready, travel, break, new bookies,
+// and the retired kinds) is excluded. Flagged here so the set is easy to change.
+export const WORK_RITUAL_KINDS: ReadonlySet<RitualKind> = new Set<RitualKind>([
+  'emails',
+  'kindleNotes',
+  'grooming',
+  'retro',
+  'delegationReview',
+  'reading',
 ]);
 
 // --- Date helpers (yyyy-MM-dd, timezone-safe on local parts) ----------------
@@ -104,6 +117,11 @@ function leadingEmoji(title: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
+// "emails" → "Emails" (the bare ritual name, capitalised, for the type chip).
+function capitalise(name: string): string {
+  return name.length === 0 ? name : name[0].toUpperCase() + name.slice(1);
+}
+
 // --- Build ------------------------------------------------------------------
 
 // One task's outcome in this week's WeeklyStatsRecord, keyed by taskId (Asana
@@ -121,30 +139,15 @@ export interface BuildBoardCardsInput {
   scheduledAsanaTasks: ScheduledAsanaTask[];
   adHocTasks: AdHocTask[];
   ritualBlocks: RitualBlock[];
+  prepBlocks: PrepBlock[];
   states: Record<string, BoardTaskState>;
   asanaTasks: CalendarEvent[]; // live incomplete Asana tasks (source 'asana')
   metadataByGid: Record<string, TaskMetadata>; // portalDone → waiting
   // This week's weekly-stats outcomes, keyed by taskId (gid or adhoc id).
   weeklyOutcomes: Record<string, BoardWeeklyOutcome>;
-  // Google event ids the user marked "done for planning" (blockDoneOverrides):
-  // a card whose every block is done reads as done.
+  // Google event ids the user marked "done for planning" (blockDoneOverrides).
   blockDoneEventIds: Set<string>;
   customTypes: CustomTaskType[];
-}
-
-function sortBlocks(blocks: BoardCardBlock[]): BoardCardBlock[] {
-  return [...blocks].sort((a, b) => {
-    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-    return (a.start ?? '').localeCompare(b.start ?? '');
-  });
-}
-
-function distinctSortedDates(blocks: BoardCardBlock[]): string[] {
-  return [...new Set(blocks.map(b => b.date))].sort();
-}
-
-function sumMinutes(blocks: BoardCardBlock[]): number {
-  return blocks.reduce((total, b) => total + (b.durationMinutes ?? 0), 0);
 }
 
 // Explicit state wins; otherwise the source-specific derivation.
@@ -156,29 +159,25 @@ function resolveStatus(
   return { status: derived, statusSource: 'derived' };
 }
 
-// The derived status for an Asana or ad-hoc card (used only when no explicit
-// state exists). In precedence order: portal-done metadata → waiting; a weekly
-// outcome of done / portalDone / started; an ad-hoc completed flag → done; a
-// card whose blocks are all marked done-for-planning → done; else todo.
-function deriveStatus(params: {
-  portalDone?: boolean; // task metadata
-  outcome?: WeeklyTaskOutcomeKind; // this week's weekly-stats outcome
-  completed?: boolean; // ad-hoc completed flag (asana passes undefined)
-  blocks: BoardCardBlock[];
-  blockDoneEventIds: Set<string>;
-}): BoardStatus {
-  const { portalDone, outcome, completed, blocks, blockDoneEventIds } = params;
-  if (portalDone) return 'waiting';
-  if (outcome === 'done') return 'done';
-  if (outcome === 'portalDone') return 'waiting';
-  if (outcome === 'started') return 'in_progress';
-  if (completed) return 'done';
-  if (
-    blocks.length > 0 &&
-    blocks.every(b => !!b.googleEventId && blockDoneEventIds.has(b.googleEventId))
-  ) {
-    return 'done';
-  }
+// The derived status for a card, from its members' facts and the block-done
+// overrides. Exported so the hook can recompute a card's status after an
+// optimistic member toggle. Explicit state wins upstream; this is the fallback.
+export function deriveBoardCardStatus(
+  card: Pick<BoardCard, 'source' | 'members' | 'googleEventId'>,
+  opts: { blockDoneEventIds: Set<string>; startedTaskIds: Set<string>; prepDone?: boolean }
+): BoardStatus {
+  const { source, members, googleEventId } = card;
+  const blockDone = !!googleEventId && opts.blockDoneEventIds.has(googleEventId);
+
+  if (source === 'ritual') return blockDone ? 'done' : 'todo';
+  if (source === 'prep') return opts.prepDone || blockDone ? 'done' : 'todo';
+
+  if (members.length > 0 && members.every(m => m.done)) return 'done';
+  if (blockDone) return 'done';
+  const nonPortal = members.filter(m => !m.portalDone);
+  if (members.some(m => m.portalDone) && nonPortal.every(m => m.done)) return 'waiting';
+  if (members.length === 1 && members[0].portalDone) return 'waiting';
+  if (members.some(m => opts.startedTaskIds.has(m.gid ?? m.adhocId ?? ''))) return 'in_progress';
   return 'todo';
 }
 
@@ -188,6 +187,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
     scheduledAsanaTasks,
     adHocTasks,
     ritualBlocks,
+    prepBlocks,
     states,
     asanaTasks,
     metadataByGid,
@@ -197,167 +197,312 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
   } = input;
   const inWeek = makeInWeek(weekStart);
   const liveByGid = new Map(asanaTasks.map(t => [t.id, t]));
+  const adhocById = new Map(adHocTasks.map(t => [t.id, t]));
+  const portalDoneGids = new Set(
+    Object.entries(metadataByGid)
+      .filter(([, m]) => m?.portalDone)
+      .map(([gid]) => gid)
+  );
+  const startedTaskIds = new Set(
+    Object.entries(weeklyOutcomes)
+      .filter(([, o]) => o.outcome === 'started')
+      .map(([taskId]) => taskId)
+  );
+  const lookup = (gid: string) => {
+    const live = liveByGid.get(gid);
+    return live
+      ? { title: live.title, completed: false, integrationId: live.integrationId }
+      : undefined;
+  };
   const cards: BoardCard[] = [];
 
-  // --- Asana: one card per gid, blocks merged from this week's scheduled
-  // entries; plus any state pinned to this week with no block. ---
-  interface AsanaGroup {
-    blocks: BoardCardBlock[];
-    taskName?: string;
-    integrationId?: string;
-    category?: string;
-  }
-  const asanaByGid = new Map<string, AsanaGroup>();
+  // gids + adhoc ids already shown by a block/sched card, so a pinned Asana state
+  // or an unplanned ad-hoc is not duplicated.
+  const shownGids = new Set<string>();
+  const shownAdhocIds = new Set<string>();
+
+  // Enrich a raw BlockMember with live / snapshot facts.
+  const enrich = (base: BlockMember): BoardCardMember => {
+    if (base.source === 'asana' && base.gid) {
+      const live = liveByGid.get(base.gid);
+      const outcome = weeklyOutcomes[base.gid];
+      return {
+        key: base.key,
+        source: 'asana',
+        title: live?.title ?? base.title ?? outcome?.title ?? 'Task',
+        done: live ? !!live.completed : outcome?.outcome === 'done',
+        ...(portalDoneGids.has(base.gid) ? { portalDone: true } : {}),
+        gid: base.gid,
+        integrationId: base.integrationId ?? live?.integrationId,
+        ...(live ? { typeLabel: asanaTypeLabel(live) } : outcome?.category ? { typeLabel: outcome.category } : {}),
+        ...(live?.projects?.[0]?.name ? { projectName: live.projects[0].name } : {}),
+      };
+    }
+    const task = base.adhocId ? adhocById.get(base.adhocId) : undefined;
+    const display = task ? adhocTypeDisplay(task, customTypes) : {};
+    return {
+      key: base.key,
+      source: 'adhoc',
+      title: base.title,
+      done: base.done,
+      ...(base.adhocId ? { adhocId: base.adhocId } : {}),
+      ...(display.label ? { typeLabel: display.label } : {}),
+    };
+  };
+
+  // --- Calendar-backed blocks (task / group), grouped by Google event id. ---
+  // An event id is seeded by any in-week scheduled Asana entry or ad-hoc task
+  // carrying it; resolveBlockMembers then gathers all of that block's members.
+  const eventIds = new Set<string>();
   for (const s of scheduledAsanaTasks) {
-    if (!inWeek(s.scheduledDate)) continue;
-    const group = asanaByGid.get(s.asanaTaskId) ?? { blocks: [] };
-    group.blocks.push({
+    if (inWeek(s.scheduledDate) && s.googleEventId) eventIds.add(s.googleEventId);
+  }
+  for (const t of adHocTasks) {
+    if (t.googleEventId && !!t.dueDate && inWeek(t.dueDate)) eventIds.add(t.googleEventId);
+  }
+
+  for (const eventId of eventIds) {
+    const members = resolveBlockMembers(
+      eventId,
+      scheduledAsanaTasks,
+      adHocTasks,
+      lookup,
+      portalDoneGids
+    ).map(enrich);
+    if (members.length === 0) continue;
+    for (const m of members) {
+      if (m.gid) shownGids.add(m.gid);
+      if (m.adhocId) shownAdhocIds.add(m.adhocId);
+    }
+
+    // Representative timing + category from the block's scheduled entries.
+    const entry = scheduledAsanaTasks.find(s => s.googleEventId === eventId);
+    const adhocEntry = adHocTasks.find(t => t.googleEventId === eventId);
+    const date = entry?.scheduledDate ?? adhocEntry?.dueDate;
+    const start = entry?.scheduledTime ?? adhocEntry?.dueTime;
+    const durationMinutes = entry?.duration ?? adhocEntry?.duration;
+    const category = entry?.category ?? members[0].typeLabel;
+
+    const key = boardKeyForBlock(eventId);
+    const state = states[key];
+    const isGroup = members.length >= 2;
+    const single = members[0];
+    const derived = deriveBoardCardStatus(
+      { source: isGroup ? 'group' : 'task', members, googleEventId: eventId },
+      { blockDoneEventIds, startedTaskIds }
+    );
+
+    cards.push({
+      key,
+      stateKey: key,
+      source: isGroup ? 'group' : 'task',
+      title: isGroup ? categoryBlockTitle(category ?? 'General Todos') : single.title,
+      typeLabel: isGroup ? (category ?? 'General Todos') : (category ?? single.typeLabel),
+      typeEmoji: isGroup
+        ? categoryEmoji(category ?? 'General Todos')
+        : (category ?? single.typeLabel)
+          ? categoryEmoji(category ?? single.typeLabel!)
+          : undefined,
+      ...resolveStatus(state, derived),
+      ...(date ? { date } : {}),
+      ...(start ? { start } : {}),
+      ...(durationMinutes ? { durationMinutes } : {}),
+      googleEventId: eventId,
+      members,
+      ...(isGroup
+        ? {}
+        : {
+            ...(single.projectName ? { projectName: single.projectName } : {}),
+            ...(single.gid ? { gid: single.gid } : {}),
+            ...(single.integrationId ? { integrationId: single.integrationId } : {}),
+            ...(single.adhocId ? { adhocId: single.adhocId } : {}),
+            ...(single.gid && liveByGid.get(single.gid)?.dueOn
+              ? { dueOn: liveByGid.get(single.gid)!.dueOn }
+              : {}),
+            ...(single.adhocId && adhocById.get(single.adhocId)?.priority
+              ? { priority: adhocById.get(single.adhocId)!.priority }
+              : {}),
+          }),
+    });
+  }
+
+  // --- Scheduled Asana entries with no Google event id → one card each. ---
+  for (const s of scheduledAsanaTasks) {
+    if (!inWeek(s.scheduledDate) || s.googleEventId) continue;
+    const live = liveByGid.get(s.asanaTaskId);
+    const outcome = weeklyOutcomes[s.asanaTaskId];
+    const member: BoardCardMember = {
+      key: s.id,
+      source: 'asana',
+      title: live?.title ?? s.taskName ?? outcome?.title ?? 'Task',
+      done: live ? !!live.completed : outcome?.outcome === 'done',
+      ...(portalDoneGids.has(s.asanaTaskId) ? { portalDone: true } : {}),
+      gid: s.asanaTaskId,
+      integrationId: s.integrationId ?? live?.integrationId,
+      ...(live ? { typeLabel: asanaTypeLabel(live) } : outcome?.category ? { typeLabel: outcome.category } : {}),
+      ...(live?.projects?.[0]?.name ? { projectName: live.projects[0].name } : {}),
+    };
+    shownGids.add(s.asanaTaskId);
+    const key = boardKeyForSched(s.id);
+    const state = states[key];
+    const typeLabel = s.category ?? member.typeLabel;
+    const derived = deriveBoardCardStatus(
+      { source: 'task', members: [member], googleEventId: undefined },
+      { blockDoneEventIds, startedTaskIds }
+    );
+    cards.push({
+      key,
+      stateKey: key,
+      source: 'task',
+      title: member.title,
+      ...(typeLabel ? { typeLabel, typeEmoji: categoryEmoji(typeLabel) } : {}),
+      ...resolveStatus(state, derived),
       date: s.scheduledDate,
       start: s.scheduledTime,
       durationMinutes: s.duration,
-      googleEventId: s.googleEventId,
-    });
-    if (s.taskName && !group.taskName) group.taskName = s.taskName;
-    if (s.integrationId && !group.integrationId) group.integrationId = s.integrationId;
-    if (s.category && !group.category) group.category = s.category;
-    asanaByGid.set(s.asanaTaskId, group);
-  }
-  // Pinned Asana cards: a state for this week whose task has no block here.
-  for (const [k, st] of Object.entries(states)) {
-    if (st.weekStart !== weekStart || !k.startsWith('asana:')) continue;
-    const gid = k.slice('asana:'.length);
-    if (!asanaByGid.has(gid)) {
-      asanaByGid.set(gid, { blocks: [], integrationId: st.integrationId });
-    }
-  }
-
-  for (const [gid, group] of asanaByGid) {
-    const key = boardKeyForAsana(gid);
-    const stateKey = key;
-    const state = states[stateKey];
-    const live = liveByGid.get(gid);
-    const blocks = sortBlocks(group.blocks);
-    const outcome = weeklyOutcomes[gid];
-    const title =
-      live?.title ?? state?.title ?? group.taskName ?? outcome?.title ?? 'Task';
-    const typeLabel =
-      (live ? asanaTypeLabel(live) : undefined) ??
-      state?.typeLabel ??
-      group.category ??
-      outcome?.category;
-    const meta = metadataByGid[gid];
-    const derived = deriveStatus({
-      portalDone: meta?.portalDone,
-      outcome: outcome?.outcome,
-      blocks,
-      blockDoneEventIds,
-    });
-    cards.push({
-      key,
-      stateKey,
-      source: 'asana',
-      title,
-      typeLabel,
-      typeEmoji: typeLabel ? categoryEmoji(typeLabel) : undefined,
-      ...resolveStatus(state, derived),
-      recurring: false,
-      blocks,
-      plannedDates: distinctSortedDates(blocks),
-      totalMinutes: sumMinutes(blocks),
-      gid,
-      integrationId: live?.integrationId ?? state?.integrationId ?? group.integrationId,
-      projectName: live?.projects?.[0]?.name,
-      dueOn: live?.dueOn,
+      members: [member],
+      ...(member.projectName ? { projectName: member.projectName } : {}),
+      gid: s.asanaTaskId,
+      ...(member.integrationId ? { integrationId: member.integrationId } : {}),
+      ...(live?.dueOn ? { dueOn: live.dueOn } : {}),
     });
   }
 
-  // --- Ad-hoc ---
+  // --- Ad-hoc tasks with no Google event id. ---
   for (const task of adHocTasks) {
+    if (task.googleEventId) continue; // handled as a block member above
+    if (shownAdhocIds.has(task.id)) continue;
     const key = boardKeyForAdhoc(task.id);
-    const stateKey = key;
-    const state = states[stateKey];
+    const state = states[key];
     const dueInWeek = !!task.dueDate && inWeek(task.dueDate);
+
     let include = false;
-    if (dueInWeek) include = true;
-    else if (!task.dueDate && !task.completed) include = true; // unplanned, every week
-    else if (task.completed) {
-      // A completed task shows only in the week of its state (or, absent a
-      // state, the week it was last updated).
+    let planned = false; // has a date (board-added / dated) vs unplanned
+    if (dueInWeek) {
+      include = true;
+      planned = true;
+    } else if (!task.dueDate && !task.completed) {
+      include = true; // unplanned, every week
+    } else if (task.completed && !task.dueDate) {
+      // A completed, block-less task shows only in the week of its state.
       if (state?.weekStart === weekStart) include = true;
-      else if (!state && inWeek(task.updatedAt.slice(0, 10))) include = true;
     }
     if (!include) continue;
 
-    const blocks: BoardCardBlock[] = task.dueDate
-      ? [
-          {
-            date: task.dueDate,
-            start: task.dueTime,
-            durationMinutes: task.duration,
-            googleEventId: task.googleEventId,
-          },
-        ]
-      : [];
-    const { label, emoji } = adhocTypeDisplay(task, customTypes);
-    const derived = deriveStatus({
-      outcome: weeklyOutcomes[task.id]?.outcome,
-      completed: task.completed,
-      blocks,
-      blockDoneEventIds,
-    });
-    cards.push({
-      key,
-      stateKey,
+    const display = adhocTypeDisplay(task, customTypes);
+    const member: BoardCardMember = {
+      key: task.id,
       source: 'adhoc',
       title: task.title,
-      typeLabel: label,
-      typeEmoji: emoji,
+      done: task.completed,
+      adhocId: task.id,
+      ...(display.label ? { typeLabel: display.label } : {}),
+    };
+    const source = planned ? 'task' : 'unplanned';
+    const derived = deriveBoardCardStatus(
+      { source, members: [member], googleEventId: undefined },
+      { blockDoneEventIds, startedTaskIds }
+    );
+    cards.push({
+      key,
+      stateKey: key,
+      source,
+      title: task.title,
+      ...(display.label ? { typeLabel: display.label } : {}),
+      ...(display.emoji ? { typeEmoji: display.emoji } : {}),
       ...resolveStatus(state, derived),
-      recurring: false,
-      blocks,
-      plannedDates: distinctSortedDates(blocks),
-      totalMinutes: sumMinutes(blocks),
+      ...(planned && task.dueDate ? { date: task.dueDate } : {}),
+      ...(planned && task.dueTime ? { start: task.dueTime } : {}),
+      ...(planned && task.duration ? { durationMinutes: task.duration } : {}),
+      members: [member],
       adhocId: task.id,
       priority: task.priority,
     });
   }
 
-  // --- Rituals: this week's blocks grouped by base name; furniture excluded. ---
-  const ritualGroups = new Map<string, RitualBlock[]>();
+  // --- WORK ritual blocks in the week → one card each (no grouping). ---
   for (const rb of ritualBlocks) {
     if (!inWeek(rb.date)) continue;
-    if (NON_TASK_RITUAL_KINDS.has(ritualKindForTitle(rb.title))) continue;
-    const base = ritualBaseName(rb.title);
-    const list = ritualGroups.get(base) ?? [];
-    list.push(rb);
-    ritualGroups.set(base, list);
-  }
-  for (const list of ritualGroups.values()) {
-    const first = list[0];
-    const title = first.title;
-    const key = boardKeyForRitual(title);
-    const stateKey = boardStateKeyForRitual(title, weekStart);
-    const state = states[stateKey];
-    const blocks = sortBlocks(
-      list.map(rb => ({
-        date: rb.date,
-        start: rb.start,
-        durationMinutes: rb.durationMinutes,
-        googleEventId: rb.googleEventId,
-      }))
+    if (!WORK_RITUAL_KINDS.has(ritualKindForTitle(rb.title))) continue;
+    const key = boardKeyForBlock(rb.googleEventId);
+    const state = states[key];
+    const derived = deriveBoardCardStatus(
+      { source: 'ritual', members: [], googleEventId: rb.googleEventId },
+      { blockDoneEventIds, startedTaskIds }
     );
     cards.push({
       key,
-      stateKey,
+      stateKey: key,
       source: 'ritual',
-      title,
-      typeEmoji: leadingEmoji(title),
-      ...resolveStatus(state, 'todo'),
-      recurring: true,
-      cadence: ritualCadenceForTitle(title),
-      blocks,
-      plannedDates: distinctSortedDates(blocks),
-      totalMinutes: sumMinutes(blocks),
+      title: rb.title,
+      typeEmoji: leadingEmoji(rb.title),
+      typeLabel: capitalise(ritualBaseName(rb.title)),
+      ...resolveStatus(state, derived),
+      date: rb.date,
+      start: rb.start,
+      durationMinutes: rb.durationMinutes,
+      googleEventId: rb.googleEventId,
+      members: [],
+    });
+  }
+
+  // --- Meeting-prep blocks in the week → one card each. ---
+  for (const pb of prepBlocks) {
+    if (!inWeek(pb.date)) continue;
+    const key = boardKeyForBlock(pb.googleEventId);
+    const state = states[key];
+    const derived = deriveBoardCardStatus(
+      { source: 'prep', members: [], googleEventId: pb.googleEventId },
+      { blockDoneEventIds, startedTaskIds, prepDone: pb.done }
+    );
+    cards.push({
+      key,
+      stateKey: key,
+      source: 'prep',
+      title: prepTitle(pb.meetingTitle),
+      typeEmoji: '📖',
+      typeLabel: 'Meeting prep',
+      ...resolveStatus(state, derived),
+      date: pb.date,
+      start: pb.start,
+      durationMinutes: pb.durationMinutes,
+      googleEventId: pb.googleEventId,
+      members: [],
+    });
+  }
+
+  // --- Pinned Asana states (weekStart === W) with no block this week. ---
+  for (const [k, st] of Object.entries(states)) {
+    if (st.weekStart !== weekStart || !k.startsWith('asana:')) continue;
+    const gid = k.slice('asana:'.length);
+    if (shownGids.has(gid)) continue;
+    const live = liveByGid.get(gid);
+    const outcome = weeklyOutcomes[gid];
+    const member: BoardCardMember = {
+      key: gid,
+      source: 'asana',
+      title: live?.title ?? st.title ?? outcome?.title ?? 'Task',
+      done: live ? !!live.completed : outcome?.outcome === 'done',
+      ...(portalDoneGids.has(gid) ? { portalDone: true } : {}),
+      gid,
+      integrationId: st.integrationId ?? live?.integrationId,
+      ...(live ? { typeLabel: asanaTypeLabel(live) } : outcome?.category ? { typeLabel: outcome.category } : st.typeLabel ? { typeLabel: st.typeLabel } : {}),
+      ...(live?.projects?.[0]?.name ? { projectName: live.projects[0].name } : {}),
+    };
+    const typeLabel = member.typeLabel ?? st.typeLabel;
+    cards.push({
+      key: k,
+      stateKey: k,
+      source: 'unplanned',
+      title: member.title,
+      ...(typeLabel ? { typeLabel, typeEmoji: categoryEmoji(typeLabel) } : {}),
+      status: st.status,
+      statusSource: 'explicit',
+      members: [member],
+      ...(member.projectName ? { projectName: member.projectName } : {}),
+      gid,
+      ...(member.integrationId ? { integrationId: member.integrationId } : {}),
+      ...(live?.dueOn ? { dueOn: live.dueOn } : {}),
     });
   }
 
@@ -381,16 +526,16 @@ function adhocTypeDisplay(
   };
 }
 
-// Order for a column: earliest planned date first, unplanned last, then title.
+// Order for a column: by date then start, undated last, then title.
 function sortCards(cards: BoardCard[]): BoardCard[] {
   return [...cards].sort((a, b) => {
-    const aDate = a.plannedDates[0];
-    const bDate = b.plannedDates[0];
-    if (aDate && bDate) {
-      if (aDate !== bDate) return aDate < bDate ? -1 : 1;
-    } else if (aDate) {
+    if (a.date && b.date) {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      const byStart = (a.start ?? '').localeCompare(b.start ?? '');
+      if (byStart !== 0) return byStart;
+    } else if (a.date) {
       return -1;
-    } else if (bDate) {
+    } else if (b.date) {
       return 1;
     }
     return a.title.localeCompare(b.title);
@@ -399,13 +544,13 @@ function sortCards(cards: BoardCard[]): BoardCard[] {
 
 // --- Day filtering ----------------------------------------------------------
 
-// A card matches a day if any planned date equals it; 'unplanned' = no blocks;
-// 'all' returns everything.
+// A card matches a day if its date equals it; 'unplanned' = no date; 'all'
+// returns everything.
 export function filterCardsForDay(
   cards: BoardCard[],
   day: string | 'all' | 'unplanned'
 ): BoardCard[] {
   if (day === 'all') return cards;
-  if (day === 'unplanned') return cards.filter(c => c.plannedDates.length === 0);
-  return cards.filter(c => c.plannedDates.includes(day));
+  if (day === 'unplanned') return cards.filter(c => !c.date);
+  return cards.filter(c => c.date === day);
 }

@@ -3,9 +3,8 @@ import {
   weekDates,
   formatDuration,
   shortDayLabel,
-  plannedBlockLabel,
+  boardWhenLabel,
   weekRangeLabel,
-  dayLetterChips,
   dayFilterChips,
 } from '@/lib/board-format';
 
@@ -44,15 +43,19 @@ describe('board-format', () => {
     });
   });
 
-  describe('plannedBlockLabel', () => {
+  describe('boardWhenLabel', () => {
     it('shows date, time and duration when present', () => {
       expect(
-        plannedBlockLabel({ date: '2026-08-18', start: '09:00', durationMinutes: 45 })
+        boardWhenLabel({ date: '2026-08-18', start: '09:00', durationMinutes: 45 })
       ).toBe('Tue 18 · 09:00 · 45m');
     });
 
-    it('shows date alone when unscheduled', () => {
-      expect(plannedBlockLabel({ date: '2026-08-18' })).toBe('Tue 18');
+    it('shows date alone when there is no time', () => {
+      expect(boardWhenLabel({ date: '2026-08-18' })).toBe('Tue 18');
+    });
+
+    it('returns null when there is no date', () => {
+      expect(boardWhenLabel({})).toBeNull();
     });
   });
 
@@ -63,17 +66,6 @@ describe('board-format', () => {
 
     it('shows both months when the week spans a boundary', () => {
       expect(weekRangeLabel('2026-07-27')).toBe('Mon 27 Jul – Sun 2 Aug');
-    });
-  });
-
-  describe('dayLetterChips', () => {
-    it('marks planned days filled', () => {
-      const chips = dayLetterChips('2026-08-17', ['2026-08-17', '2026-08-19']);
-      expect(chips.map(c => c.letter)).toEqual(['M', 'T', 'W', 'T', 'F', 'S', 'S']);
-      expect(chips.filter(c => c.filled).map(c => c.date)).toEqual([
-        '2026-08-17',
-        '2026-08-19',
-      ]);
     });
   });
 

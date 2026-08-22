@@ -30,6 +30,15 @@ const asanaEvent: CalendarEvent = {
   integrationId: 'om',
 };
 
+const asanaEvent2: CalendarEvent = {
+  id: 'g2',
+  title: 'Call the partner',
+  startTime: new Date(),
+  endTime: new Date(),
+  source: 'asana',
+  integrationId: 'om',
+};
+
 const adhocTask: AdHocTask = {
   id: 'a1',
   title: 'Buy milk',
@@ -46,8 +55,9 @@ function boardResponse(over: Record<string, unknown> = {}) {
     weekStart: WEEK,
     states: {},
     ritualBlocks: [],
+    prepBlocks: [],
     scheduledAsanaTasks: [
-      { id: 's1', asanaTaskId: 'g1', scheduledDate: '2026-08-18', scheduledTime: '09:00', duration: 60, integrationId: 'om' },
+      { id: 's1', asanaTaskId: 'g1', scheduledDate: '2026-08-18', scheduledTime: '09:00', duration: 60, integrationId: 'om', googleEventId: 'ev1' },
     ],
     adHocTasks: [],
     portalDoneGids: [],
@@ -114,10 +124,10 @@ describe('useBoard', () => {
     });
 
     expect(mockApi.setBoardStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ stateKey: 'asana:g1', key: 'asana:g1', status: 'in_progress' })
+      expect.objectContaining({ stateKey: 'block:ev1', key: 'block:ev1', status: 'in_progress' })
     );
     expect(result.current.cards[0].status).toBe('in_progress');
-    expect(result.current.busyKeys.has('asana:g1')).toBe(false);
+    expect(result.current.busyKeys.has('block:ev1')).toBe(false);
   });
 
   it('rolls back and surfaces an error when the write fails', async () => {
@@ -175,7 +185,7 @@ describe('useBoard', () => {
   it('clears portal-done when leaving waiting', async () => {
     mockApi.getBoard.mockResolvedValue(
       boardResponse({
-        states: { 'asana:g1': { key: 'asana:g1', status: 'waiting', updatedAt: 'now' } },
+        states: { 'block:ev1': { key: 'block:ev1', status: 'waiting', updatedAt: 'now' } },
       })
     );
     const saveMetadata = jest.fn().mockResolvedValue(undefined);
@@ -234,5 +244,67 @@ describe('useBoard', () => {
     });
 
     expect(mockApi.updateAdHocTask).toHaveBeenCalledWith('a1', { completed: true });
+  });
+
+  function groupResponse() {
+    return boardResponse({
+      scheduledAsanaTasks: [
+        { id: 's1', asanaTaskId: 'g1', scheduledDate: '2026-08-18', scheduledTime: '09:00', duration: 60, integrationId: 'om', googleEventId: 'evg', category: 'Batch' },
+        { id: 's2', asanaTaskId: 'g2', scheduledDate: '2026-08-18', scheduledTime: '09:00', duration: 60, integrationId: 'om', googleEventId: 'evg', category: 'Batch' },
+      ],
+    });
+  }
+
+  it('completes every member when a group is moved to done', async () => {
+    mockApi.getBoard.mockResolvedValue(groupResponse());
+    const onCompleteAsana = jest.fn().mockResolvedValue(undefined);
+    const { result } = await renderBoard({ asanaTasks: [asanaEvent, asanaEvent2], onCompleteAsana });
+    const card = result.current.cards.find(c => c.source === 'group')!;
+    expect(card.members).toHaveLength(2);
+
+    await act(async () => {
+      await result.current.moveCard(card, 'done' as BoardStatus);
+    });
+
+    expect(onCompleteAsana).toHaveBeenCalledWith('g1', 'om', true);
+    expect(onCompleteAsana).toHaveBeenCalledWith('g2', 'om', true);
+    expect(onCompleteAsana).toHaveBeenCalledTimes(2);
+  });
+
+  it('toggles a single member optimistically', async () => {
+    mockApi.getBoard.mockResolvedValue(groupResponse());
+    const onCompleteAsana = jest.fn().mockResolvedValue(undefined);
+    const { result } = await renderBoard({ asanaTasks: [asanaEvent, asanaEvent2], onCompleteAsana });
+    const card = result.current.cards.find(c => c.source === 'group')!;
+    const member = card.members.find(m => m.gid === 'g1')!;
+    expect(member.done).toBe(false);
+
+    await act(async () => {
+      await result.current.toggleMember(card, member);
+    });
+
+    expect(onCompleteAsana).toHaveBeenCalledWith('g1', 'om', true);
+    const updated = result.current.cards
+      .find(c => c.source === 'group')!
+      .members.find(m => m.gid === 'g1')!;
+    expect(updated.done).toBe(true);
+  });
+
+  it('rolls back a member toggle when it fails', async () => {
+    mockApi.getBoard.mockResolvedValue(groupResponse());
+    const onCompleteAsana = jest.fn().mockRejectedValueOnce(new Error('offline'));
+    const { result } = await renderBoard({ asanaTasks: [asanaEvent, asanaEvent2], onCompleteAsana });
+    const card = result.current.cards.find(c => c.source === 'group')!;
+    const member = card.members.find(m => m.gid === 'g1')!;
+
+    await act(async () => {
+      await result.current.toggleMember(card, member);
+    });
+
+    const updated = result.current.cards
+      .find(c => c.source === 'group')!
+      .members.find(m => m.gid === 'g1')!;
+    expect(updated.done).toBe(false);
+    expect(result.current.error).toBeTruthy();
   });
 });

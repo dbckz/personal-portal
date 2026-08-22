@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
-import { buildBoardCards } from '@/lib/board';
+import { buildBoardCards, deriveBoardCardStatus } from '@/lib/board';
 import type {
   AdHocTask,
   BoardCard,
+  BoardCardMember,
   BoardStatus,
   BoardTaskState,
   CalendarEvent,
@@ -15,7 +16,7 @@ import type {
   TaskMetadata,
   WeeklyTaskOutcomeKind,
 } from '@/types';
-import type { RitualBlock } from '@/lib/storage/core';
+import type { PrepBlock, RitualBlock } from '@/lib/storage/core';
 
 const REFRESH_MS = 60_000;
 
@@ -55,6 +56,8 @@ export interface UseBoardReturn {
   error: string | null;
   reload: () => Promise<void>;
   moveCard: (card: BoardCard, status: BoardStatus) => Promise<void>;
+  // Tick a single member of a card done/undone (optimistic, per-row busy).
+  toggleMember: (card: BoardCard, member: BoardCardMember) => Promise<void>;
   // Put a card on the week's board (Add task: new ad-hoc, or an existing Asana
   // task) by upserting a pinned BoardTaskState. Optimistic with rollback.
   pinToWeek: (args: PinToWeekArgs) => Promise<void>;
@@ -77,6 +80,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
   const [states, setStates] = useState<Record<string, BoardTaskState>>({});
   const [routeScheduled, setRouteScheduled] = useState<ScheduledAsanaTask[]>([]);
   const [ritualBlocks, setRitualBlocks] = useState<RitualBlock[]>([]);
+  const [prepBlocks, setPrepBlocks] = useState<PrepBlock[]>([]);
   const [portalDoneGids, setPortalDoneGids] = useState<string[]>([]);
   const [weeklyOutcomes, setWeeklyOutcomes] = useState<
     Record<string, { outcome: WeeklyTaskOutcomeKind; category?: string; title?: string }>
@@ -85,6 +89,9 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  // Optimistic per-member done overrides, keyed by member.key. Pruned once the
+  // rebuilt card reflects the same value (the page's props catch up).
+  const [memberOverrides, setMemberOverrides] = useState<Record<string, boolean>>({});
 
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -101,6 +108,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       setStates(res.states || {});
       setRouteScheduled(res.scheduledAsanaTasks || []);
       setRitualBlocks(res.ritualBlocks || []);
+      setPrepBlocks(res.prepBlocks || []);
       setPortalDoneGids(res.portalDoneGids || []);
       setWeeklyOutcomes(res.weeklyOutcomes || {});
       setBlockDoneEventIds(res.blockDoneGoogleEventIds || []);
@@ -152,13 +160,14 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     return merged;
   }, [metadataByGid, portalDoneGids]);
 
-  const cards = useMemo(
+  const rawCards = useMemo(
     () =>
       buildBoardCards({
         weekStart,
         scheduledAsanaTasks: scheduledAsanaTasks ?? routeScheduled,
         adHocTasks,
         ritualBlocks,
+        prepBlocks,
         states,
         asanaTasks,
         metadataByGid: effectiveMetadata,
@@ -172,6 +181,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       routeScheduled,
       adHocTasks,
       ritualBlocks,
+      prepBlocks,
       states,
       asanaTasks,
       effectiveMetadata,
@@ -180,6 +190,57 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       customTypes,
     ]
   );
+
+  // Apply optimistic member overrides, recomputing derived status from the
+  // overridden members so a group flips to Done as its last member is ticked.
+  const cards = useMemo(() => {
+    if (Object.keys(memberOverrides).length === 0) return rawCards;
+    const blockDoneSet = new Set(blockDoneEventIds);
+    const startedTaskIds = new Set(
+      Object.entries(weeklyOutcomes)
+        .filter(([, o]) => o.outcome === 'started')
+        .map(([taskId]) => taskId)
+    );
+    return rawCards.map(card => {
+      if (card.members.length === 0) return card;
+      let changed = false;
+      const members = card.members.map(m => {
+        const ov = memberOverrides[m.key];
+        if (ov !== undefined && ov !== m.done) {
+          changed = true;
+          return { ...m, done: ov };
+        }
+        return m;
+      });
+      if (!changed) return card;
+      const status =
+        card.statusSource === 'explicit'
+          ? card.status
+          : deriveBoardCardStatus(
+              { source: card.source, members, googleEventId: card.googleEventId },
+              { blockDoneEventIds: blockDoneSet, startedTaskIds }
+            );
+      return { ...card, members, status };
+    });
+  }, [rawCards, memberOverrides, blockDoneEventIds, weeklyOutcomes]);
+
+  // Prune an override once the rebuilt card already reflects it.
+  useEffect(() => {
+    if (Object.keys(memberOverrides).length === 0) return;
+    const rawDone = new Map<string, boolean>();
+    for (const c of rawCards) for (const m of c.members) rawDone.set(m.key, m.done);
+    setMemberOverrides(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(prev)) {
+        if (rawDone.get(k) === v) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [rawCards, memberOverrides]);
 
   const setBusy = useCallback((key: string, busy: boolean) => {
     setBusyKeys(prev => {
@@ -190,45 +251,86 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     });
   }, []);
 
-  // Perform the side effects a status change implies, through the callbacks (or
-  // the api directly when a callback isn't supplied).
+  // Complete (or un-complete) one member through the callbacks, falling back to
+  // the api. The ad-hoc callback is per-card, so it is used only for a single-
+  // task ad-hoc card; group ad-hoc members go straight to the api.
+  const completeMember = useCallback(
+    async (card: BoardCard, member: BoardCardMember, completed: boolean) => {
+      if (member.source === 'asana' && member.gid && member.integrationId) {
+        if (onCompleteAsana) await onCompleteAsana(member.gid, member.integrationId, completed);
+        else await api.completeAsanaTask(member.gid, member.integrationId, completed);
+      } else if (member.source === 'adhoc' && member.adhocId) {
+        if (onToggleAdhocComplete && member.adhocId === card.adhocId) {
+          await onToggleAdhocComplete(card, completed);
+        } else {
+          await api.updateAdHocTask(member.adhocId, { completed });
+        }
+      }
+    },
+    [onCompleteAsana, onToggleAdhocComplete]
+  );
+
+  // The members a status → done (or done → other) implies completing:
+  //  * task   → its single member;
+  //  * group  → every member not already in the target state (continue on error);
+  //  * unplanned → its ad-hoc member only (a pinned Asana task is state-only);
+  //  * ritual / prep → none.
+  const completeCardMembers = useCallback(
+    async (card: BoardCard, completed: boolean) => {
+      if (card.source === 'ritual' || card.source === 'prep') return;
+      const targets =
+        card.source === 'group'
+          ? card.members.filter(m => (completed ? !m.done : m.done))
+          : card.source === 'unplanned'
+            ? card.members.filter(m => m.source === 'adhoc')
+            : card.members;
+      let firstError: unknown;
+      for (const m of targets) {
+        try {
+          await completeMember(card, m, completed);
+        } catch (err) {
+          if (!firstError) firstError = err;
+        }
+      }
+      if (firstError) throw firstError;
+    },
+    [completeMember]
+  );
+
+  // Perform the side effects a status change implies.
   const runSideEffects = useCallback(
     async (card: BoardCard, previous: BoardStatus, next: BoardStatus) => {
       const wasDone = previous === 'done';
       const wasWaiting = previous === 'waiting';
 
       if (next === 'done' && !wasDone) {
-        if (card.source === 'adhoc') {
-          if (onToggleAdhocComplete) await onToggleAdhocComplete(card, true);
-          else if (card.adhocId) await api.updateAdHocTask(card.adhocId, { completed: true });
-        } else if (card.source === 'asana' && card.gid && card.integrationId) {
-          if (onCompleteAsana) await onCompleteAsana(card.gid, card.integrationId, true);
-          else await api.completeAsanaTask(card.gid, card.integrationId, true);
-        }
+        await completeCardMembers(card, true);
       } else if (wasDone && next !== 'done') {
-        if (card.source === 'adhoc') {
-          if (onToggleAdhocComplete) await onToggleAdhocComplete(card, false);
-          else if (card.adhocId) await api.updateAdHocTask(card.adhocId, { completed: false });
-        } else if (card.source === 'asana' && card.gid && card.integrationId) {
-          if (onCompleteAsana) await onCompleteAsana(card.gid, card.integrationId, false);
-          else await api.completeAsanaTask(card.gid, card.integrationId, false);
-        }
+        await completeCardMembers(card, false);
       }
 
-      if (card.source === 'asana' && card.gid && card.integrationId) {
+      // Portal-done ("waiting on others") only toggles for a single-Asana-member
+      // task / pinned card; groups are state-only.
+      const single =
+        (card.source === 'task' || card.source === 'unplanned') &&
+        card.members.length === 1 &&
+        card.members[0].source === 'asana'
+          ? card.members[0]
+          : null;
+      if (single && single.gid && single.integrationId) {
         if (next === 'waiting' && !wasWaiting) {
           const now = new Date().toISOString();
           const updates = { portalDone: true, portalDoneAt: now, portalDoneTitle: card.title };
-          if (saveMetadata) await saveMetadata(card.gid, card.integrationId, updates);
-          else await api.upsertTaskMetadata(card.gid, card.integrationId, updates);
+          if (saveMetadata) await saveMetadata(single.gid, single.integrationId, updates);
+          else await api.upsertTaskMetadata(single.gid, single.integrationId, updates);
         } else if (wasWaiting && next !== 'waiting') {
           const updates = { portalDone: false };
-          if (saveMetadata) await saveMetadata(card.gid, card.integrationId, updates);
-          else await api.upsertTaskMetadata(card.gid, card.integrationId, updates);
+          if (saveMetadata) await saveMetadata(single.gid, single.integrationId, updates);
+          else await api.upsertTaskMetadata(single.gid, single.integrationId, updates);
         }
       }
     },
-    [onCompleteAsana, onToggleAdhocComplete, saveMetadata]
+    [completeCardMembers, saveMetadata]
   );
 
   const moveCard = useCallback(
@@ -240,14 +342,11 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
 
       // Optimistic: cards derive from `states`, so writing the explicit state
       // moves the card immediately.
+      const pinnedWeek = previousState?.weekStart ?? weekStart;
       const optimistic: BoardTaskState = {
         key: stateKey,
         status,
-        ...(previousState?.weekStart
-          ? { weekStart: previousState.weekStart }
-          : card.source === 'ritual'
-            ? { weekStart }
-            : {}),
+        weekStart: pinnedWeek,
         ...(card.title ? { title: card.title } : {}),
         ...(card.typeLabel ? { typeLabel: card.typeLabel } : {}),
         ...(card.integrationId ? { integrationId: card.integrationId } : {}),
@@ -263,7 +362,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
           stateKey,
           key: card.key,
           status,
-          ...(optimistic.weekStart ? { weekStart: optimistic.weekStart } : {}),
+          weekStart: pinnedWeek,
           ...(card.title ? { title: card.title } : {}),
           ...(card.typeLabel ? { typeLabel: card.typeLabel } : {}),
           ...(card.integrationId ? { integrationId: card.integrationId } : {}),
@@ -285,6 +384,31 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       }
     },
     [states, weekStart, runSideEffects, setBusy]
+  );
+
+  const toggleMember = useCallback(
+    async (card: BoardCard, member: BoardCardMember) => {
+      const next = !member.done;
+      setMemberOverrides(prev => ({ ...prev, [member.key]: next }));
+      setBusy(member.key, true);
+      setError(null);
+      try {
+        await completeMember(card, member, next);
+      } catch (err) {
+        console.error('Board member toggle failed:', err);
+        if (isMountedRef.current) {
+          setError('Could not update that task — check your connection.');
+          setMemberOverrides(prev => {
+            const n = { ...prev };
+            delete n[member.key];
+            return n;
+          });
+        }
+      } finally {
+        if (isMountedRef.current) setBusy(member.key, false);
+      }
+    },
+    [completeMember, setBusy]
   );
 
   const pinToWeek = useCallback(
@@ -336,5 +460,5 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     [states, weekStart, setBusy]
   );
 
-  return { cards, isLoading, error, reload, moveCard, pinToWeek, busyKeys };
+  return { cards, isLoading, error, reload, moveCard, toggleMember, pinToWeek, busyKeys };
 }

@@ -10,6 +10,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   getScheduledAsanaTasks: jest.fn(),
   getAdHocTasks: jest.fn(),
   getRitualBlocks: jest.fn(),
+  getPrepBlocks: jest.fn(),
   getAllTaskMetadata: jest.fn(),
   getWeeklyStats: jest.fn(),
   getBlockDoneOverrides: jest.fn(),
@@ -24,6 +25,7 @@ import {
   getScheduledAsanaTasks,
   getAdHocTasks,
   getRitualBlocks,
+  getPrepBlocks,
   getAllTaskMetadata,
   getWeeklyStats,
   getBlockDoneOverrides,
@@ -49,6 +51,7 @@ beforeEach(() => {
   (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
   (getAdHocTasks as jest.Mock).mockResolvedValue([]);
   (getRitualBlocks as jest.Mock).mockResolvedValue([]);
+  (getPrepBlocks as jest.Mock).mockResolvedValue([]);
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
   (getWeeklyStats as jest.Mock).mockResolvedValue(null);
   (getBlockDoneOverrides as jest.Mock).mockResolvedValue({});
@@ -75,6 +78,16 @@ describe('GET /api/board', () => {
     const body = await res.json();
     expect(body.scheduledAsanaTasks.map((s: { asanaTaskId: string }) => s.asanaTaskId)).toEqual(['g1']);
     expect(body.ritualBlocks).toHaveLength(1);
+  });
+
+  it('returns this week\'s meeting-prep blocks', async () => {
+    (getPrepBlocks as jest.Mock).mockResolvedValue([
+      { id: 'p1', googleEventId: 'pe1', googleIntegrationId: 'g', meetingEventId: 'm', meetingTitle: 'Sync', meetingStart: '', date: '2026-08-19', start: '12:00', durationMinutes: 30, done: false, createdAt: '' },
+      { id: 'p2', googleEventId: 'pe2', googleIntegrationId: 'g', meetingEventId: 'm', meetingTitle: 'Old', meetingStart: '', date: '2026-08-10', start: '12:00', durationMinutes: 30, done: false, createdAt: '' },
+    ]);
+    const res = await GET(getReq('http://localhost/api/board?weekStart=2026-08-17'));
+    const body = await res.json();
+    expect(body.prepBlocks.map((p: { id: string }) => p.id)).toEqual(['p1']);
   });
 
   it('returns portalDone gids, weekly outcomes and block-done event ids', async () => {

@@ -1,34 +1,39 @@
 'use client';
 
 import { useState } from 'react';
-import { ExternalLink, Loader2, X } from 'lucide-react';
-import { BOARD_COLUMNS, type BoardCard, type BoardStatus } from '@/types';
+import { Check, ExternalLink, Loader2, X } from 'lucide-react';
+import { BOARD_COLUMNS, type BoardCard, type BoardCardMember, type BoardStatus } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
 import { MobileSheet } from './MobileSheet';
-import { dayLetterChips, plannedBlockLabel } from '@/lib/board-format';
+import { boardWhenLabel } from '@/lib/board-format';
 
-// Card detail bottom sheet: title, type, planned days, four big status buttons
-// (the current one highlighted) and an "Open in Asana" link for Asana cards.
-// Moving a card is optimistic in useBoard; a failure surfaces a friendly error.
+// Card detail bottom sheet: title, type, the date/time chip, the member list
+// (tap to tick each done, for grouped blocks), four big status buttons (the
+// current one highlighted) and an "Open in Asana" link for Asana cards. Moving a
+// card is optimistic in useBoard; a failure surfaces a friendly error.
 export function MobileBoardCardSheet({
   card,
-  weekStart,
   busy,
+  busyKeys,
   moveError,
   onMove,
+  onToggleMember,
   onClose,
 }: {
   card: BoardCard;
-  weekStart: string;
   busy: boolean;
+  busyKeys: Set<string>;
   // Surfaced from useBoard: moveCard rolls back and sets this rather than
   // throwing, so the sheet reads it instead of catching.
   moveError: string | null;
   onMove: (card: BoardCard, status: BoardStatus) => Promise<void>;
+  onToggleMember: (card: BoardCard, member: BoardCardMember) => Promise<void>;
   onClose: () => void;
 }) {
   const [localError, setLocalError] = useState<string | null>(null);
   const error = moveError ?? localError;
+  const whenLabel = boardWhenLabel(card);
+  const doneCount = card.members.filter(m => m.done).length;
 
   const handleMove = async (status: BoardStatus) => {
     if (status === card.status) return;
@@ -41,11 +46,15 @@ export function MobileBoardCardSheet({
   };
 
   const sourceHint =
-    card.source === 'asana'
-      ? card.projectName || 'Asana'
-      : card.source === 'adhoc'
-        ? 'Ad hoc'
-        : 'Ritual';
+    card.source === 'ritual'
+      ? 'Ritual'
+      : card.source === 'prep'
+        ? 'Meeting prep'
+        : card.source === 'group'
+          ? `${card.members.length} tasks`
+          : card.members.some(m => m.source === 'asana') || card.gid
+            ? card.projectName || 'Asana'
+            : 'Ad hoc';
 
   return (
     <MobileSheet onClose={onClose}>
@@ -72,42 +81,54 @@ export function MobileBoardCardSheet({
             </span>
           )}
           <span className="rounded-full bg-gray-100 px-2 py-1">{sourceHint}</span>
-          {card.recurring && (
-            <span className="rounded-full bg-gray-100 px-2 py-1">
-              {card.cadence === 'weekly' ? 'Weekly' : 'Daily'}
-            </span>
-          )}
         </div>
 
         <div>
           <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-gray-400">
             Planned
           </div>
-          {card.recurring ? (
-            <div className="flex items-center gap-1">
-              {dayLetterChips(weekStart, card.plannedDates).map((cell, i) => (
-                <span
-                  key={i}
-                  className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
-                    cell.filled ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-400'
-                  }`}
-                >
-                  {cell.letter}
-                </span>
-              ))}
-            </div>
-          ) : card.plannedDates.length === 0 ? (
-            <div className="text-sm text-gray-400">Unplanned</div>
-          ) : (
-            <div className="space-y-1">
-              {card.blocks.map((block, i) => (
-                <div key={i} className="text-sm text-gray-700">
-                  {plannedBlockLabel(block)}
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="text-sm text-gray-700">{whenLabel ?? 'Unplanned'}</div>
         </div>
+
+        {card.source === 'group' && card.members.length > 0 && (
+          <div>
+            <div className="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wide text-gray-400">
+              <span>Tasks</span>
+              <span className="normal-case tracking-normal text-gray-400">
+                {doneCount}/{card.members.length} done
+              </span>
+            </div>
+            <div className="space-y-1">
+              {card.members.map(member => {
+                const memberBusy = busyKeys.has(member.key);
+                return (
+                  <button
+                    key={member.key}
+                    type="button"
+                    disabled={memberBusy}
+                    onClick={() => onToggleMember(card, member)}
+                    className="flex w-full items-center gap-2.5 rounded-lg border border-gray-200 px-3 py-2.5 text-left text-sm text-gray-800 transition-colors active:bg-gray-50 disabled:opacity-50"
+                  >
+                    <span
+                      className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border ${
+                        member.done ? 'border-orange-500 bg-orange-500 text-white' : 'border-gray-300 bg-white'
+                      }`}
+                    >
+                      {memberBusy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
+                      ) : (
+                        member.done && <Check className="h-3.5 w-3.5" />
+                      )}
+                    </span>
+                    <span className={`min-w-0 flex-1 ${member.done ? 'text-gray-400 line-through' : ''}`}>
+                      {member.title}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
@@ -143,7 +164,7 @@ export function MobileBoardCardSheet({
           </div>
         </div>
 
-        {card.source === 'asana' && card.gid && (
+        {card.gid && card.source !== 'group' && (
           <a
             href={asanaTaskUrl(card.gid)}
             target="_blank"

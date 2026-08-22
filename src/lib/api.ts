@@ -2,7 +2,7 @@
 
 import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, AsanaTagWithIntegration, BoardStatus, BoardTaskState, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, ClaudeAccount, CustomTaskType, DelegationDraftComment, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate, WeeklyTaskOutcomeKind } from '@/types';
-import type { RitualBlock } from '@/lib/storage/core';
+import type { PrepBlock, RitualBlock } from '@/lib/storage/core';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanConversion, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
@@ -315,6 +315,7 @@ export interface BoardResponse {
   weekStart: string; // yyyy-MM-dd Monday (the requested date normalised)
   states: Record<string, BoardTaskState>;
   ritualBlocks: RitualBlock[]; // this week's ritual blocks (lib excludes furniture)
+  prepBlocks: PrepBlock[]; // this week's meeting-prep blocks
   scheduledAsanaTasks: ScheduledAsanaTask[]; // this week's scheduled Asana blocks
   adHocTasks: AdHocTask[]; // all ad-hoc tasks (lib decides inclusion per week)
   portalDoneGids: string[]; // gids flagged portal-done → Waiting
