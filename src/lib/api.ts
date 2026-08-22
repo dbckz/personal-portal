@@ -318,7 +318,10 @@ export interface BoardResponse {
   scheduledAsanaTasks: ScheduledAsanaTask[]; // this week's scheduled Asana blocks
   adHocTasks: AdHocTask[]; // all ad-hoc tasks (lib decides inclusion per week)
   portalDoneGids: string[]; // gids flagged portal-done → Waiting
-  startedTaskIds: string[]; // weekly-stats 'started' this week → In progress
+  // This week's weekly-stats outcomes, keyed by taskId (gid or adhoc id), with
+  // the durable title/category snapshot for cards dropped from the live fetch.
+  weeklyOutcomes: Record<string, { outcome: WeeklyTaskOutcomeKind; category?: string; title?: string }>;
+  blockDoneGoogleEventIds: string[]; // event ids marked done-for-planning → Done
 }
 
 // One portal-done ("waiting on others") task surfaced in the end-of-week review.

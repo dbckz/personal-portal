@@ -13,6 +13,7 @@ import type {
   CustomTaskType,
   ScheduledAsanaTask,
   TaskMetadata,
+  WeeklyTaskOutcomeKind,
 } from '@/types';
 import type { RitualBlock } from '@/lib/storage/core';
 
@@ -77,7 +78,10 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
   const [routeScheduled, setRouteScheduled] = useState<ScheduledAsanaTask[]>([]);
   const [ritualBlocks, setRitualBlocks] = useState<RitualBlock[]>([]);
   const [portalDoneGids, setPortalDoneGids] = useState<string[]>([]);
-  const [startedTaskIds, setStartedTaskIds] = useState<string[]>([]);
+  const [weeklyOutcomes, setWeeklyOutcomes] = useState<
+    Record<string, { outcome: WeeklyTaskOutcomeKind; category?: string; title?: string }>
+  >({});
+  const [blockDoneEventIds, setBlockDoneEventIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
@@ -98,7 +102,8 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       setRouteScheduled(res.scheduledAsanaTasks || []);
       setRitualBlocks(res.ritualBlocks || []);
       setPortalDoneGids(res.portalDoneGids || []);
-      setStartedTaskIds(res.startedTaskIds || []);
+      setWeeklyOutcomes(res.weeklyOutcomes || {});
+      setBlockDoneEventIds(res.blockDoneGoogleEventIds || []);
       setError(null);
     } catch (err) {
       console.error('Failed to load board:', err);
@@ -157,7 +162,8 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
         states,
         asanaTasks,
         metadataByGid: effectiveMetadata,
-        startedTaskIds: new Set(startedTaskIds),
+        weeklyOutcomes,
+        blockDoneEventIds: new Set(blockDoneEventIds),
         customTypes,
       }),
     [
@@ -169,7 +175,8 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       states,
       asanaTasks,
       effectiveMetadata,
-      startedTaskIds,
+      weeklyOutcomes,
+      blockDoneEventIds,
       customTypes,
     ]
   );

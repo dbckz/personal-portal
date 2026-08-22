@@ -29,7 +29,8 @@ function baseInput(over: Partial<BuildBoardCardsInput> = {}): BuildBoardCardsInp
     states: {},
     asanaTasks: [],
     metadataByGid: {},
-    startedTaskIds: new Set<string>(),
+    weeklyOutcomes: {},
+    blockDoneEventIds: new Set<string>(),
     customTypes: [],
     ...over,
   };
@@ -204,9 +205,9 @@ describe('buildBoardCards — Asana', () => {
     const base = { scheduledAsanaTasks: [scheduled({})], asanaTasks: [asanaEvent({})] };
     expect(buildBoardCards(baseInput(base)).find(c => c.gid === 'g1')!.status).toBe('todo');
     expect(
-      buildBoardCards(baseInput({ ...base, startedTaskIds: new Set(['g1']) })).find(
-        c => c.gid === 'g1'
-      )!.status
+      buildBoardCards(
+        baseInput({ ...base, weeklyOutcomes: { g1: { outcome: 'started' } } })
+      ).find(c => c.gid === 'g1')!.status
     ).toBe('in_progress');
     expect(
       buildBoardCards(
@@ -220,12 +221,71 @@ describe('buildBoardCards — Asana', () => {
     ).toBe('waiting');
   });
 
+  it('derives done from a weekly-stats done outcome, with title/category fallback', () => {
+    // The task has dropped out of the live incomplete-only fetch (no asanaTasks),
+    // so only the weekly outcome and the scheduled snapshot remain.
+    const cards = buildBoardCards(
+      baseInput({
+        scheduledAsanaTasks: [scheduled({ taskName: undefined, category: undefined })],
+        asanaTasks: [],
+        weeklyOutcomes: {
+          g1: { outcome: 'done', category: 'Batch', title: 'Action MU membership' },
+        },
+      })
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe('done');
+    expect(cards[0].statusSource).toBe('derived');
+    expect(cards[0].title).toBe('Action MU membership');
+    expect(cards[0].typeLabel).toBe('Batch');
+    expect(cards[0].typeEmoji).toBe('📦');
+  });
+
+  it('prefers the scheduled entry category over the weekly outcome for typeLabel', () => {
+    const cards = buildBoardCards(
+      baseInput({
+        scheduledAsanaTasks: [scheduled({ category: 'Blogs' })],
+        asanaTasks: [],
+        weeklyOutcomes: { g1: { outcome: 'scheduled', category: 'Batch' } },
+      })
+    );
+    expect(cards[0].typeLabel).toBe('Blogs');
+  });
+
+  it('derives done when every block is marked done-for-planning', () => {
+    const cards = buildBoardCards(
+      baseInput({
+        scheduledAsanaTasks: [
+          scheduled({ scheduledDate: '2026-08-18', googleEventId: 'e1' }),
+          scheduled({ scheduledDate: '2026-08-20', googleEventId: 'e2' }),
+        ],
+        asanaTasks: [asanaEvent({})],
+        blockDoneEventIds: new Set(['e1', 'e2']),
+      })
+    );
+    expect(cards[0].status).toBe('done');
+  });
+
+  it('does not derive done when only some blocks are done-for-planning', () => {
+    const cards = buildBoardCards(
+      baseInput({
+        scheduledAsanaTasks: [
+          scheduled({ scheduledDate: '2026-08-18', googleEventId: 'e1' }),
+          scheduled({ scheduledDate: '2026-08-20', googleEventId: 'e2' }),
+        ],
+        asanaTasks: [asanaEvent({})],
+        blockDoneEventIds: new Set(['e1']),
+      })
+    );
+    expect(cards[0].status).toBe('todo');
+  });
+
   it('lets an explicit state win over the derived status', () => {
     const cards = buildBoardCards(
       baseInput({
         scheduledAsanaTasks: [scheduled({})],
         asanaTasks: [asanaEvent({})],
-        startedTaskIds: new Set(['g1']), // would derive in_progress
+        weeklyOutcomes: { g1: { outcome: 'started' } }, // would derive in_progress
         states: {
           'asana:g1': {
             key: 'asana:g1',

@@ -12,6 +12,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   getRitualBlocks: jest.fn(),
   getAllTaskMetadata: jest.fn(),
   getWeeklyStats: jest.fn(),
+  getBlockDoneOverrides: jest.fn(),
   upsertBoardTaskState: jest.fn(),
 }));
 
@@ -25,6 +26,7 @@ import {
   getRitualBlocks,
   getAllTaskMetadata,
   getWeeklyStats,
+  getBlockDoneOverrides,
   upsertBoardTaskState,
 } from '@/lib/user-data-storage';
 
@@ -49,6 +51,7 @@ beforeEach(() => {
   (getRitualBlocks as jest.Mock).mockResolvedValue([]);
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
   (getWeeklyStats as jest.Mock).mockResolvedValue(null);
+  (getBlockDoneOverrides as jest.Mock).mockResolvedValue({});
 });
 
 describe('GET /api/board', () => {
@@ -74,7 +77,7 @@ describe('GET /api/board', () => {
     expect(body.ritualBlocks).toHaveLength(1);
   });
 
-  it('returns portalDone gids and started task ids', async () => {
+  it('returns portalDone gids, weekly outcomes and block-done event ids', async () => {
     (getAllTaskMetadata as jest.Mock).mockResolvedValue({
       g1: { asanaTaskGid: 'g1', integrationId: 'om', portalDone: true, updatedAt: '' },
       g2: { asanaTaskGid: 'g2', integrationId: 'om', updatedAt: '' },
@@ -89,10 +92,15 @@ describe('GET /api/board', () => {
       },
       integrations: {},
     });
+    (getBlockDoneOverrides as jest.Mock).mockResolvedValue({ ev1: true, ev2: false });
     const res = await GET(getReq('http://localhost/api/board?weekStart=2026-08-17'));
     const body = await res.json();
     expect(body.portalDoneGids).toEqual(['g1']);
-    expect(body.startedTaskIds).toEqual(['g3']);
+    expect(body.weeklyOutcomes).toEqual({
+      g3: { outcome: 'started', category: 'x' },
+      g4: { outcome: 'done', category: 'x' },
+    });
+    expect(body.blockDoneGoogleEventIds).toEqual(['ev1']);
   });
 
   it('defaults to the current Monday when no date is given', async () => {

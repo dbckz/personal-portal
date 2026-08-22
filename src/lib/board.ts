@@ -24,6 +24,7 @@ import type {
   CustomTaskType,
   ScheduledAsanaTask,
   TaskMetadata,
+  WeeklyTaskOutcomeKind,
 } from '@/types';
 import type { RitualBlock } from '@/lib/storage/core';
 import { categoryEmoji } from '@/lib/scheduling/event-titles';
@@ -105,6 +106,16 @@ function leadingEmoji(title: string): string | undefined {
 
 // --- Build ------------------------------------------------------------------
 
+// One task's outcome in this week's WeeklyStatsRecord, keyed by taskId (Asana
+// gid or ad-hoc id). Carries the durable title/category snapshot so a card can
+// still show its type/title once the task drops out of the live (incomplete-
+// only) Asana fetch.
+export interface BoardWeeklyOutcome {
+  outcome: WeeklyTaskOutcomeKind;
+  category?: string;
+  title?: string;
+}
+
 export interface BuildBoardCardsInput {
   weekStart: string; // yyyy-MM-dd Monday
   scheduledAsanaTasks: ScheduledAsanaTask[];
@@ -113,7 +124,11 @@ export interface BuildBoardCardsInput {
   states: Record<string, BoardTaskState>;
   asanaTasks: CalendarEvent[]; // live incomplete Asana tasks (source 'asana')
   metadataByGid: Record<string, TaskMetadata>; // portalDone → waiting
-  startedTaskIds: Set<string>; // weekly-stats 'started' → in_progress
+  // This week's weekly-stats outcomes, keyed by taskId (gid or adhoc id).
+  weeklyOutcomes: Record<string, BoardWeeklyOutcome>;
+  // Google event ids the user marked "done for planning" (blockDoneOverrides):
+  // a card whose every block is done reads as done.
+  blockDoneEventIds: Set<string>;
   customTypes: CustomTaskType[];
 }
 
@@ -141,6 +156,32 @@ function resolveStatus(
   return { status: derived, statusSource: 'derived' };
 }
 
+// The derived status for an Asana or ad-hoc card (used only when no explicit
+// state exists). In precedence order: portal-done metadata → waiting; a weekly
+// outcome of done / portalDone / started; an ad-hoc completed flag → done; a
+// card whose blocks are all marked done-for-planning → done; else todo.
+function deriveStatus(params: {
+  portalDone?: boolean; // task metadata
+  outcome?: WeeklyTaskOutcomeKind; // this week's weekly-stats outcome
+  completed?: boolean; // ad-hoc completed flag (asana passes undefined)
+  blocks: BoardCardBlock[];
+  blockDoneEventIds: Set<string>;
+}): BoardStatus {
+  const { portalDone, outcome, completed, blocks, blockDoneEventIds } = params;
+  if (portalDone) return 'waiting';
+  if (outcome === 'done') return 'done';
+  if (outcome === 'portalDone') return 'waiting';
+  if (outcome === 'started') return 'in_progress';
+  if (completed) return 'done';
+  if (
+    blocks.length > 0 &&
+    blocks.every(b => !!b.googleEventId && blockDoneEventIds.has(b.googleEventId))
+  ) {
+    return 'done';
+  }
+  return 'todo';
+}
+
 export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
   const {
     weekStart,
@@ -150,7 +191,8 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
     states,
     asanaTasks,
     metadataByGid,
-    startedTaskIds,
+    weeklyOutcomes,
+    blockDoneEventIds,
     customTypes,
   } = input;
   const inWeek = makeInWeek(weekStart);
@@ -163,6 +205,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
     blocks: BoardCardBlock[];
     taskName?: string;
     integrationId?: string;
+    category?: string;
   }
   const asanaByGid = new Map<string, AsanaGroup>();
   for (const s of scheduledAsanaTasks) {
@@ -176,6 +219,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
     });
     if (s.taskName && !group.taskName) group.taskName = s.taskName;
     if (s.integrationId && !group.integrationId) group.integrationId = s.integrationId;
+    if (s.category && !group.category) group.category = s.category;
     asanaByGid.set(s.asanaTaskId, group);
   }
   // Pinned Asana cards: a state for this week whose task has no block here.
@@ -193,14 +237,21 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
     const state = states[stateKey];
     const live = liveByGid.get(gid);
     const blocks = sortBlocks(group.blocks);
-    const title = live?.title ?? state?.title ?? group.taskName ?? 'Task';
-    const typeLabel = (live ? asanaTypeLabel(live) : undefined) ?? state?.typeLabel;
+    const outcome = weeklyOutcomes[gid];
+    const title =
+      live?.title ?? state?.title ?? group.taskName ?? outcome?.title ?? 'Task';
+    const typeLabel =
+      (live ? asanaTypeLabel(live) : undefined) ??
+      state?.typeLabel ??
+      group.category ??
+      outcome?.category;
     const meta = metadataByGid[gid];
-    const derived: BoardStatus = meta?.portalDone
-      ? 'waiting'
-      : startedTaskIds.has(gid)
-        ? 'in_progress'
-        : 'todo';
+    const derived = deriveStatus({
+      portalDone: meta?.portalDone,
+      outcome: outcome?.outcome,
+      blocks,
+      blockDoneEventIds,
+    });
     cards.push({
       key,
       stateKey,
@@ -248,7 +299,12 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
         ]
       : [];
     const { label, emoji } = adhocTypeDisplay(task, customTypes);
-    const derived: BoardStatus = task.completed ? 'done' : 'todo';
+    const derived = deriveStatus({
+      outcome: weeklyOutcomes[task.id]?.outcome,
+      completed: task.completed,
+      blocks,
+      blockDoneEventIds,
+    });
     cards.push({
       key,
       stateKey,

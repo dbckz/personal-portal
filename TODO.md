@@ -60,3 +60,8 @@
   risks clipping them. The toggle keeps the tab bar intact and sits the weekly
   board next to the day's planning. `dayMode` state lives in MobileShell; the
   coloured header's day-nav is hidden in board mode.
+
+- Hash deep links (`#work/board`, `#work/rituals`, …) hydrate with a React #418
+  mismatch because `page.tsx` reads `window.location.hash` in the `useState`
+  initialiser; React recovers client-side, but a `useEffect`-applied initial
+  route would remove the console error. Pre-existing; noted 22 Aug 2026.

@@ -51,7 +51,7 @@ function boardResponse(over: Record<string, unknown> = {}) {
     ],
     adHocTasks: [],
     portalDoneGids: [],
-    startedTaskIds: [],
+    weeklyOutcomes: {}, blockDoneGoogleEventIds: [],
     ...over,
   };
 }

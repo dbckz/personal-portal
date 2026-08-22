@@ -8,6 +8,7 @@ import {
   getRitualBlocks,
   getAllTaskMetadata,
   getWeeklyStats,
+  getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
 
 // Normalise a yyyy-MM-dd date (or undefined → today) to its Monday. Built from
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
     );
     const inWeek = (date?: string) => !!date && date >= weekStart && date <= weekEnd;
 
-    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, metadata, weekStats] =
+    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, metadata, weekStats, blockDone] =
       await Promise.all([
         getBoardTaskStates(),
         getScheduledAsanaTasks(),
@@ -48,6 +49,7 @@ export async function GET(request: NextRequest) {
         getRitualBlocks(),
         getAllTaskMetadata(),
         getWeeklyStats(weekStart),
+        getBlockDoneOverrides(),
       ]);
 
     const scheduledAsanaTasks = scheduledAsanaAll.filter(s => inWeek(s.scheduledDate));
@@ -55,11 +57,27 @@ export async function GET(request: NextRequest) {
     const portalDoneGids = Object.entries(metadata)
       .filter(([, m]) => m?.portalDone)
       .map(([gid]) => gid);
-    const startedTaskIds = weekStats
-      ? Object.values(weekStats.tasks)
-          .filter(t => t.outcome === 'started')
-          .map(t => t.taskId)
-      : [];
+    // This week's weekly-stats outcomes, keyed by taskId (gid or adhoc id), with
+    // the durable title/category snapshot so a done card (dropped from the live
+    // Asana fetch) still shows its type.
+    const weeklyOutcomes: Record<
+      string,
+      { outcome: string; category?: string; title?: string }
+    > = weekStats
+      ? Object.fromEntries(
+          Object.values(weekStats.tasks).map(t => [
+            t.taskId,
+            {
+              outcome: t.outcome,
+              ...(t.category ? { category: t.category } : {}),
+              ...(t.title ? { title: t.title } : {}),
+            },
+          ])
+        )
+      : {};
+    const blockDoneGoogleEventIds = Object.entries(blockDone)
+      .filter(([, v]) => !!v)
+      .map(([eventId]) => eventId);
 
     return NextResponse.json({
       weekStart,
@@ -68,7 +86,8 @@ export async function GET(request: NextRequest) {
       scheduledAsanaTasks,
       adHocTasks,
       portalDoneGids,
-      startedTaskIds,
+      weeklyOutcomes,
+      blockDoneGoogleEventIds,
     });
   } catch (error) {
     console.error('Error building board data:', error);
