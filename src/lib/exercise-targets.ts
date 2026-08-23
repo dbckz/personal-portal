@@ -16,7 +16,7 @@
 
 import { format, parseISO } from 'date-fns';
 
-import { type ExerciseProgression, type ProgressionPoint } from './exercise-progression';
+import { exerciseKey, type ExerciseProgression, type ProgressionPoint } from './exercise-progression';
 import { isCardioName, isHoldName, isUnilateralName } from './exercise-parse';
 
 // How an exercise sits in the programme:
@@ -426,6 +426,39 @@ function describeVolumeWords(point: {
   return words;
 }
 
+// Names that make an exercise unsafe to take to failure unsupported — dropping a
+// loaded barbell or heavy dumbbell alone is how people get hurt. The single
+// source of truth for the finisher's safety rule, shared by the deterministic
+// fallback here and the AI programme's enforceToFailure.
+const UNSAFE_TO_FAILURE = /\b(barbell|bench press|dumbbell|db |overhead press|deadlift|squat)\b/i;
+
+export function isSafeToFailure(name: string): boolean {
+  return !UNSAFE_TO_FAILURE.test(name);
+}
+
+// A session finishes on exactly ONE accessory taken to failure, as its last row.
+// Picks the last suitable row — never cardio (a run is no finisher), never a lift
+// unsafe to fail alone — moves it to the end and marks it, clearing any other
+// marker. A session with nothing safe to finish on (a pure run) gets none.
+function guaranteeFinisher(targets: ExerciseTarget[]): ExerciseTarget[] {
+  let idx = -1;
+  for (let i = targets.length - 1; i >= 0; i--) {
+    if (targets[i].kind !== 'cardio' && isSafeToFailure(targets[i].name)) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1) return targets;
+  const out = targets.map((t, i) => {
+    if (i === idx) return { ...t, toFailure: true };
+    if (t.toFailure) return { ...t, toFailure: false };
+    return t;
+  });
+  const [finisher] = out.splice(idx, 1);
+  out.push(finisher);
+  return out;
+}
+
 // Targets for a session, most-relevant first.
 //
 // `components` is the plan for the day ("Push (chest & arms)", "Run (2 km)"):
@@ -437,10 +470,70 @@ export function buildSessionTargets(
   limit = 8,
   options: SelectOptions = {}
 ): ExerciseTarget[] {
-  return orderTargets(
-    selectPlanProgressions(progressions, components, limit, options).map(buildTarget),
-    components
+  const targets = selectPlanProgressions(progressions, components, limit, options).map(buildTarget);
+  return guaranteeFinisher(
+    orderTargets(guaranteeCardioComponent(targets, components, options.venue), components)
   );
+}
+
+// The concrete cardio exercise name a run-type plan/routine component wants, so a
+// planned run always has a name to build a row from even when nothing in the
+// history or the routine's anchors/staples is a run. Returns null for a component
+// that doesn't activate the run group (a strength/core component has no cardio
+// piece to name).
+//
+// Naming follows the code's venue convention rather than the equipment word
+// alone: a treadmill is gym kit, so at HOME a run is done outdoors ("Outdoor
+// run") even if the component says treadmill (mirroring the programmer's home
+// treadmill→outdoor rename); a parkrun is its own outdoor event either way; a
+// bare run takes its canonical name "Outdoor run" (which also preserves any
+// planned distance, where a treadmill piece would be timed only). Only an
+// explicit gym treadmill keeps "Treadmill run".
+export function cardioComponentName(component: string, venue?: 'home'): string | null {
+  if (!componentGroups(component).includes('run')) return null;
+  const text = component.toLowerCase();
+  if (text.includes('parkrun')) return 'Parkrun';
+  if (venue !== 'home' && text.includes('treadmill')) return 'Treadmill run';
+  return 'Outdoor run';
+}
+
+// The same, for a whole day's plan: the name of its first run component, or null
+// when the day has no run. The one place a planned run is named, so every
+// guarantee built on it (the deterministic cardio row here, the AI programmer's
+// injected stub and its prompt instruction) agrees on the exercise — and so on
+// its key, which mergeRows matches logged entries against.
+export function planCardioName(components: string[], venue?: 'home'): string | null {
+  for (const component of components) {
+    const name = cardioComponentName(component, venue);
+    if (name) return name;
+  }
+  return null;
+}
+
+// Guarantee a cardio row when the plan calls for a run the history can't fill.
+// The deterministic fallback builds targets only from LOGGED exercises, so a
+// planned run with no run in the history (a first parkrun, a Saturday run never
+// logged) yields no cardio row at all. When a component activates the run group
+// and no cardio target is present, append a no-history cardio row named from the
+// component; orderTargets then leads the session with it.
+function guaranteeCardioComponent(
+  targets: ExerciseTarget[],
+  components: string[],
+  venue?: 'home'
+): ExerciseTarget[] {
+  if (targets.some(t => t.kind === 'cardio')) return targets;
+  const name = planCardioName(components, venue);
+  if (!name) return targets;
+  return [
+    ...targets,
+    {
+      name,
+      key: exerciseKey(name),
+      action: 'no-history',
+      kind: 'cardio',
+      rationale: 'No history for this run yet — record the distance and time today.',
+    },
+  ];
 }
 
 // Resistance-band exercises are a home-workout tool: never part of a planned GYM

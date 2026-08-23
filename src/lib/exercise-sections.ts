@@ -22,6 +22,10 @@ export interface SectionableRow {
   kind?: ExerciseKind;
   section?: string;
   isAnchor?: boolean;
+  // The one accessory taken to failure. Rendered in its own trailing "Finisher"
+  // section so it always reads last, never buried in the muscle-group section its
+  // name would otherwise sort it into.
+  toFailure?: boolean;
 }
 
 export interface RowSection<T> {
@@ -30,6 +34,7 @@ export interface RowSection<T> {
 }
 
 const OTHER = 'Other';
+const FINISHER = 'Finisher';
 
 // Classify-group → section heading, in the order the sections are shown.
 const CLASSIFY_SECTIONS: Array<{ group: ReturnType<typeof classifyExercise>; title: string }> = [
@@ -41,7 +46,16 @@ const CLASSIFY_SECTIONS: Array<{ group: ReturnType<typeof classifyExercise>; tit
 ];
 
 export function groupRowsIntoSections<T extends SectionableRow>(rows: T[]): RowSection<T>[] {
-  return rows.some(r => r.section) ? groupByPrescription(rows) : groupByClassification(rows);
+  // The finisher (a to-failure accessory) is lifted out of the muscle-group /
+  // prescription grouping and rendered in its own section that always trails the
+  // rest, so it reads last however its name would otherwise classify.
+  const finishers = rows.filter(r => r.toFailure);
+  const rest = rows.filter(r => !r.toFailure);
+  const sections = rest.some(r => r.section)
+    ? groupByPrescription(rest)
+    : groupByClassification(rest);
+  if (finishers.length) sections.push({ title: FINISHER, rows: finishers });
+  return sections;
 }
 
 // Staples (kind 'core') first, everything else after, order otherwise preserved.

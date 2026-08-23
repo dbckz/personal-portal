@@ -26,6 +26,8 @@ import {
   classifyExercise,
   describeLast,
   isHomeStrengthExercise,
+  isSafeToFailure,
+  planCardioName,
   selectPlanProgressions,
   type ExerciseKind,
   type ExerciseTarget,
@@ -178,6 +180,23 @@ export function buildProgrammerInput(
     extra.push(toProgrammerExerciseFor(name, progressions, totalSessions));
   }
 
+  // A planned run must always have a name in the vocabulary, even when no run is
+  // in the history and none of the routine's anchors/staples is a run (a Saturday
+  // "Parkrun + core" or "Run (4 km) + core" day). When the plan activates the run
+  // group and no cardio-classified name is present yet, inject the run
+  // component's exercise name as a no-history stub, so the model has a run to
+  // programme and guaranteeGroupCoverage can append one if the model omits it.
+  // This adds a key to the hash, so a stale cached programme without a run
+  // regenerates — intended.
+  const cardioName = planCardioName(plan.components, plan.venue);
+  if (cardioName && ![...vocab, ...extra].some(e => isCardioName(e.name))) {
+    const cardioKey = exerciseKey(cardioName);
+    if (cardioKey && !have.has(cardioKey)) {
+      have.add(cardioKey);
+      extra.push(toProgrammerExerciseFor(cardioName, progressions, totalSessions));
+    }
+  }
+
   // On a HOME day, offer a built-in band/bodyweight vocabulary as no-history
   // stubs so the model can build a full session even though Dave has logged few
   // home workouts. Filtered to the day's active groups (plus unclassifiable
@@ -316,7 +335,7 @@ Program the session as a coach would. Apply this judgement:
 - Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
 - Treadmill and cardio targets. A treadmill piece is targeted in MINUTES, never distance (a logged number like "9.2" is a speed, not a distance). When you add duration to a cardio piece, add at most 5 minutes over the last logged duration — never back-solve a jump from a calendar title.
-- Finish to failure — safely. Mark exactly ONE exercise as the last set to failure, and make it the final row. It MUST be an exercise that is safe to push to failure alone: a machine, cable or bodyweight movement. Never a barbell or heavy dumbbell exercise where failing means dropping a weight.
+- Finish on a to-failure accessory. Every session ends with exactly ONE accessory finisher taken to failure, placed LAST. It MUST be safe to push to failure alone: a machine, cable or bodyweight movement — never cardio, and never a barbell or heavy dumbbell exercise (or a heavy compound anchor) where failing means dropping a weight.
 - Always state last time concretely. Every rationale must reference what was actually done last time with real numbers (weights and reps, seconds for a hold, or minutes/distance for cardio).
 
 Return ONLY a JSON array, in the order the exercises should be done, no prose, no code fences:
@@ -506,19 +525,18 @@ export function buildProgrammerPrompt(input: ProgrammerInput): string {
     input.goals && input.goals.length > 0
       ? `\n\n${GOALS_HEADER}${input.goals.map(goalBlock).join('\n')}`
       : '';
+  // Name the cardio row for the model on a run day, so it emits (say) "Parkrun"
+  // rather than a generic run — the guaranteed cardio stub uses the same name, so
+  // the two agree whether the model programmes the run or the coverage floor does.
+  const cardioName = planCardioName(input.plan.components, input.plan.venue);
+  const cardio = cardioName
+    ? `\n\nThis session includes a run — name the cardio row exactly "${cardioName}" (kind "cardio", placed first).`
+    : '';
   return `${PROMPT_HEADER}Session: ${planLabel}
-${components}${routine}${home}
+${components}${routine}${home}${cardio}
 
 Exercises available (with recent history):
 ${exercises}${goals}`;
-}
-
-// Names that make an exercise unsafe to take to failure unsupported — dropping a
-// loaded barbell or heavy dumbbell alone is how people get hurt.
-const UNSAFE_TO_FAILURE = /\b(barbell|bench press|dumbbell|db |overhead press|deadlift|squat)\b/i;
-
-function isSafeToFailure(name: string): boolean {
-  return !UNSAFE_TO_FAILURE.test(name);
 }
 
 const KINDS: ExerciseKind[] = ['core', 'rotation', 'cardio', 'hold'];
@@ -672,10 +690,12 @@ export function validateProgramme(
 const MIN_STRENGTH_ROWS = 5;
 const MIN_CORE_ROWS = 3;
 
-// The floor for a group. Cardio (the 'run' group) is never floored — the
-// single-cardio rule stands — so it returns 0.
+// The floor for a group. The 'run' group is floored at ONE so a planned run
+// always yields a cardio row even when the model omits it; the single-cardio
+// rule in validateProgramme still caps it at one, so the floor never produces a
+// second run.
 function groupMinimum(group: Group): number {
-  if (group === 'run') return 0;
+  if (group === 'run') return 1;
   return group === 'core' ? MIN_CORE_ROWS : MIN_STRENGTH_ROWS;
 }
 
@@ -718,7 +738,7 @@ function guaranteeGroupCoverage(
         key: known.key,
         kind: inferKind(known.name),
         toFailure: false,
-        target: fallbackTarget(known),
+        target: fallbackTarget(known, input.plan.targetDistanceKm),
         rationale: hasHistory
           ? `Added for ${group} balance — last time ${known.lastSummary}.`
           : `Added for ${group} balance — no history yet, log a baseline.`,
@@ -860,7 +880,7 @@ function guaranteeFixed(
         key,
         kind: anchor ? 'core' : inferKind(known.name),
         toFailure: false,
-        target: fallbackTarget(known),
+        target: fallbackTarget(known, input.plan.targetDistanceKm),
         rationale: hasHistory
           ? `Fixed ${anchor ? 'anchor' : 'staple'} — last time ${known.lastSummary}.`
           : `Fixed ${anchor ? 'anchor' : 'staple'} — no history yet, log a baseline.`,
@@ -883,11 +903,18 @@ function inferKind(name: string): ExerciseKind {
 }
 
 // A deterministic target for a dropped fixed exercise, taken from its most
-// recent logged session so the row is never blank. Empty when there is no
-// history to seed from (a brand-new anchor/staple).
-function fallbackTarget(e: ProgrammerExercise): ProgrammeTarget {
+// recent logged session so the row is never blank. With no history to seed from
+// (a brand-new anchor/staple, or a first planned run), a cardio run still takes
+// the plan's distance when one is known so the guaranteed run row isn't blank —
+// mirroring validateProgramme's home-run distance fill; otherwise empty.
+function fallbackTarget(e: ProgrammerExercise, targetDistanceKm?: number): ProgrammeTarget {
   const last = e.recent[e.recent.length - 1];
-  if (!last) return {};
+  if (!last) {
+    if (targetDistanceKm !== undefined && isCardioName(e.name)) {
+      return { distanceKm: targetDistanceKm };
+    }
+    return {};
+  }
   return cleanTarget({
     sets: last.sets,
     reps: last.reps,
@@ -899,17 +926,33 @@ function fallbackTarget(e: ProgrammerExercise): ProgrammeTarget {
   });
 }
 
-// Exactly one to-failure marker, on the last safe row. Clears every model-set
-// marker, then re-marks the final row that is safe to fail — so the guarantee
-// holds however the model tagged things.
+// A row the session can safely finish on: never cardio (a run is no finisher),
+// never a lift unsafe to fail alone.
+function isSafeFinisher(row: ProgrammeRow): boolean {
+  return row.kind !== 'cardio' && isSafeToFailure(row.name);
+}
+
+function lastIndexWhere(rows: ProgrammeRow[], pick: (row: ProgrammeRow) => boolean): number {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (pick(rows[i])) return i;
+  }
+  return -1;
+}
+
+// Exactly one finisher: an accessory taken to failure, as the LAST row. Clears
+// every model-set marker, chooses one suitable finisher (never cardio, never a
+// lift unsafe to fail alone, and — where one is available — not a heavy compound
+// anchor), moves it to the end and marks it. So the guarantee (one finisher,
+// last) holds however the model tagged or ordered things.
 export function enforceToFailure(rows: ProgrammeRow[]): ProgrammeRow[] {
   const cleared = rows.map(r => ({ ...r, toFailure: false }));
-  for (let i = cleared.length - 1; i >= 0; i--) {
-    if (isSafeToFailure(cleared[i].name)) {
-      cleared[i].toFailure = true;
-      break;
-    }
-  }
+  // Prefer an accessory over a heavy compound anchor; fall back to any safe row.
+  let idx = lastIndexWhere(cleared, r => isSafeFinisher(r) && r.fixed !== 'anchor');
+  if (idx === -1) idx = lastIndexWhere(cleared, isSafeFinisher);
+  if (idx === -1) return cleared; // nothing safe to finish on (e.g. a pure run)
+  const [finisher] = cleared.splice(idx, 1);
+  finisher.toFailure = true;
+  cleared.push(finisher);
   return cleared;
 }
 

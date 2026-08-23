@@ -74,6 +74,54 @@ describe('buildProgrammerInput', () => {
     // The cardio last summary must carry real numbers, not "the same".
     expect(run.lastSummary).toBe('2 Aug · 15 min · 2.5 km');
   });
+
+  // A run day whose history has no run and whose routine has no run anchor/staple:
+  // the parkrun name is not in any existing vocabulary source.
+  function parkrunInput(): ProgrammerInput {
+    return buildProgrammerInput(
+      [progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Parkrun + core',
+        components: ['Parkrun', 'core'],
+        routineDay: { title: 'Parkrun + core', anchors: [], staples: ['Dead bug'] },
+      },
+      '2026-08-06',
+      6
+    );
+  }
+
+  it('injects the run component as a no-history stub when nothing else is a run', () => {
+    const built = parkrunInput();
+    const run = built.exercises.find(e => e.key === exerciseKey('Parkrun'));
+    expect(run).toBeDefined();
+    expect(run!.name).toBe('Parkrun');
+    expect(run!.frequency).toBe(0);
+    expect(run!.lastSummary).toBe('no history');
+  });
+
+  it('does not inject a run stub when the vocabulary already has a run', () => {
+    const built = buildProgrammerInput(
+      [
+        progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }], 4),
+        progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
+      ],
+      { label: 'Run + core', components: ['Run (4 km)', 'core'] },
+      '2026-08-06',
+      6
+    );
+    // The existing treadmill run satisfies the run — no second run name added.
+    expect(built.exercises.some(e => e.key === exerciseKey('Outdoor run'))).toBe(false);
+    expect(built.exercises.filter(e => e.name.toLowerCase().includes('run'))).toHaveLength(1);
+  });
+
+  it('the injected run stub moves the programme hash so a stale cached programme regenerates', () => {
+    const withRun = parkrunInput();
+    const withoutRun: ProgrammerInput = {
+      ...withRun,
+      exercises: withRun.exercises.filter(e => e.key !== exerciseKey('Parkrun')),
+    };
+    expect(programmeHash(withRun)).not.toBe(programmeHash(withoutRun));
+  });
 });
 
 describe('isBandExercise', () => {
@@ -179,6 +227,25 @@ describe('buildProgrammerPrompt', () => {
     // The 'hold' kind is offered and unilateral work is flagged perSide.
     expect(prompt).toContain('cardio|hold');
     expect(prompt).toContain('perSide');
+  });
+
+  it('names the cardio row for the model on a run day', () => {
+    const parkrun = buildProgrammerInput(
+      [progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Parkrun + core',
+        components: ['Parkrun', 'core'],
+        routineDay: { title: 'Parkrun + core', anchors: [], staples: ['Dead bug'] },
+      },
+      '2026-08-06',
+      6
+    );
+    const prompt = buildProgrammerPrompt(parkrun);
+    expect(prompt).toContain('name the cardio row exactly "Parkrun"');
+  });
+
+  it('says nothing about a cardio name on a day with no run', () => {
+    expect(buildProgrammerPrompt(input())).not.toContain('name the cardio row');
   });
 });
 
@@ -589,6 +656,51 @@ describe('guaranteeGroupCoverage — per-group minimum rows', () => {
       'Face pull',
     ]);
   });
+
+  it('floors the run group at one, appending the cardio row when the model omits it', () => {
+    const parkrun = buildProgrammerInput(
+      [progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Parkrun + core',
+        components: ['Parkrun', 'core'],
+        routineDay: { title: 'Parkrun + core', anchors: [], staples: ['Dead bug'] },
+      },
+      '2026-08-06',
+      6
+    );
+    // The model returns core work only, no run at all.
+    const rows = validateProgramme(
+      [{ name: 'Dead bug', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } }],
+      parkrun
+    );
+    const cardio = rows.filter(r => r.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Parkrun');
+    // Cardio leads the ordered session.
+    expect(rows[0].name).toBe('Parkrun');
+  });
+
+  it('gives a no-history home run the plan distance as its fallback target', () => {
+    const homeRun = buildProgrammerInput(
+      [progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3)],
+      {
+        label: 'Parkrun + core',
+        components: ['Parkrun', 'core'],
+        routineDay: { title: 'Parkrun + core', anchors: [], staples: ['Dead bug'] },
+        venue: 'home',
+        targetDistanceKm: 5,
+      },
+      '2026-08-06',
+      6
+    );
+    const rows = validateProgramme(
+      [{ name: 'Dead bug', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } }],
+      homeRun
+    );
+    const run = rows.find(r => r.name === 'Parkrun');
+    expect(run).toBeDefined();
+    expect(run!.target.distanceKm).toBe(5);
+  });
 });
 
 describe('markFixed — anchor/staple provenance', () => {
@@ -752,6 +864,54 @@ describe('validateProgramme deterministic ordering', () => {
     expect(failing).toHaveLength(1);
     expect(failing[0].name).toBe(rows[rows.length - 1].name);
     expect(rows[rows.length - 1].name).toBe('Lateral raise');
+  });
+});
+
+describe('validateProgramme — the finisher', () => {
+  it('promotes a finisher when the model marks none, and places it last', () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Converging chest press machine', kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 35 } },
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+      ],
+      input()
+    );
+    const failing = rows.filter(r => r.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(rows[rows.length - 1].name);
+    expect(rows[rows.length - 1].kind).not.toBe('cardio');
+  });
+
+  it('moves a mid-list finisher to the last row, clearing the stray marker', () => {
+    // The model tags a middle accessory to failure; the single finisher must end
+    // up on the LAST row, with the mid-list marker cleared.
+    const rows = validateProgramme(
+      [
+        { name: 'Converging chest press machine', kind: 'core', toFailure: true, target: { sets: 3, reps: 8, weightKg: 35 } },
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+      ],
+      input()
+    );
+    const failing = rows.filter(r => r.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(rows[rows.length - 1].name);
+    expect(rows[rows.length - 1].name).toBe('Cable tricep pushdown');
+  });
+
+  it('never chooses a cardio row as the finisher', () => {
+    // With cardio last in the model's order (and no routine day to reorder it),
+    // the finisher must still skip the run and land on the strength row.
+    const rows = validateProgramme(
+      [
+        { name: 'Cable tricep pushdown', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 12, weightKg: 22 } },
+        { name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 16 } },
+      ],
+      input()
+    );
+    const failing = rows.filter(r => r.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe('Cable tricep pushdown');
+    expect(rows.find(r => r.kind === 'cardio')?.toFailure).toBe(false);
   });
 });
 

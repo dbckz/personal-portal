@@ -58,3 +58,39 @@ describe('groupRowsIntoSections — without a prescription', () => {
     expect(sections.map(s => s.title)).toEqual(['Other']);
   });
 });
+
+describe('groupRowsIntoSections — the finisher', () => {
+  it('lifts a to-failure row into its own trailing "Finisher" section (classified)', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Treadmill run' }), // run
+      // A pull-classified accessory that, without the finisher rule, would sit
+      // mid-list in the Pull section — Dave's complaint.
+      row({ name: 'Reverse pec deck', toFailure: true }),
+      row({ name: 'Seated cable row' }), // pull
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Run', 'Pull', 'Finisher']);
+    expect(sections[sections.length - 1].rows.map(r => r.name)).toEqual(['Reverse pec deck']);
+    // The finisher is not left in the Pull section it would classify into.
+    expect(sections.find(s => s.title === 'Pull')!.rows.map(r => r.name)).toEqual([
+      'Seated cable row',
+    ]);
+  });
+
+  it('trails the finisher after "Other" in prescription mode', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Seated cable row', section: 'Anchors', isAnchor: true, kind: 'core' }),
+      row({ name: 'Reverse pec deck', section: "This week's accessories", toFailure: true }),
+      row({ name: 'Face pull' }), // added on the spot → Other
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Anchors', 'Other', 'Finisher']);
+    expect(sections[sections.length - 1].rows.map(r => r.name)).toEqual(['Reverse pec deck']);
+  });
+
+  it('adds no Finisher section when no row is to failure', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Seated cable row' }),
+      row({ name: 'Bench press' }),
+    ]);
+    expect(sections.some(s => s.title === 'Finisher')).toBe(false);
+  });
+});

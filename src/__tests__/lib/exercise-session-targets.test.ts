@@ -83,3 +83,42 @@ describe('resolveSessionTargets — a plan moved onto another weekday', () => {
     expect(resolved.input.exercises.length).toBeGreaterThan(0);
   });
 });
+
+// A Saturday "Parkrun + core" with no run ever logged: the deterministic
+// fallback (a cache miss) builds targets only from logged exercises, so without a
+// guarantee it would show no run at all. The resolver must still surface a
+// tickable, cardio-classified parkrun row leading the session.
+function parkrunPlan(): ExerciseSession {
+  return {
+    id: 'parkrun',
+    date: '2026-08-22',
+    type: 'gym',
+    planned: true,
+    completed: false,
+    source: 'manual',
+    createdAt: '2026-08-22T00:00:00.000Z',
+    updatedAt: '2026-08-22T00:00:00.000Z',
+    label: 'Parkrun + core',
+    components: ['Parkrun', 'core'],
+  };
+}
+
+describe('resolveSessionTargets — a planned run with no run history', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRoutine.mockResolvedValue([
+      { dayOfWeek: 6, title: 'Parkrun + core', anchors: [], staples: [] },
+    ]);
+    mockGetCached.mockReturnValue(null);
+  });
+
+  it('guarantees a cardio row on the deterministic fallback', async () => {
+    const resolved = await resolveSessionTargets('2026-08-22', [parkrunPlan()]);
+    expect(resolved.source).toBe('fallback');
+    const cardio = resolved.targets.filter(t => t.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Parkrun');
+    // Cardio leads the session.
+    expect(resolved.targets[0].name).toBe('Parkrun');
+  });
+});

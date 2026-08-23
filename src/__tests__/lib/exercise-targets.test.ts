@@ -8,6 +8,7 @@
 import {
   buildTarget,
   buildSessionTargets,
+  cardioComponentName,
   classifyExercise,
   describeLast,
   describeVolumeLoad,
@@ -546,6 +547,77 @@ describe('buildSessionTargets', () => {
     const cardio = targets.filter(t => t.kind === 'cardio');
     expect(cardio).toHaveLength(1);
     expect(cardio[0].name).toBe('Treadmill run');
+  });
+
+  it('guarantees a cardio row for a parkrun plan with no run in the history', () => {
+    // A Saturday "Parkrun + core" with only core work logged — no run anywhere in
+    // the history — must still lead with a tickable, cardio-classified parkrun row.
+    const targets = buildSessionTargets([prog('Pallof press')], ['Parkrun', 'core']);
+    expect(targets[0].name).toBe('Parkrun');
+    expect(targets[0].kind).toBe('cardio');
+    expect(targets[0].action).toBe('no-history');
+    expect(targets.filter(t => t.kind === 'cardio')).toHaveLength(1);
+  });
+
+  it('does not add a guaranteed run when a run is already present', () => {
+    // The history already carries a run, so no no-history row is conjured.
+    const targets = buildSessionTargets(
+      [cardioProg('Outdoor run', 3), prog('Pallof press')],
+      ['Run (4 km)', 'core']
+    );
+    expect(targets.filter(t => t.kind === 'cardio')).toHaveLength(1);
+    expect(targets[0].name).toBe('Outdoor run');
+  });
+
+  it('does not guarantee a run for a plan with no run component', () => {
+    const targets = buildSessionTargets([prog('Lat pulldown')], ['Pull (back & arms)']);
+    expect(targets.some(t => t.kind === 'cardio')).toBe(false);
+  });
+
+  it('finishes on exactly one to-failure accessory, placed last', () => {
+    const targets = buildSessionTargets(
+      [prog('Lat pulldown'), prog('Seated cable row')],
+      ['Pull (back & arms)']
+    );
+    const failing = targets.filter(t => t.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(targets[targets.length - 1].name);
+  });
+
+  it('never marks the cardio row as the finisher', () => {
+    const targets = buildSessionTargets(
+      [cardioProg('Treadmill run', 5), prog('Lat pulldown')],
+      ['Run', 'Pull (back & arms)']
+    );
+    expect(targets[0].kind).toBe('cardio');
+    expect(targets[0].toFailure).toBeFalsy();
+    const failing = targets.filter(t => t.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe('Lat pulldown');
+  });
+});
+
+describe('cardioComponentName', () => {
+  it('names a parkrun component as Parkrun, either venue', () => {
+    expect(cardioComponentName('Parkrun')).toBe('Parkrun');
+    expect(cardioComponentName('Parkrun + core')).toBe('Parkrun');
+    expect(cardioComponentName('Parkrun', 'home')).toBe('Parkrun');
+  });
+
+  it('names a generic run as an outdoor run, preserving the canonical bare-run name', () => {
+    expect(cardioComponentName('Run (4 km)')).toBe('Outdoor run');
+    expect(cardioComponentName('Run (4 km)', 'home')).toBe('Outdoor run');
+  });
+
+  it('keeps a gym treadmill piece named as a treadmill, but runs it outdoors at home', () => {
+    expect(cardioComponentName('Treadmill run')).toBe('Treadmill run');
+    // At home there is no treadmill — the run is done outdoors.
+    expect(cardioComponentName('Treadmill run', 'home')).toBe('Outdoor run');
+  });
+
+  it('returns null for a component that does not activate the run group', () => {
+    expect(cardioComponentName('Push (chest & arms)')).toBeNull();
+    expect(cardioComponentName('core')).toBeNull();
   });
 });
 
