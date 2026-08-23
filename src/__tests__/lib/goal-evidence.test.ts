@@ -135,6 +135,77 @@ describe('exercise-name matching', () => {
   });
 });
 
+describe('treadmill duration equivalence', () => {
+  beforeEach(() => {
+    __resetDbForTests();
+  });
+
+  it('credits a duration-only treadmill run at 5 min per km', async () => {
+    // Treadmill entries are stored time-only, with no distanceKm: 20 min is a 4 km.
+    await createSession({
+      date: '2026-08-06',
+      type: 'gym',
+      exercises: [{ name: 'Treadmill run', durationMinutes: 20 }],
+    });
+    const result = await resolveEvidence(runGoal());
+    expect(result.actual).toBe(4);
+  });
+
+  it('credits 50 min on the treadmill as a 10K via a whole-session match', async () => {
+    await createSession({ date: '2026-08-07', type: 'run', durationMinutes: 50, exercises: [] });
+    // Treadmill exercise inside the session carries the duration; session-level
+    // distance is absent, so the equivalence supplies the figure.
+    await createSession({
+      date: '2026-08-08',
+      type: 'run',
+      exercises: [{ name: 'Treadmill run', durationMinutes: 50 }],
+    });
+    const result = await resolveEvidence(
+      runGoal({ evidence: { kind: 'exercise', ref: 'run', unit: 'max-distance-km' } })
+    );
+    expect(result.actual).toBe(10);
+  });
+
+  it('uses the real distance, not the equivalence, when a treadmill run logs both', async () => {
+    // 20 min would equal 4 km, but a real 8 km distance is present and wins.
+    await createSession({
+      date: '2026-08-09',
+      type: 'gym',
+      exercises: [{ name: 'Treadmill run', durationMinutes: 20, distanceKm: 8 }],
+    });
+    const result = await resolveEvidence(runGoal());
+    expect(result.actual).toBe(8);
+  });
+
+  it('does not apply the equivalence to a non-treadmill duration-only entry', async () => {
+    await createSession({
+      date: '2026-08-11',
+      type: 'gym',
+      exercises: [{ name: 'Outdoor run', durationMinutes: 30 }],
+    });
+    const result = await resolveEvidence(runGoal());
+    expect(result.actual).toBeNull();
+    expect(result.label).toMatch(/No distance/);
+  });
+
+  it('does not apply the equivalence to a minutes goal', async () => {
+    // For a minutes goal the treadmill duration counts as minutes, unchanged —
+    // it is not converted into a distance.
+    await createSession({
+      date: '2026-08-12',
+      type: 'strength + cardio',
+      exercises: [{ name: 'Treadmill run', durationMinutes: 20 }],
+    });
+    const result = await resolveEvidence(
+      runGoal({
+        evidence: { kind: 'exercise', ref: 'run', unit: 'minutes' },
+        target: { value: 60, unit: 'min' },
+      })
+    );
+    expect(result.actual).toBe(20);
+  });
+});
+
 describe('manual override on an auto source', () => {
   beforeEach(() => {
     __resetDbForTests();

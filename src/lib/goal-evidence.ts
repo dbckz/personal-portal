@@ -149,18 +149,32 @@ function matchMinutes(match: SessionMatch): number {
 
 function matchDistanceKm(match: SessionMatch): number {
   if (match.matchedExercises === null) return sessionDistanceKm(match.session);
-  return match.matchedExercises.reduce((max, e) => Math.max(max, e.distanceKm ?? 0), 0);
+  return maxExerciseDistanceKm(match.matchedExercises);
 }
 
 // The greatest single distance a session represents: its own distance, or the
 // longest distance logged on any exercise inside it, whichever is larger.
 function sessionDistanceKm(session: ExerciseSession): number {
   const own = session.distanceKm ?? 0;
-  const perExercise = (session.exercises ?? []).reduce(
-    (max, e) => Math.max(max, e.distanceKm ?? 0),
-    0
-  );
-  return Math.max(own, perExercise);
+  return Math.max(own, maxExerciseDistanceKm(session.exercises ?? []));
+}
+
+function maxExerciseDistanceKm(exercises: ExerciseEntry[]): number {
+  return exercises.reduce((max, e) => Math.max(max, exerciseDistanceKm(e)), 0);
+}
+
+// Treadmill runs are stored time-only, with no distanceKm (see exercise-targets
+// and exercise-programmer). Dave's rule is that a treadmill run still counts
+// toward a distance goal at 5 min per km — so 50 min on the treadmill is a 10K.
+// A real logged distance always wins over the equivalence when one is present.
+const TREADMILL_MIN_PER_KM = 5;
+
+function exerciseDistanceKm(e: ExerciseEntry): number {
+  const real = e.distanceKm ?? 0;
+  if (real > 0) return real;
+  const minutes = e.durationMinutes ?? 0;
+  if (minutes > 0 && /treadmill/i.test(e.name)) return minutes / TREADMILL_MIN_PER_KM;
+  return 0;
 }
 
 // Minutes booked against a time-tracking category, read out of the durable
