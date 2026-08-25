@@ -122,18 +122,20 @@ function sessionAdherenceOf(
 }
 
 // Across the given completed sessions, the fraction of exercise entries actually
-// performed. Only sessions that carry exercises contribute; null when none do,
-// so a block of runs (no entries) reads empty rather than a spurious 0% or 100%.
+// performed. A period whose completed sessions carry no entries at all (a week
+// of walks or runs, say) reads 100% — everything done was list-free, nothing
+// was skipped (Dave's preference, 25 Aug 2026, over a gap in the trend). Null
+// only when there were no completed sessions, where there is nothing to rate.
 function exerciseAdherenceOf(done: ExerciseSession[]): number | null {
+  if (done.length === 0) return null;
   let performed = 0;
   let total = 0;
   for (const s of done) {
     const entries = s.exercises ?? [];
-    if (entries.length === 0) continue;
     total += entries.length;
     performed += entries.filter(entryWasPerformed).length;
   }
-  return total === 0 ? null : performed / total;
+  return total === 0 ? 1 : performed / total;
 }
 
 function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {

@@ -332,14 +332,21 @@ describe('per-week adherence', () => {
     expect(week?.exerciseAdherence).toBe(1);
   });
 
-  it('reads exercise adherence as null for a week whose sessions carry no exercises', () => {
+  it('reads exercise adherence as 100% for a week whose sessions carry no exercises', () => {
+    // A completed session with no exercise list (a run, a walk) skipped
+    // nothing, so the week rates 100% rather than leaving a gap.
     const analysis = analyseExercise(
       [session({ date: '2026-07-06', type: 'run' })],
       '2026-07-01',
       '2026-07-12'
     );
     const week = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
-    expect(week?.exerciseAdherence).toBeNull();
+    expect(week?.exerciseAdherence).toBe(1);
+    expect(analysis.exerciseAdherence).toBe(1);
+  });
+
+  it('reads exercise adherence as null for a week with no completed sessions', () => {
+    const analysis = analyseExercise([], '2026-07-01', '2026-07-12');
     expect(analysis.exerciseAdherence).toBeNull();
   });
 
