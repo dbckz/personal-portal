@@ -5,6 +5,7 @@ import { format, parseISO } from 'date-fns';
 import { Check, Plus, RefreshCw } from 'lucide-react';
 
 import { api } from '@/lib/api';
+import { AdherenceTrendChart } from '@/components/sections/exercise/AdherenceTrendChart';
 import { describeEntry } from '@/components/sections/exercise/ExerciseEntryList';
 import { entryWasPerformed } from '@/lib/exercise-entry';
 import { formatEntryDuration } from '@/lib/exercise-targets';
@@ -329,25 +330,18 @@ function SessionGroup({
   );
 }
 
-// Fewer columns than the desktop: a phone can't read twelve slivers.
+// Fewer weeks than the desktop: a phone can't read twelve.
 const TREND_WEEKS = 8;
-
-// Same emerald/amber/orange scale as the desktop and Work analyses.
-function rateColor(rate: number): string {
-  if (rate >= 0.8) return 'bg-emerald-500';
-  if (rate >= 0.5) return 'bg-amber-500';
-  return 'bg-orange-400';
-}
 
 function pctLabel(rate: number | null): string {
   return rate === null ? '—' : `${pct(rate)}%`;
 }
 
-// The mobile adherence trend: recent weeks as columns, oldest left, height and
-// colour by exercise adherence (of a session's planned exercises, how many were
-// done). Plan adherence (sessions done vs planned) sits under each column, and
-// both aggregates head the card. Empty weeks show a bare track, not a 0%
-// failure; only shown once two weeks carry a reading.
+// The mobile adherence trend: recent weeks as a two-series line chart (see
+// AdherenceTrendChart) — exercise adherence (of a session's planned exercises,
+// how many were done) and plan adherence (sessions done vs planned). Both
+// aggregates head the card; empty weeks leave a gap, not a 0% failure; only
+// shown once two weeks carry a reading.
 function AdherenceTrend({ analysis }: { analysis: ExerciseAnalysis }) {
   const recent = analysis.byWeek.slice(-TREND_WEEKS);
   const withData = recent.filter(
@@ -366,38 +360,7 @@ function AdherenceTrend({ analysis }: { analysis: ExerciseAnalysis }) {
         </span>
       </div>
       <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-        <ul className="flex items-end gap-1.5">
-          {recent.map(week => {
-            const ex = week.exerciseAdherence;
-            const sess = week.sessionAdherence;
-            return (
-              <li key={week.weekStart} className="flex flex-1 flex-col items-center justify-end">
-                <span className="mb-1 text-[10px] tabular-nums text-gray-500">
-                  {ex === null ? '—' : `${pct(ex)}%`}
-                </span>
-                <div className="flex h-20 w-full flex-col justify-end overflow-hidden rounded-full bg-gray-100">
-                  {ex !== null && (
-                    <div
-                      className={`w-full rounded-full ${rateColor(ex)}`}
-                      style={{ height: `${Math.max(pct(ex), 2)}%` }}
-                      aria-label={`Week of ${format(parseISO(week.weekStart), 'd MMM')}: ${pct(
-                        ex
-                      )} per cent of planned exercises done${
-                        sess === null ? '' : `, ${pct(sess)} per cent plan adherence`
-                      }`}
-                    />
-                  )}
-                </div>
-                <span className="mt-1 w-full truncate text-center text-[9px] text-gray-400">
-                  {format(parseISO(week.weekStart), 'd MMM')}
-                </span>
-                <span className="w-full truncate text-center text-[9px] tabular-nums text-gray-400">
-                  {sess === null ? '·' : `${pct(sess)}%`}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <AdherenceTrendChart weeks={analysis.byWeek} maxWeeks={TREND_WEEKS} height={150} compact />
       </div>
     </section>
   );

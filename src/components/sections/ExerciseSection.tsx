@@ -13,8 +13,8 @@ import type {
   ExerciseSession,
   ExerciseWeekSummary,
 } from '@/types/life';
-import { pct } from '@/components/analysis/format';
 import { SectionGoals } from '@/components/goals/SectionGoals';
+import { AdherenceTrendChart } from './exercise/AdherenceTrendChart';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
 import { FreeformLog } from './exercise/FreeformLog';
@@ -553,24 +553,16 @@ function SessionForm({
 // Analysis
 // ---------------------------------------------------------------------------
 
-// The most recent stretch shown as columns: a longer training record would
+// The most recent stretch shown as a line chart: a longer training record would
 // squeeze into unreadable slivers, and twelve weeks is enough to read a trend.
 const TREND_WEEKS = 12;
 
-// Same emerald/amber/orange scale the Work analysis uses for its completion
-// trend, so the two read as one visual language across the portal.
-function rateColor(rate: number): string {
-  if (rate >= 0.8) return 'bg-emerald-500';
-  if (rate >= 0.5) return 'bg-amber-500';
-  return 'bg-orange-400';
-}
-
-// Adherence across recent weeks, oldest on the left. The column height and
-// colour track exercise adherence (of a session's planned exercises, how many
-// were done) — the richer, per-entry signal; plan adherence (sessions done vs
-// planned) rides underneath as a secondary figure. Weeks with no data render as
-// an empty track rather than a 0% failure. Only shown once at least two weeks
-// carry a reading — a single column is a data point, not a trend.
+// Adherence across recent weeks, oldest on the left, as a two-series line chart
+// (see AdherenceTrendChart): exercise adherence — of a session's planned
+// exercises, how many were done — and plan adherence — sessions done vs planned.
+// Weeks with no reading leave a gap rather than reading as a 0% failure. Only
+// shown once at least two weeks carry a reading — a single point is a data
+// point, not a trend.
 function AdherenceTrend({ weeks }: { weeks: ExerciseWeekSummary[] }) {
   const recent = weeks.slice(-TREND_WEEKS);
   const withData = recent.filter(
@@ -584,42 +576,7 @@ function AdherenceTrend({ weeks }: { weeks: ExerciseWeekSummary[] }) {
         Adherence trend
       </h3>
       <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <p className="text-[11px] text-gray-400 mb-3">
-          Share of a session&rsquo;s planned exercises completed each week (bar), oldest first. Plan
-          adherence — sessions done vs planned — shown below each week.
-        </p>
-        <ul className="flex items-end gap-2">
-          {recent.map(week => {
-            const ex = week.exerciseAdherence;
-            const sess = week.sessionAdherence;
-            return (
-              <li key={week.weekStart} className="flex-1 flex flex-col items-center justify-end">
-                <span className="text-[11px] text-gray-500 mb-1 tabular-nums">
-                  {ex === null ? '—' : `${pct(ex)}%`}
-                </span>
-                <div className="w-full h-24 bg-gray-100 rounded-full flex flex-col justify-end overflow-hidden">
-                  {ex !== null && (
-                    <div
-                      className={`w-full rounded-full ${rateColor(ex)}`}
-                      style={{ height: `${Math.max(pct(ex), 2)}%` }}
-                      aria-label={`Week of ${format(parseISO(week.weekStart), 'd MMM')}: ${pct(
-                        ex
-                      )} per cent of planned exercises done${
-                        sess === null ? '' : `, ${pct(sess)} per cent plan adherence`
-                      }`}
-                    />
-                  )}
-                </div>
-                <span className="text-[10px] text-gray-400 mt-1 truncate w-full text-center">
-                  {format(parseISO(week.weekStart), 'd MMM')}
-                </span>
-                <span className="text-[10px] text-gray-400 truncate w-full text-center tabular-nums">
-                  {sess === null ? '·' : `plan ${pct(sess)}%`}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <AdherenceTrendChart weeks={weeks} maxWeeks={TREND_WEEKS} height={180} />
       </div>
     </section>
   );
