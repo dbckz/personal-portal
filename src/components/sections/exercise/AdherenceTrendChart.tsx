@@ -81,7 +81,7 @@ export function AdherenceTrendChart({
   ];
 
   const fontAxis = compact ? 9 : 10;
-  const padL = 30; // room for "100%" y-tick labels
+  const padL = 38; // room for "100%" y-tick labels
   const padR = compact ? 46 : 54; // room for last-point direct labels
   const padT = 10;
   const padB = 20; // room for x-tick labels
