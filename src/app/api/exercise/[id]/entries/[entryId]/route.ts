@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { removeSessionEntry, updateSessionEntry } from '@/lib/storage/exercise';
+import { getAllSessions, removeSessionEntry, updateSessionEntry } from '@/lib/storage/exercise';
+import { deriveSwapTargetPatch } from '@/lib/exercise-swap-target';
 import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
 // A reps-in-reserve rating: a number 0-10, null to clear an existing rating, or
@@ -11,6 +12,32 @@ function parseRir(value: unknown): number | null | undefined {
   if (value === null) return null;
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 && n <= 10 ? n : undefined;
+}
+
+// Does this body perform a swap — a rename to a substitute exercise that records
+// what it stood in for? A non-empty new name plus a non-empty substitutedFor. A
+// restore (substitutedFor null/blank) and a plain rename (no substitutedFor) are
+// not swaps.
+function isSwap(body: Record<string, unknown>): boolean {
+  return (
+    typeof body.name === 'string' &&
+    body.name.trim() !== '' &&
+    typeof body.substitutedFor === 'string' &&
+    body.substitutedFor.trim() !== ''
+  );
+}
+
+// Whether the client already supplied a target for the swap. When it did, its
+// numbers win and no derivation runs; cardio measures (distance/time) are NOT
+// targets in this sense — they refine a derived target rather than replace it.
+function hasExplicitTarget(body: Record<string, unknown>): boolean {
+  return (
+    body.sets !== undefined ||
+    body.reps !== undefined ||
+    body.weightKg !== undefined ||
+    body.holdSeconds !== undefined ||
+    body.targetText !== undefined
+  );
 }
 
 // PATCH /api/exercise/:id/entries/:entryId
@@ -26,7 +53,7 @@ export async function PATCH(
     const { id, entryId } = await params;
     const body = await request.json();
 
-    const session = await updateSessionEntry(id, entryId, {
+    const patch: Record<string, unknown> = {
       // Renaming matters: an exercise filed under the wrong name is a separate
       // history, so correcting it merges the two.
       ...(typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim() } : {}),
@@ -57,12 +84,39 @@ export async function PATCH(
               body.substitutedFor === null ? null : String(body.substitutedFor).trim() || null,
           }
         : {}),
-      // The pre-filled "aim for" text. Cleared on a swap (the original's target
-      // no longer describes the substitute); null clears, a string overwrites.
+      // The pre-filled "aim for" text. null clears, a string overwrites. On a swap
+      // the client leaves this off so the target is DERIVED from the substitute's
+      // own history below, rather than left showing the old exercise's aim.
       ...(body.targetText !== undefined
         ? { targetText: body.targetText === null ? null : String(body.targetText) }
         : {}),
-    });
+    };
+
+    // Swap target derivation: when a swap arrives without an explicit target, give
+    // the substitute a target built from ITS OWN history (last time, progressed) —
+    // sets/reps/weight or hold/cardio measures plus the "aim for" text — so the
+    // entry stops carrying the replaced exercise's numbers. A cardio measure the
+    // client typed during the swap still wins over the derived one; a substitute
+    // with no history leaves the target blank (a free entry), as before.
+    if (isSwap(body) && !hasExplicitTarget(body)) {
+      const sessions = await getAllSessions();
+      const current = sessions.find(s => s.id === id);
+      const derived = current
+        ? deriveSwapTargetPatch(sessions, current, body.name.trim())
+        : null;
+      if (derived) {
+        patch.sets = derived.sets;
+        patch.reps = derived.reps;
+        patch.holdSeconds = derived.holdSeconds;
+        patch.perSide = derived.perSide;
+        patch.weightKg = derived.weightKg;
+        patch.targetText = derived.targetText;
+        if (body.distanceKm === undefined) patch.distanceKm = derived.distanceKm;
+        if (body.durationMinutes === undefined) patch.durationMinutes = derived.durationMinutes;
+      }
+    }
+
+    const session = await updateSessionEntry(id, entryId, patch);
     if (!session) return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
 
     // Correcting an entry (weight, reps, a rename that merges histories) changes

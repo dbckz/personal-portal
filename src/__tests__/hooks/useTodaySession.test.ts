@@ -181,7 +181,6 @@ describe('useTodaySession', () => {
     expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', {
       name: 'Treadmill run',
       substitutedFor: 'Bench',
-      targetText: null,
       distanceKm: 3,
     });
     const swapped = result.current.rows.find(r => r.key === 'bench')!;
@@ -248,7 +247,6 @@ describe('useTodaySession', () => {
     expect(mockApi.updateExerciseEntry).toHaveBeenCalledWith('s1', 'e1', {
       name: 'Treadmill run',
       substitutedFor: 'Bench',
-      targetText: null,
       distanceKm: 3,
       durationMinutes: 20,
     });

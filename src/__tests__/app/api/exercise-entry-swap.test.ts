@@ -11,13 +11,21 @@ import type { ExerciseSession } from '@/types/life';
 jest.mock('@/lib/storage/exercise', () => ({
   updateSessionEntry: jest.fn(),
   removeSessionEntry: jest.fn(),
+  getAllSessions: jest.fn(),
+}));
+
+// prewarmProgramme fires on every successful PATCH; stub it so the route runs
+// without reaching the real programme cache / Claude.
+jest.mock('@/lib/exercise-prewarm', () => ({
+  prewarmProgramme: jest.fn().mockResolvedValue(undefined),
 }));
 
 import { PATCH } from '@/app/api/exercise/[id]/entries/[entryId]/route';
-import { updateSessionEntry } from '@/lib/storage/exercise';
+import { getAllSessions, updateSessionEntry } from '@/lib/storage/exercise';
 import { NextRequest } from 'next/server';
 
 const mockUpdate = updateSessionEntry as jest.Mock;
+const mockGetAll = getAllSessions as jest.Mock;
 
 function session(): ExerciseSession {
   return {
@@ -47,6 +55,7 @@ describe('PATCH /api/exercise/:id/entries/:entryId — swap fields', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUpdate.mockResolvedValue(session());
+    mockGetAll.mockResolvedValue([session()]);
   });
 
   it('swaps: sets name + substitutedFor + distanceKm and clears targetText', async () => {
@@ -92,5 +101,118 @@ describe('PATCH /api/exercise/:id/entries/:entryId — swap fields', () => {
     mockUpdate.mockResolvedValue(null);
     const res = await patch({ substitutedFor: null });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH swap — target derivation from the substitute’s own history', () => {
+  // A prior loaded session for the substitute exercise, so buildProgressions has
+  // real history to derive a target from.
+  function withHistory(entries: ExerciseSession['exercises']): ExerciseSession {
+    return {
+      id: 'hist',
+      date: '2026-07-30',
+      type: 'gym',
+      planned: false,
+      completed: true,
+      source: 'manual',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      updatedAt: '2026-07-30T00:00:00.000Z',
+      exercises: entries,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdate.mockResolvedValue(session());
+  });
+
+  it('derives sets/reps/weight and targetText for the substitute, replacing the old numbers', async () => {
+    mockGetAll.mockResolvedValue([
+      withHistory([
+        {
+          id: 'h1',
+          name: 'Converging shoulder press',
+          done: true,
+          sets: 3,
+          reps: 8,
+          weightKg: 25.3,
+          notes: 'At limit, make lighter',
+        },
+      ]),
+      session(),
+    ]);
+
+    const { patch: p } = await patch({
+      name: 'Converging shoulder press',
+      substitutedFor: 'Cable crossover',
+    });
+
+    expect(p.name).toBe('Converging shoulder press');
+    expect(p.substitutedFor).toBe('Cable crossover');
+    expect(p.sets).toBe(3);
+    expect(p.reps).toBe(8);
+    // "make lighter" earns a reduce off 25.3kg → 22.77kg, rounded to a loadable 23kg.
+    expect(p.weightKg).toBe(23);
+    expect(p.targetText).toBe('3 × 8 · 23kg');
+    // Fields the substitute's target doesn't carry are cleared, not left stale.
+    expect(p.holdSeconds).toBeNull();
+    expect(p.distanceKm).toBeNull();
+    expect(p.durationMinutes).toBeNull();
+  });
+
+  it('leaves the target blank when the substitute has no history', async () => {
+    mockGetAll.mockResolvedValue([session()]);
+
+    const { patch: p } = await patch({
+      name: 'Some brand new exercise',
+      substitutedFor: 'Cable crossover',
+    });
+
+    expect(p.name).toBe('Some brand new exercise');
+    expect(p.substitutedFor).toBe('Cable crossover');
+    // No derived numbers, no targetText — it renders as a free entry.
+    expect(p.sets).toBeUndefined();
+    expect(p.targetText).toBeUndefined();
+    expect(p.weightKg).toBeUndefined();
+  });
+
+  it('lets a client-supplied cardio measure win over the derived one', async () => {
+    mockGetAll.mockResolvedValue([
+      withHistory([
+        { id: 'h1', name: 'Treadmill run', done: true, durationMinutes: 30 },
+      ]),
+      session(),
+    ]);
+
+    const { patch: p } = await patch({
+      name: 'Treadmill run',
+      substitutedFor: 'Parkrun 5K',
+      durationMinutes: 20,
+    });
+
+    // The typed 20 min wins; the derived 30 is not applied over it.
+    expect(p.durationMinutes).toBe(20);
+    // The rest of the target is still derived (targetText reflects the history).
+    expect(typeof p.targetText).toBe('string');
+  });
+
+  it('does not derive when the client sends an explicit target', async () => {
+    mockGetAll.mockResolvedValue([
+      withHistory([
+        { id: 'h1', name: 'Converging shoulder press', done: true, sets: 3, reps: 8, weightKg: 25.3 },
+      ]),
+      session(),
+    ]);
+
+    const { patch: p } = await patch({
+      name: 'Converging shoulder press',
+      substitutedFor: 'Cable crossover',
+      targetText: null,
+    });
+
+    // Explicit targetText suppresses derivation; the whitelist passes it through.
+    expect(p.targetText).toBeNull();
+    expect(p.sets).toBeUndefined();
+    expect(mockGetAll).not.toHaveBeenCalled();
   });
 });

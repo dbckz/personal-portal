@@ -495,6 +495,17 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
           ...r,
           name,
           substitutedFor: original,
+          // Drop the replaced exercise's numbers: the server derives a target for
+          // the substitute from its own history and reconciles it back onto the
+          // row. Blank momentarily until that lands (a cardio swap keeps the
+          // measures the user typed).
+          sets: undefined,
+          reps: undefined,
+          holdSeconds: undefined,
+          perSide: undefined,
+          weightKg: undefined,
+          durationMinutes: undefined,
+          distanceKm: undefined,
           ...measures,
           action: undefined,
           rationale: undefined,
@@ -504,12 +515,13 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
           toFailure: undefined,
           targetText: undefined,
         }),
+        // No targetText sent: leaving it off tells the server to derive the
+        // substitute's target from history (sending null would suppress that).
         (s, id) =>
           api
             .updateExerciseEntry(s.id, id, {
               name,
               substitutedFor: original,
-              targetText: null,
               ...measures,
             })
             .then(res => res.session)
