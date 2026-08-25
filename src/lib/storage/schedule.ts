@@ -230,6 +230,17 @@ export async function addRitualBlock(
   return newBlock;
 }
 
+export async function updateRitualBlock(id: string, updates: Partial<RitualBlock>): Promise<RitualBlock | null> {
+  const data = await getUserData();
+  if (!data.ritualBlocks) return null;
+  const index = data.ritualBlocks.findIndex(b => b.id === id);
+  if (index === -1) return null;
+
+  data.ritualBlocks[index] = { ...data.ritualBlocks[index], ...updates };
+  await saveUserData(data);
+  return data.ritualBlocks[index];
+}
+
 export async function deleteRitualBlock(id: string): Promise<boolean> {
   const data = await getUserData();
   if (!data.ritualBlocks) return false;

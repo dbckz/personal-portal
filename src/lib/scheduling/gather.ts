@@ -18,6 +18,9 @@ import {
   getRitualBlocks,
   unscheduleAsanaTask,
   updateAdHocTask,
+  updateScheduledAsanaTask,
+  updatePrepBlock,
+  updateRitualBlock,
   deletePrepBlock,
   deleteRitualBlock,
   removeGoogleEventAttribution,
@@ -31,7 +34,13 @@ import {
 import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 import { partitionDeferrals } from '@/lib/scheduling/deferrals';
 import { partitionCarryOvers } from '@/lib/scheduling/carry-overs';
-import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
+import {
+  selectStaleRecords,
+  selectMovedRecords,
+  type ReconcileRecord,
+  type ReconcileMoveRecord,
+  type LivePlacement,
+} from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
 import { getLocalTaskTypes, overlayLocalType } from '@/lib/local-task-types';
@@ -395,6 +404,155 @@ async function reconcileDeletedEvents(
   };
 }
 
+// Derive a live event's LOCAL placement the same way the confirm flow writes
+// these fields: yyyy-MM-dd / HH:mm in the server's local zone, duration in whole
+// minutes. `toStartEnd` in confirm builds a local Date from these strings, so
+// formatting the live Date back is the exact inverse.
+function livePlacementForEvent(e: CalendarEvent): LivePlacement {
+  return {
+    date: format(e.startTime, 'yyyy-MM-dd'),
+    time: format(e.startTime, 'HH:mm'),
+    durationMinutes: Math.round((e.endTime.getTime() - e.startTime.getTime()) / 60000),
+    allDay: !!e.allDay,
+  };
+}
+
+interface MovedPlacement {
+  date: string;
+  time: string;
+  durationMinutes: number;
+}
+
+// Write back the placement of stored records whose backing Google event was
+// MOVED or resized straight on the calendar, so the planner reasons about where
+// each block actually sits (mirrors reconcileDeletedEvents, but heals rather
+// than purges). Runs on the post-deletion arrays; returns the in-week arrays
+// with the move write-backs applied so the rest of gather sees the live times.
+// Conservative in the same ways as deletion: only records on fully-fetched
+// integrations, with an in-week stored date, pointing at a still-present timed
+// event, are touched (see selectMovedRecords).
+async function reconcileMovedEvents(
+  scheduledAsana: ScheduledAsanaTask[],
+  adHocTasks: AdHocTask[],
+  prepBlocks: PrepBlock[],
+  ritualBlocks: RitualBlock[],
+  weekEvents: CalendarEvent[],
+  fetchedIntegrationIds: Set<string>,
+  weekStartStr: string,
+  weekEndStr: string
+): Promise<{ scheduledAsana: ScheduledAsanaTask[]; adHocTasks: AdHocTask[] }> {
+  const livePlacements = new Map<string, LivePlacement>();
+  for (const e of weekEvents) {
+    if (e.id) livePlacements.set(e.id, livePlacementForEvent(e));
+  }
+
+  const records: ReconcileMoveRecord[] = [];
+  for (const s of scheduledAsana) {
+    if (!s.googleEventId) continue;
+    records.push({
+      kind: 'asana',
+      id: s.id,
+      googleEventId: s.googleEventId,
+      googleIntegrationId: s.googleIntegrationId,
+      date: s.scheduledDate,
+      time: s.scheduledTime,
+      durationMinutes: s.duration,
+    });
+  }
+  for (const t of adHocTasks) {
+    if (!t.googleEventId) continue;
+    records.push({
+      kind: 'adhoc',
+      id: t.id,
+      googleEventId: t.googleEventId,
+      googleIntegrationId: t.googleIntegrationId,
+      date: t.dueDate,
+      time: t.dueTime,
+      durationMinutes: t.duration,
+    });
+  }
+  for (const p of prepBlocks) {
+    records.push({
+      kind: 'prep',
+      id: p.id,
+      googleEventId: p.googleEventId,
+      googleIntegrationId: p.googleIntegrationId,
+      date: p.date,
+      time: p.start,
+      durationMinutes: p.durationMinutes,
+    });
+  }
+  for (const r of ritualBlocks) {
+    records.push({
+      kind: 'ritual',
+      id: r.id,
+      googleEventId: r.googleEventId,
+      googleIntegrationId: r.googleIntegrationId,
+      date: r.date,
+      time: r.start,
+      durationMinutes: r.durationMinutes,
+    });
+  }
+
+  const moved = selectMovedRecords({
+    records,
+    livePlacements,
+    fetchedIntegrationIds,
+    weekStartStr,
+    weekEndStr,
+  });
+  if (moved.length === 0) return { scheduledAsana, adHocTasks };
+
+  const movedAsana = new Map<string, MovedPlacement>();
+  const movedAdhoc = new Map<string, MovedPlacement>();
+  for (const m of moved) {
+    const placement = { date: m.date, time: m.time, durationMinutes: m.durationMinutes };
+    if (m.record.kind === 'asana') {
+      await updateScheduledAsanaTask(m.record.id, {
+        scheduledDate: m.date,
+        scheduledTime: m.time,
+        duration: m.durationMinutes,
+      });
+      movedAsana.set(m.record.id, placement);
+    } else if (m.record.kind === 'adhoc') {
+      await updateAdHocTask(m.record.id, {
+        dueDate: m.date,
+        dueTime: m.time,
+        duration: m.durationMinutes,
+      });
+      movedAdhoc.set(m.record.id, placement);
+    } else if (m.record.kind === 'ritual') {
+      await updateRitualBlock(m.record.id, {
+        date: m.date,
+        start: m.time,
+        durationMinutes: m.durationMinutes,
+      });
+    } else {
+      await updatePrepBlock(m.record.id, {
+        date: m.date,
+        start: m.time,
+        durationMinutes: m.durationMinutes,
+      });
+    }
+  }
+
+  console.log(
+    `[Scheduling] Reconcile updated ${moved.length} record(s) for moved calendar events: ` +
+      moved.map(m => `${m.record.kind}:${m.record.id}→${m.date} ${m.time} ${m.durationMinutes}m`).join(', ')
+  );
+
+  return {
+    scheduledAsana: scheduledAsana.map(s => {
+      const p = movedAsana.get(s.id);
+      return p ? { ...s, scheduledDate: p.date, scheduledTime: p.time, duration: p.durationMinutes } : s;
+    }),
+    adHocTasks: adHocTasks.map(t => {
+      const p = movedAdhoc.get(t.id);
+      return p ? { ...t, dueDate: p.date, dueTime: p.time, duration: p.durationMinutes } : t;
+    }),
+  };
+}
+
 export async function gatherWeekContext(weekStartParam?: string): Promise<WeekContext> {
   const now = new Date();
   // Read config first so the default week honours the day-rollover hour: in the
@@ -455,9 +613,27 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   // conservative: it only flags records on integrations whose fetch fully
   // succeeded (never on a failed/partial fetch), so we don't mass-purge on a
   // transient Google error.
-  const { scheduledAsana, adHocTasks } = await reconcileDeletedEvents(
+  const deleted = await reconcileDeletedEvents(
     scheduledAsanaRaw,
     adHocTasksRaw,
+    prepBlocksRaw,
+    ritualBlocksRaw,
+    weekEvents,
+    fetched.fetchedIntegrationIds,
+    weekStartStr,
+    weekEndStr
+  );
+
+  // --- Reconcile stored records with the live calendar (moved events) ---
+  // A block the user dragged/resized straight on the calendar leaves the stored
+  // snapshot pointing at the old day/time/duration. Write back the live placement
+  // (on the records that survived the deletion pass) so quota counting, per-date
+  // counts and candidate exclusion see where the block actually sits. Same
+  // conservative guards as deletion: fully-fetched integration, in-week stored
+  // date, still-present timed event.
+  const { scheduledAsana, adHocTasks } = await reconcileMovedEvents(
+    deleted.scheduledAsana,
+    deleted.adHocTasks,
     prepBlocksRaw,
     ritualBlocksRaw,
     weekEvents,

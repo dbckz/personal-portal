@@ -43,15 +43,30 @@ interface UseGoogleCalendarReturn {
   setGoogleEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
 }
 
+// Include calendarId in the key so the same event in different calendars is kept.
+function eventKey(event: CalendarEvent): string {
+  return event.calendarId ? `${event.calendarId}:${event.id}` : event.id;
+}
+
 function deduplicateEvents(events: CalendarEvent[]): CalendarEvent[] {
   const seen = new Set<string>();
   return events.filter(event => {
-    // Include calendarId in dedup key so same event in different calendars is kept
-    const key = event.calendarId ? `${event.calendarId}:${event.id}` : event.id;
+    const key = eventKey(event);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+// Merge a fresh incremental fetch onto the cached events, letting the FRESHLY
+// fetched copy win. deduplicateEvents keeps the first occurrence, so any stale
+// cached copy of a re-fetched event (e.g. one moved to another day within the
+// session) is evicted first — otherwise its old placement would shadow the fresh
+// one for the rest of the session.
+function mergeFreshEvents(prev: CalendarEvent[], fresh: CalendarEvent[]): CalendarEvent[] {
+  const freshKeys = new Set(fresh.map(eventKey));
+  const retainedPrev = prev.filter(e => !freshKeys.has(eventKey(e)));
+  return deduplicateEvents([...retainedPrev, ...fresh]);
 }
 
 export function useGoogleCalendar(): UseGoogleCalendarReturn {
@@ -121,7 +136,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
       if (incremental) {
         setGoogleEvents(prev => {
-          const uniqueEvents = deduplicateEvents([...prev, ...newEvents]);
+          const uniqueEvents = mergeFreshEvents(prev, newEvents);
           writeGoogleCalendarCache(uniqueEvents);
           return uniqueEvents;
         });
