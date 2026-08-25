@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Check, ExternalLink } from 'lucide-react';
 
 import {
@@ -10,6 +11,7 @@ import {
 } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
 import { boardWhenLabel } from '@/lib/board-format';
+import { BoardCardDetailModal } from './BoardCardDetailModal';
 
 const PRIORITY_DOT: Record<'low' | 'medium' | 'high', string> = {
   low: 'bg-gray-300',
@@ -44,6 +46,7 @@ export function BoardCard({
   onDragStart,
   onDragEnd,
 }: BoardCardProps) {
+  const [showDetail, setShowDetail] = useState(false);
   const busy = busyKeys.has(card.key);
   const clickable = !!card.gid && card.source !== 'group';
   const whenLabel = boardWhenLabel(card);
@@ -53,7 +56,16 @@ export function BoardCard({
     if (clickable && card.gid) window.open(asanaTaskUrl(card.gid), '_blank', 'noopener');
   };
 
+  // Double-click opens the detail modal — but not when the double-click lands on
+  // an interactive control (the title link, member checkboxes, the status
+  // select), which have their own behaviour.
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button, select, a, input')) return;
+    setShowDetail(true);
+  };
+
   return (
+    <>
     <div
       draggable={!busy}
       onDragStart={e => {
@@ -62,6 +74,7 @@ export function BoardCard({
         onDragStart(card);
       }}
       onDragEnd={onDragEnd}
+      onDoubleClick={onDoubleClick}
       className={`group rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition ${
         busy ? 'opacity-50' : 'cursor-grab hover:border-gray-300 hover:shadow'
       }`}
@@ -158,5 +171,16 @@ export function BoardCard({
         </select>
       </div>
     </div>
+
+    {showDetail && (
+      <BoardCardDetailModal
+        card={card}
+        busyKeys={busyKeys}
+        onMove={onMove}
+        onToggleMember={onToggleMember}
+        onClose={() => setShowDetail(false)}
+      />
+    )}
+    </>
   );
 }

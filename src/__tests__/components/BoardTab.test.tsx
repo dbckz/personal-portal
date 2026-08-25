@@ -167,4 +167,43 @@ describe('BoardTab — grouped block', () => {
     fireEvent.click(within(card).getByText('Write report'));
     await waitFor(() => expect(completeAsanaTask).toHaveBeenCalledWith('g1', 'int-1', true));
   });
+
+  it('double-clicking a card opens the detail modal with full member titles', async () => {
+    render(
+      <BoardTab
+        asanaTasks={[asanaTask, asanaTask2]}
+        adHocTasks={[]}
+        scheduledAsanaTasks={groupScheduled}
+        metadataByGid={{}}
+        saveMetadata={jest.fn().mockResolvedValue(undefined)}
+        completeAsanaTask={completeAsanaTask}
+        addTask={jest.fn().mockResolvedValue(null)}
+        updateTask={jest.fn().mockResolvedValue(null)}
+      />
+    );
+
+    const card = (await screen.findByText('🤝 Engagement/Outreach')).closest(
+      '[data-testid="board-card"]'
+    )! as HTMLElement;
+
+    // No modal yet.
+    expect(screen.queryByTestId('board-card-detail')).not.toBeInTheDocument();
+
+    // Double-clicking the card body opens the detail modal.
+    fireEvent.doubleClick(card);
+    const modal = await screen.findByTestId('board-card-detail');
+    expect(within(modal).getByText('Call the partner')).toBeInTheDocument();
+    expect(within(modal).getByText('Write report')).toBeInTheDocument();
+  });
+
+  it('double-clicking the status select does not open the modal', async () => {
+    renderBoard();
+    const card = (await screen.findByText('Write report')).closest(
+      '[data-testid="board-card"]'
+    )! as HTMLElement;
+    const select = within(card).getByLabelText('Move card');
+
+    fireEvent.doubleClick(select);
+    expect(screen.queryByTestId('board-card-detail')).not.toBeInTheDocument();
+  });
 });
