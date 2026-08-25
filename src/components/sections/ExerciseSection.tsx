@@ -7,7 +7,13 @@ import { Check, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, Wand2 } from
 import { api } from '@/lib/api';
 import { parseLoad, parseVolume } from '@/lib/exercise-parse';
 import { formatEntryDuration } from '@/lib/exercise-targets';
-import type { ExerciseAnalysis, ExerciseIntensity, ExerciseSession } from '@/types/life';
+import type {
+  ExerciseAnalysis,
+  ExerciseIntensity,
+  ExerciseSession,
+  ExerciseWeekSummary,
+} from '@/types/life';
+import { pct } from '@/components/analysis/format';
 import { SectionGoals } from '@/components/goals/SectionGoals';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
@@ -302,7 +308,7 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
 
               {isOpen && (
                 <div className="border-t border-gray-100 px-3 pb-2">
-                  <ExerciseEntryList entries={entries} />
+                  <ExerciseEntryList entries={entries} completed={session.completed} />
                   {/* What was actually written, for a session logged freehand.
                       The parse above is a reading of this, not a replacement
                       for it. */}
@@ -547,6 +553,78 @@ function SessionForm({
 // Analysis
 // ---------------------------------------------------------------------------
 
+// The most recent stretch shown as columns: a longer training record would
+// squeeze into unreadable slivers, and twelve weeks is enough to read a trend.
+const TREND_WEEKS = 12;
+
+// Same emerald/amber/orange scale the Work analysis uses for its completion
+// trend, so the two read as one visual language across the portal.
+function rateColor(rate: number): string {
+  if (rate >= 0.8) return 'bg-emerald-500';
+  if (rate >= 0.5) return 'bg-amber-500';
+  return 'bg-orange-400';
+}
+
+// Adherence across recent weeks, oldest on the left. The column height and
+// colour track exercise adherence (of a session's planned exercises, how many
+// were done) — the richer, per-entry signal; plan adherence (sessions done vs
+// planned) rides underneath as a secondary figure. Weeks with no data render as
+// an empty track rather than a 0% failure. Only shown once at least two weeks
+// carry a reading — a single column is a data point, not a trend.
+function AdherenceTrend({ weeks }: { weeks: ExerciseWeekSummary[] }) {
+  const recent = weeks.slice(-TREND_WEEKS);
+  const withData = recent.filter(
+    w => w.exerciseAdherence !== null || w.sessionAdherence !== null
+  );
+  if (withData.length < 2) return null;
+
+  return (
+    <section className="mb-6">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-2">
+        Adherence trend
+      </h3>
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <p className="text-[11px] text-gray-400 mb-3">
+          Share of a session&rsquo;s planned exercises completed each week (bar), oldest first. Plan
+          adherence — sessions done vs planned — shown below each week.
+        </p>
+        <ul className="flex items-end gap-2">
+          {recent.map(week => {
+            const ex = week.exerciseAdherence;
+            const sess = week.sessionAdherence;
+            return (
+              <li key={week.weekStart} className="flex-1 flex flex-col items-center justify-end">
+                <span className="text-[11px] text-gray-500 mb-1 tabular-nums">
+                  {ex === null ? '—' : `${pct(ex)}%`}
+                </span>
+                <div className="w-full h-24 bg-gray-100 rounded-full flex flex-col justify-end overflow-hidden">
+                  {ex !== null && (
+                    <div
+                      className={`w-full rounded-full ${rateColor(ex)}`}
+                      style={{ height: `${Math.max(pct(ex), 2)}%` }}
+                      aria-label={`Week of ${format(parseISO(week.weekStart), 'd MMM')}: ${pct(
+                        ex
+                      )} per cent of planned exercises done${
+                        sess === null ? '' : `, ${pct(sess)} per cent plan adherence`
+                      }`}
+                    />
+                  )}
+                </div>
+                <span className="text-[10px] text-gray-400 mt-1 truncate w-full text-center">
+                  {format(parseISO(week.weekStart), 'd MMM')}
+                </span>
+                <span className="text-[10px] text-gray-400 truncate w-full text-center tabular-nums">
+                  {sess === null ? '·' : `plan ${pct(sess)}%`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 function ExerciseAnalysisTab() {
   const [analysis, setAnalysis] = useState<ExerciseAnalysis | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -574,13 +652,21 @@ function ExerciseAnalysisTab() {
         {format(parseISO(analysis.from), 'd MMM yyyy')} – {format(parseISO(analysis.to), 'd MMM yyyy')}
       </p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
         <Stat label="Sessions" value={String(analysis.totalSessions)} />
         <Stat label="Exercises done" value={String(analysis.totalExercisesDone)} />
         <Stat label="Per week" value={String(analysis.sessionsPerWeek)} />
         <Stat
           label="Plan adherence"
           value={analysis.planAdherence === null ? '—' : `${Math.round(analysis.planAdherence * 100)}%`}
+        />
+        <Stat
+          label="Exercise adherence"
+          value={
+            analysis.exerciseAdherence === null
+              ? '—'
+              : `${Math.round(analysis.exerciseAdherence * 100)}%`
+          }
         />
       </div>
 
@@ -590,6 +676,8 @@ function ExerciseAnalysisTab() {
           {analysis.currentStreakWeeks === 1 ? '' : 's'} with at least one session.
         </p>
       )}
+
+      <AdherenceTrend weeks={analysis.byWeek} />
 
       {analysis.byWeek.length > 0 && (
         <section className="mb-6">

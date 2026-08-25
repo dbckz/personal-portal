@@ -352,6 +352,14 @@ export interface ExerciseWeekSummary {
   exercisesDone: number;
   distanceKm: number;
   plannedSessions: number;
+  // Of the sessions planned this week, the fraction completed, 0-1 — the
+  // aggregate planAdherence bucketed by week. Null when nothing was planned.
+  sessionAdherence: number | null;
+  // Across this week's completed sessions that have exercises, the fraction of
+  // entries actually performed, 0-1. Null when there were no such entries.
+  // Manual and freeform logs read 100% by construction; seeded (Today
+  // checklist) sessions are where partial adherence shows up.
+  exerciseAdherence: number | null;
 }
 
 export interface ExerciseAnalysis {
@@ -368,6 +376,10 @@ export interface ExerciseAnalysis {
   // Fraction of planned sessions that were actually completed, 0-1 (null when
   // nothing was planned).
   planAdherence: number | null;
+  // Across every completed session in the window that has exercises, the
+  // fraction of entries actually performed, 0-1 (null when there were none).
+  // The exercise-level counterpart to planAdherence.
+  exerciseAdherence: number | null;
   // Longest run of consecutive weeks with at least one session, ending at the
   // most recent week in the window.
   currentStreakWeeks: number;

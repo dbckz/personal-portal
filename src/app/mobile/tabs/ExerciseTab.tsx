@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { Plus, RefreshCw } from 'lucide-react';
+import { Check, Plus, RefreshCw } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { describeEntry } from '@/components/sections/exercise/ExerciseEntryList';
+import { entryWasPerformed } from '@/lib/exercise-entry';
 import { formatEntryDuration } from '@/lib/exercise-targets';
-import type { ExerciseAnalysis, ExerciseSession } from '@/types/life';
+import type { ExerciseAnalysis, ExerciseSession, ExerciseWeekSummary } from '@/types/life';
+import { pct } from '@/components/analysis/format';
 import { FreeformLogCard } from '../components/FreeformLogCard';
 import { MobileSessionSheet } from '../components/MobileSessionSheet';
 import { RoutineCard } from '../components/RoutineCard';
@@ -126,6 +128,8 @@ export function ExerciseTab({
           <Stat label="Streak" value={`${analysis.currentStreakWeeks}w`} />
         </div>
       )}
+
+      {analysis && <AdherenceTrend analysis={analysis} />}
 
       <SessionGroup
         heading="Planned"
@@ -280,14 +284,38 @@ function SessionGroup({
                         what you check standing in the gym. */}
                     {entries.length > 0 && (
                       <ul className="mt-1.5 space-y-1 border-l-2 border-gray-100 pl-2.5">
-                        {entries.map(entry => (
-                          <li key={entry.id} className="flex items-baseline justify-between gap-2">
-                            <span className="min-w-0 text-xs text-gray-700">{entry.name}</span>
-                            <span className="flex-shrink-0 text-[11px] tabular-nums text-gray-500">
-                              {describeEntry(entry)}
-                            </span>
-                          </li>
-                        ))}
+                        {entries.map(entry => {
+                          // In a logged session a not-done entry is a skipped
+                          // exercise; a planned session keeps everything pending.
+                          const skipped = session.completed && !entryWasPerformed(entry);
+                          const done = session.completed && entryWasPerformed(entry);
+                          return (
+                            <li key={entry.id} className="flex items-baseline justify-between gap-2">
+                              <span
+                                className={`flex min-w-0 items-baseline gap-1 text-xs ${
+                                  skipped ? 'text-gray-400' : 'text-gray-700'
+                                }`}
+                              >
+                                {done && (
+                                  <Check className="h-3 w-3 shrink-0 translate-y-0.5 text-emerald-600" />
+                                )}
+                                <span className="min-w-0">{entry.name}</span>
+                                {skipped && (
+                                  <span className="shrink-0 rounded bg-gray-100 px-1 text-[9px] font-medium uppercase tracking-wide text-gray-500">
+                                    skipped
+                                  </span>
+                                )}
+                              </span>
+                              <span
+                                className={`flex-shrink-0 text-[11px] tabular-nums ${
+                                  skipped ? 'text-gray-400 line-through' : 'text-gray-500'
+                                }`}
+                              >
+                                {describeEntry(entry)}
+                              </span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                   </button>
@@ -297,6 +325,80 @@ function SessionGroup({
           </ul>
         </div>
       )}
+    </section>
+  );
+}
+
+// Fewer columns than the desktop: a phone can't read twelve slivers.
+const TREND_WEEKS = 8;
+
+// Same emerald/amber/orange scale as the desktop and Work analyses.
+function rateColor(rate: number): string {
+  if (rate >= 0.8) return 'bg-emerald-500';
+  if (rate >= 0.5) return 'bg-amber-500';
+  return 'bg-orange-400';
+}
+
+function pctLabel(rate: number | null): string {
+  return rate === null ? '—' : `${pct(rate)}%`;
+}
+
+// The mobile adherence trend: recent weeks as columns, oldest left, height and
+// colour by exercise adherence (of a session's planned exercises, how many were
+// done). Plan adherence (sessions done vs planned) sits under each column, and
+// both aggregates head the card. Empty weeks show a bare track, not a 0%
+// failure; only shown once two weeks carry a reading.
+function AdherenceTrend({ analysis }: { analysis: ExerciseAnalysis }) {
+  const recent = analysis.byWeek.slice(-TREND_WEEKS);
+  const withData = recent.filter(
+    (w: ExerciseWeekSummary) => w.exerciseAdherence !== null || w.sessionAdherence !== null
+  );
+  if (withData.length < 2) return null;
+
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+          Adherence trend
+        </h2>
+        <span className="text-[11px] tabular-nums text-gray-500">
+          {pctLabel(analysis.exerciseAdherence)} exercises · {pctLabel(analysis.planAdherence)} plan
+        </span>
+      </div>
+      <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+        <ul className="flex items-end gap-1.5">
+          {recent.map(week => {
+            const ex = week.exerciseAdherence;
+            const sess = week.sessionAdherence;
+            return (
+              <li key={week.weekStart} className="flex flex-1 flex-col items-center justify-end">
+                <span className="mb-1 text-[10px] tabular-nums text-gray-500">
+                  {ex === null ? '—' : `${pct(ex)}%`}
+                </span>
+                <div className="flex h-20 w-full flex-col justify-end overflow-hidden rounded-full bg-gray-100">
+                  {ex !== null && (
+                    <div
+                      className={`w-full rounded-full ${rateColor(ex)}`}
+                      style={{ height: `${Math.max(pct(ex), 2)}%` }}
+                      aria-label={`Week of ${format(parseISO(week.weekStart), 'd MMM')}: ${pct(
+                        ex
+                      )} per cent of planned exercises done${
+                        sess === null ? '' : `, ${pct(sess)} per cent plan adherence`
+                      }`}
+                    />
+                  )}
+                </div>
+                <span className="mt-1 w-full truncate text-center text-[9px] text-gray-400">
+                  {format(parseISO(week.weekStart), 'd MMM')}
+                </span>
+                <span className="w-full truncate text-center text-[9px] tabular-nums text-gray-400">
+                  {sess === null ? '·' : `${pct(sess)}%`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </section>
   );
 }

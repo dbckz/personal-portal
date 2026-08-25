@@ -6,6 +6,7 @@
 // which matters when the point is noticing a trend, not being entertained.
 
 import { differenceInCalendarDays, format, parseISO, startOfWeek } from 'date-fns';
+import { entryWasPerformed } from '@/lib/exercise-entry';
 import type {
   ExerciseAnalysis,
   ExerciseSession,
@@ -34,8 +35,9 @@ export function analyseExercise(
   const days = Math.max(1, differenceInCalendarDays(parseISO(to), parseISO(from)) + 1);
   const weeks = Math.max(1, days / 7);
 
+  const wasPlanMet = planMetPredicate(done);
   const byType = summariseByType(done);
-  const byWeek = summariseByWeek(done, planned);
+  const byWeek = summariseByWeek(done, planned, wasPlanMet);
 
   const analysis: ExerciseAnalysis = {
     from,
@@ -44,7 +46,8 @@ export function analyseExercise(
     totalExercisesDone,
     totalDistanceKm: round1(totalDistanceKm),
     sessionsPerWeek: round1(done.length / weeks),
-    planAdherence: adherenceByPlan(planned, done),
+    planAdherence: sessionAdherenceOf(planned, wasPlanMet),
+    exerciseAdherence: exerciseAdherenceOf(done),
     currentStreakWeeks: currentStreakWeeks(byWeek, to),
     byType,
     byWeek,
@@ -69,11 +72,12 @@ function sessionDistanceKm(session: ExerciseSession): number {
   return Math.max(session.distanceKm ?? 0, entryKm);
 }
 
-// Exercises ticked done in a session. Strictly done===true: sheet-imported
-// sessions carry done:true on every entry (they record what was actually done),
-// so anything still unticked is genuinely not done and doesn't count.
+// Exercises actually performed in a session. Only an explicit done===false
+// (a seeded-but-unticked target) is excluded; done:true and legacy undefined
+// (imports and manual logs record what was done) both count. See
+// entryWasPerformed for the single shared rule.
 function exercisesDone(session: ExerciseSession): number {
-  return (session.exercises ?? []).filter(e => e.done).length;
+  return (session.exercises ?? []).filter(entryWasPerformed).length;
 }
 
 // Share of completed sessions marked 'hard', out of those where intensity was
@@ -92,22 +96,44 @@ function hardSessionShare(done: ExerciseSession[]): number | null {
 // reliable answer. Falling back to a date match covers imported history, where
 // the two sides were never linked: counting `planned && completed` would read 0%
 // however much training happened.
-function adherenceByPlan(
-  planned: ExerciseSession[],
-  done: ExerciseSession[]
-): number | null {
-  if (planned.length === 0) return null;
-
+//
+// The predicate is built once from ALL completed sessions in the window and then
+// reused for the aggregate and every weekly bucket, so a plan met by a session
+// logged in the same week (or explicitly linked from a nearby day) is credited
+// the same way whichever figure is being computed.
+function planMetPredicate(done: ExerciseSession[]): (plan: ExerciseSession) => boolean {
   const linkedPlanIds = new Set(done.map(s => s.plannedSessionId).filter(Boolean));
   const doneDates = new Set(done.map(s => s.date));
+  return plan => linkedPlanIds.has(plan.id) || doneDates.has(plan.date);
+}
 
-  const wasMet = (plan: ExerciseSession) =>
-    linkedPlanIds.has(plan.id) || doneDates.has(plan.date);
-
-  // Counted in distinct DAYS, so two plans on one day aren't double-counted.
+// Fraction of planned sessions that were met, counted in distinct DAYS so two
+// plans on one day aren't double-counted. Null when nothing was planned. Days
+// belong to exactly one week, so summing weekly plannedDays/metDays reproduces
+// the window aggregate — the two can't drift apart.
+function sessionAdherenceOf(
+  planned: ExerciseSession[],
+  wasMet: (plan: ExerciseSession) => boolean
+): number | null {
+  if (planned.length === 0) return null;
   const plannedDays = new Set(planned.map(s => s.date)).size;
   const metDays = new Set(planned.filter(wasMet).map(p => p.date)).size;
   return metDays / plannedDays;
+}
+
+// Across the given completed sessions, the fraction of exercise entries actually
+// performed. Only sessions that carry exercises contribute; null when none do,
+// so a block of runs (no entries) reads empty rather than a spurious 0% or 100%.
+function exerciseAdherenceOf(done: ExerciseSession[]): number | null {
+  let performed = 0;
+  let total = 0;
+  for (const s of done) {
+    const entries = s.exercises ?? [];
+    if (entries.length === 0) continue;
+    total += entries.length;
+    performed += entries.filter(entryWasPerformed).length;
+  }
+  return total === 0 ? null : performed / total;
 }
 
 function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
@@ -125,29 +151,39 @@ function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
     .sort((a, b) => b.sessions - a.sessions || a.type.localeCompare(b.type));
 }
 
-function summariseByWeek(done: ExerciseSession[], planned: ExerciseSession[]): ExerciseWeekSummary[] {
-  const map = new Map<string, ExerciseWeekSummary>();
-  const row = (weekStart: string) =>
-    map.get(weekStart) ?? { weekStart, sessions: 0, exercisesDone: 0, distanceKm: 0, plannedSessions: 0 };
-
-  for (const s of done) {
+function summariseByWeek(
+  done: ExerciseSession[],
+  planned: ExerciseSession[],
+  wasPlanMet: (plan: ExerciseSession) => boolean
+): ExerciseWeekSummary[] {
+  const doneByWeek = new Map<string, ExerciseSession[]>();
+  const plannedByWeek = new Map<string, ExerciseSession[]>();
+  const bucket = (map: Map<string, ExerciseSession[]>, s: ExerciseSession) => {
     const key = weekStartKey(s.date);
-    const r = row(key);
-    r.sessions += 1;
-    r.exercisesDone += exercisesDone(s);
-    r.distanceKm += sessionDistanceKm(s);
-    map.set(key, r);
-  }
-  for (const s of planned) {
-    const key = weekStartKey(s.date);
-    const r = row(key);
-    r.plannedSessions += 1;
-    map.set(key, r);
-  }
+    const list = map.get(key) ?? [];
+    list.push(s);
+    map.set(key, list);
+  };
 
-  return [...map.values()]
-    .map(r => ({ ...r, distanceKm: round1(r.distanceKm) }))
-    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+  for (const s of done) bucket(doneByWeek, s);
+  for (const s of planned) bucket(plannedByWeek, s);
+
+  const weekStarts = new Set([...doneByWeek.keys(), ...plannedByWeek.keys()]);
+  return [...weekStarts]
+    .sort((a, b) => a.localeCompare(b))
+    .map(weekStart => {
+      const weekDone = doneByWeek.get(weekStart) ?? [];
+      const weekPlanned = plannedByWeek.get(weekStart) ?? [];
+      return {
+        weekStart,
+        sessions: weekDone.length,
+        exercisesDone: weekDone.reduce((sum, s) => sum + exercisesDone(s), 0),
+        distanceKm: round1(weekDone.reduce((sum, s) => sum + sessionDistanceKm(s), 0)),
+        plannedSessions: weekPlanned.length,
+        sessionAdherence: sessionAdherenceOf(weekPlanned, wasPlanMet),
+        exerciseAdherence: exerciseAdherenceOf(weekDone),
+      };
+    });
 }
 
 // Consecutive weeks with at least one session, counted back from the week the

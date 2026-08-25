@@ -53,10 +53,12 @@ describe('analyseExercise', () => {
     expect(analysis.planAdherence).toBe(0);
   });
 
-  it('counts only exercises ticked done', () => {
+  it('excludes only explicitly not-done exercises, counting legacy undefined as done', () => {
     const analysis = analyseExercise(
       [
-        // A gym-flow session: two of three exercises ticked off.
+        // A gym-flow session: two of three exercises ticked off. The third was
+        // seeded from a target and never ticked (done:false), so it doesn't
+        // count.
         session({
           date: '2026-07-06',
           type: 'gym',
@@ -66,8 +68,9 @@ describe('analyseExercise', () => {
             { id: 'c', name: 'Row', done: false },
           ],
         }),
-        // Entries with no done flag don't count. Sheet imports are backfilled to
-        // done:true, so anything still unticked is genuinely not done.
+        // Legacy / manually-logged entries carry no done flag: they are a record
+        // of what was actually done, so they DO count (only an explicit
+        // done:false is a skip).
         session({
           date: '2026-07-08',
           type: 'gym',
@@ -81,9 +84,10 @@ describe('analyseExercise', () => {
       '2026-07-28'
     );
 
-    expect(analysis.totalExercisesDone).toBe(2);
+    // 2 ticked + 2 legacy-undefined = 4; the single done:false Row is excluded.
+    expect(analysis.totalExercisesDone).toBe(4);
     const gym = analysis.byType.find(t => t.type === 'gym');
-    expect(gym?.exercisesDone).toBe(2);
+    expect(gym?.exercisesDone).toBe(4);
   });
 
   it('folds entry-level distance into the totals when the session has none', () => {
@@ -246,5 +250,140 @@ describe('adherence with an explicit plan link', () => {
       '2026-07-28'
     );
     expect(analysis.planAdherence).toBe(0.5);
+  });
+});
+
+describe('per-week adherence', () => {
+  it('buckets session adherence by the week a plan falls in', () => {
+    const analysis = analyseExercise(
+      [
+        // Week of 6 Jul: two planned, both met (one by date, one linked).
+        session({ date: '2026-07-06', planned: true, completed: false }),
+        session({ date: '2026-07-08', planned: true, completed: false }),
+        session({ date: '2026-07-06' }),
+        session({ date: '2026-07-08' }),
+        // Week of 13 Jul: two planned, one met.
+        session({ date: '2026-07-13', planned: true, completed: false }),
+        session({ date: '2026-07-15', planned: true, completed: false }),
+        session({ date: '2026-07-13' }),
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+
+    const first = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
+    const second = analysis.byWeek.find(w => w.weekStart === '2026-07-13');
+    expect(first?.sessionAdherence).toBe(1);
+    expect(second?.sessionAdherence).toBe(0.5);
+  });
+
+  it('reads session adherence as null for a week with nothing planned', () => {
+    const analysis = analyseExercise(
+      [session({ date: '2026-07-06' })],
+      '2026-07-01',
+      '2026-07-12'
+    );
+    const week = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
+    expect(week?.sessionAdherence).toBeNull();
+  });
+
+  it('reads exercise adherence off a seeded, partly-ticked session (5 of 8)', () => {
+    const analysis = analyseExercise(
+      [
+        session({
+          date: '2026-07-06',
+          type: 'gym',
+          exercises: [
+            { id: 'a', name: 'Squat', done: true },
+            { id: 'b', name: 'Bench', done: true },
+            { id: 'c', name: 'Row', done: true },
+            { id: 'd', name: 'Press', done: true },
+            { id: 'e', name: 'Curl', done: true },
+            { id: 'f', name: 'Fly', done: false },
+            { id: 'g', name: 'Raise', done: false },
+            { id: 'h', name: 'Plank', done: false },
+          ],
+        }),
+      ],
+      '2026-07-01',
+      '2026-07-12'
+    );
+    const week = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
+    expect(week?.exerciseAdherence).toBeCloseTo(5 / 8);
+    expect(analysis.exerciseAdherence).toBeCloseTo(5 / 8);
+  });
+
+  it('reads exercise adherence as 100% for manual/freeform entries (undefined done)', () => {
+    const analysis = analyseExercise(
+      [
+        session({
+          date: '2026-07-06',
+          type: 'gym',
+          exercises: [
+            { id: 'a', name: 'Deadlift' },
+            { id: 'b', name: 'Pull-up' },
+          ],
+        }),
+      ],
+      '2026-07-01',
+      '2026-07-12'
+    );
+    const week = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
+    expect(week?.exerciseAdherence).toBe(1);
+  });
+
+  it('reads exercise adherence as null for a week whose sessions carry no exercises', () => {
+    const analysis = analyseExercise(
+      [session({ date: '2026-07-06', type: 'run' })],
+      '2026-07-01',
+      '2026-07-12'
+    );
+    const week = analysis.byWeek.find(w => w.weekStart === '2026-07-06');
+    expect(week?.exerciseAdherence).toBeNull();
+    expect(analysis.exerciseAdherence).toBeNull();
+  });
+
+  it('keeps the aggregate and weekly figures consistent', () => {
+    const sessions = [
+      // Week of 6 Jul: 2 planned, 1 met; gym session 2 of 3 done.
+      session({ date: '2026-07-06', planned: true, completed: false }),
+      session({ date: '2026-07-08', planned: true, completed: false }),
+      session({
+        date: '2026-07-06',
+        type: 'gym',
+        exercises: [
+          { id: 'a', name: 'Squat', done: true },
+          { id: 'b', name: 'Bench', done: true },
+          { id: 'c', name: 'Row', done: false },
+        ],
+      }),
+      // Week of 13 Jul: 1 planned, met; gym session 3 of 4 done.
+      session({ date: '2026-07-13', planned: true, completed: false }),
+      session({
+        date: '2026-07-13',
+        type: 'gym',
+        exercises: [
+          { id: 'd', name: 'Deadlift', done: true },
+          { id: 'e', name: 'Pull-up', done: true },
+          { id: 'f', name: 'Dip', done: true },
+          { id: 'g', name: 'Curl', done: false },
+        ],
+      }),
+    ];
+    const analysis = analyseExercise(sessions, '2026-07-01', '2026-07-28');
+
+    // Aggregate plan adherence: 2 met days of 3 planned days.
+    expect(analysis.planAdherence).toBeCloseTo(2 / 3);
+    // Aggregate exercise adherence: 5 performed of 7 entries.
+    expect(analysis.exerciseAdherence).toBeCloseTo(5 / 7);
+
+    // The weekly figures recombine (day-weighted) to the aggregate: the two
+    // series are computed from the same helpers, so they can't drift apart.
+    const plannedDays = analysis.byWeek.reduce((sum, w) => sum + w.plannedSessions, 0);
+    const metDays = analysis.byWeek.reduce(
+      (sum, w) => sum + (w.sessionAdherence ?? 0) * w.plannedSessions,
+      0
+    );
+    expect(metDays / plannedDays).toBeCloseTo(analysis.planAdherence!);
   });
 });

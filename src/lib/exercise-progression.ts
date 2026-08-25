@@ -5,6 +5,7 @@
 // going up?" can only be answered from the individual sets.
 
 import { normalizeExerciseName } from './exercise-names';
+import { entryWasPerformed } from './exercise-entry';
 import type { ExerciseSession } from '@/types/life';
 
 export interface ProgressionPoint {
@@ -74,6 +75,11 @@ export function buildProgressions(
 
   for (const session of ordered) {
     for (const entry of session.exercises ?? []) {
+      // A seeded-but-unticked (or explicitly un-ticked) entry was never
+      // performed: its pre-filled target numbers must not enter the history as
+      // if they were done, or they become the "last time" the next target
+      // builds on.
+      if (!entryWasPerformed(entry)) continue;
       const key = exerciseKey(entry.name);
       if (!key) continue;
 

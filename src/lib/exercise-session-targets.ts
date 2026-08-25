@@ -23,6 +23,7 @@ import { buildProgressions, exerciseKey } from '@/lib/exercise-progression';
 import { buildSessionTargets, type ExerciseTarget } from '@/lib/exercise-targets';
 import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { normalizeExerciseName } from '@/lib/exercise-names';
+import { entryWasPerformed } from '@/lib/exercise-entry';
 import {
   buildProgrammerInput,
   enforceToFailure,
@@ -95,8 +96,12 @@ export async function resolveSessionTargets(
   // Exclude the target date so "last time" is the previous workout, not a session
   // already logged today.
   const progressions = buildProgressions(sessions, { before: date });
+  // The denominator for the programmer's "done in X/Y sessions" frequency: only
+  // sessions with at least one PERFORMED exercise count, so a seeded session
+  // that was never actually done doesn't inflate Y (and match the numerator,
+  // which counts performed entries only — see buildProgressions).
   const totalSessions = sessions.filter(
-    s => s.completed && s.exercises?.length && s.date < date
+    s => s.completed && s.date < date && (s.exercises ?? []).some(entryWasPerformed)
   ).length;
 
   // Active exercise goals, so the programme graduates toward them. Part of the
@@ -232,7 +237,9 @@ function recentAccessoriesForDay(
     .filter(
       s =>
         s.completed &&
-        s.exercises?.length &&
+        // At least one exercise actually performed — a session of seeded,
+        // never-ticked entries carries no real accessory history.
+        (s.exercises ?? []).some(entryWasPerformed) &&
         s.date < date &&
         (new Date(`${s.date}T12:00:00`).getDay() === day.dayOfWeek ||
           (!!title && !!s.label && s.label.toLowerCase().includes(title)))
@@ -244,6 +251,7 @@ function recentAccessoriesForDay(
   const seen = new Set<string>();
   for (const session of matching) {
     for (const entry of session.exercises ?? []) {
+      if (!entryWasPerformed(entry)) continue;
       const key = exerciseKey(entry.name);
       if (!key || fixedKeys.has(key) || seen.has(key)) continue;
       seen.add(key);
