@@ -66,13 +66,14 @@ export function parseVolume(raw: string | undefined): ParsedVolume {
 // row on the erg — rather than a loaded lift. Used to decide which logging
 // fields a row shows (distance/time vs sets/reps/kg) and reuses the same
 // cardio vocabulary the plan parsers already lean on (run/cycle/bike/swim…),
-// widened for the machines Dave logs by name (treadmill, erg, elliptical).
+// widened for the machines Dave logs by name (treadmill, erg, elliptical) and
+// for sport sessions tracked by duration (5-a-side football).
 //
 // Deliberately excludes a bare "row": on its own that is far more often a
 // strength row (seated row, bent-over row) than the rowing machine, so only the
 // unambiguous "rower"/"rowing"/"erg" catch the ergometer.
 const CARDIO_NAME_WORDS =
-  /\b(run|running|jog|jogging|parkrun|treadmill|walk|walking|hike|hiking|cycle|cycling|bike|biking|spin|swim|swimming|rowing|rower|erg|ergometer|elliptical|cross[-\s]?trainer|cardio|track)\b/i;
+  /\b(run|running|jog|jogging|parkrun|treadmill|walk|walking|hike|hiking|cycle|cycling|bike|biking|spin|swim|swimming|rowing|rower|erg|ergometer|elliptical|cross[-\s]?trainer|cardio|track|football|footy|5[-\s]?a[-\s]?side)\b/i;
 
 // "Walk" is the ambiguous one: a farmer's walk, walking lunge, suitcase/waiter
 // carry are loaded strength movements, not cardio. When the name reads as one of

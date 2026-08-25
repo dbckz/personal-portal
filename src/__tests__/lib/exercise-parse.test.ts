@@ -7,6 +7,7 @@
  * the whole point.
  */
 import {
+  isCardioName,
   isHoldName,
   isUnilateralName,
   parseLoad,
@@ -193,6 +194,24 @@ describe('parsePlannedTitle', () => {
     expect(parsePlannedTitle('Water Plants')).toBeNull();
     expect(parsePlannedTitle('🌿 Water Plants')).toBeNull();
     expect(parsePlannedTitle('💰 Transfer salary')).toBeNull();
+  });
+});
+
+describe('isCardioName', () => {
+  it('recognises runs, machines, and sport sessions tracked by duration', () => {
+    expect(isCardioName('Parkrun')).toBe(true);
+    expect(isCardioName('Treadmill run')).toBe(true);
+    expect(isCardioName('5-a-side football')).toBe(true);
+    expect(isCardioName('Football')).toBe(true);
+    expect(isCardioName('5 a side')).toBe(true);
+  });
+
+  it('does not read lifts or loaded carries as cardio', () => {
+    expect(isCardioName('Bench press')).toBe(false);
+    expect(isCardioName('Seated cable row')).toBe(false);
+    // "walk" in a loaded carry must not win.
+    expect(isCardioName("Farmer's walk")).toBe(false);
+    expect(isCardioName(undefined)).toBe(false);
   });
 });
 
