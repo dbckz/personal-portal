@@ -38,3 +38,17 @@ export function saveCachedProgramme(date: string, hash: string, rows: ProgrammeR
   cache[date] = { hash, rows, generatedAt: new Date().toISOString() };
   writeAllDomains({ exerciseProgrammes: cache });
 }
+
+// Every cached programme whose date falls in the inclusive [from, to] window,
+// hash IGNORED. The muscle heatmap uses these as the planned volume for days
+// with no session rows; a stale hash only means the plan has since moved on, not
+// that the rows are worthless for a rough "what was planned" read.
+export function getProgrammesInRange(
+  from: string,
+  to: string
+): Array<{ date: string; rows: ProgrammeRow[] }> {
+  const cache = readCache();
+  return Object.entries(cache)
+    .filter(([date]) => date >= from && date <= to)
+    .map(([date, entry]) => ({ date, rows: entry.rows }));
+}

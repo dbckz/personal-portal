@@ -39,6 +39,7 @@ import type { InferredEvidence, InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { FreeformDraft } from '@/lib/exercise-freeform';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
+import type { MuscleLoad } from '@/lib/exercise-muscles';
 import type { DelegationStats } from '@/lib/delegation-stats';
 import type { ProjectScan } from '@/lib/projects/scan';
 import type { ProjectSummary } from '@/lib/projects/summarise';
@@ -2030,6 +2031,13 @@ export const api = {
       `/api/exercise/${id}`,
       { method: 'DELETE' },
       { maxRetries: 0 }
+    );
+  },
+
+  // Per-muscle done vs planned load over the window, for the Muscles heatmap.
+  async getMuscleLoad(windowDays: number): Promise<{ muscles: MuscleLoad[]; windowDays: number }> {
+    return fetchWithRetry<{ muscles: MuscleLoad[]; windowDays: number }>(
+      `/api/exercise/muscles?windowDays=${windowDays}`
     );
   },
 

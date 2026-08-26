@@ -18,6 +18,7 @@ import { AdherenceTrendChart } from './exercise/AdherenceTrendChart';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
 import { FreeformLog } from './exercise/FreeformLog';
+import { MusclesTab } from './exercise/MusclesTab';
 import { ProgressionTab } from './exercise/ProgressionTab';
 import { RoutineTab } from './exercise/RoutineTab';
 import { TodayTargets } from './exercise/TodayTargets';
@@ -38,6 +39,7 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
   if (subTab === 'today') return <ExerciseToday />;
   if (subTab === 'routine') return <RoutineTab />;
   if (subTab === 'analysis') return <ExerciseAnalysisTab />;
+  if (subTab === 'muscles') return <MusclesTab />;
   if (subTab === 'progress') return <ProgressionTab />;
   // 'plan' and 'history' are the same log viewed forwards and backwards, so
   // they share one component and differ only in filter and affordances.

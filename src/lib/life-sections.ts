@@ -56,6 +56,7 @@ export const LIFE_SECTIONS: LifeSection[] = [
       { id: 'plan', label: 'Plan', icon: 'CalendarCheck' },
       { id: 'history', label: 'History', icon: 'History' },
       { id: 'progress', label: 'Progress', icon: 'TrendingUp' },
+      { id: 'muscles', label: 'Muscles', icon: 'PersonStanding' },
       { id: 'goals', label: 'Goals', icon: 'Target' },
       { id: 'analysis', label: 'Analysis', icon: 'BarChart3' },
     ],

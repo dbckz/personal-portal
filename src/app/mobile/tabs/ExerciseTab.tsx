@@ -12,6 +12,7 @@ import { formatEntryDuration } from '@/lib/exercise-targets';
 import type { ExerciseAnalysis, ExerciseSession, ExerciseWeekSummary } from '@/types/life';
 import { pct } from '@/components/analysis/format';
 import { FreeformLogCard } from '../components/FreeformLogCard';
+import { MobileMusclesCard } from '../components/MobileMusclesCard';
 import { MobileSessionSheet } from '../components/MobileSessionSheet';
 import { RoutineCard } from '../components/RoutineCard';
 import { TodayChecklist } from '../components/TodayChecklist';
@@ -131,6 +132,8 @@ export function ExerciseTab({
       )}
 
       {analysis && <AdherenceTrend analysis={analysis} />}
+
+      <MobileMusclesCard />
 
       <SessionGroup
         heading="Planned"
