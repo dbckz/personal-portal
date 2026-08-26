@@ -1,8 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { addDays, format, parseISO, subDays } from 'date-fns';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { addWeeks, format, parseISO, subDays } from 'date-fns';
 
 import { coolestMuscles, muscleById } from '@/lib/exercise-muscles';
 import { useMuscleLoad } from '@/hooks/useMuscleLoad';
@@ -11,8 +10,8 @@ import { MuscleDetail } from '@/components/sections/exercise/MuscleDetail';
 import { MobileSheet } from './MobileSheet';
 
 // The mobile muscle heatmap: one figure with a Planned/Actual toggle (side by
-// side won't fit a phone), the same period stepper as desktop, and tap-to-detail
-// as a bottom sheet. Same BodyMap as desktop — it's just SVG, so tap works.
+// side won't fit a phone), a draggable time scrubber, and tap-to-detail as a
+// bottom sheet. Same BodyMap as desktop — it's just SVG, so tap works.
 
 const WINDOWS: Array<{ label: string; days: number }> = [
   { label: '2w', days: 14 },
@@ -20,24 +19,38 @@ const WINDOWS: Array<{ label: string; days: number }> = [
   { label: '8w', days: 56 },
 ];
 
-const TODAY = () => format(new Date(), 'yyyy-MM-dd');
+const MIN_WEEK = -52;
+const MAX_WEEK = 26;
+const FETCH_DEBOUNCE_MS = 250;
 
 export function MobileMusclesCard() {
   const [windowDays, setWindowDays] = useState(28);
-  const [anchor, setAnchor] = useState(TODAY);
   const [mode, setMode] = useState<'planned' | 'done'>('done');
   const [selected, setSelected] = useState<string | null>(null);
-  const { muscles, range, isLoading, error } = useMuscleLoad(windowDays, anchor);
+  const [today] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [anchor, setAnchor] = useState(today);
+
+  const liveAnchor = format(addWeeks(parseISO(today), weekOffset), 'yyyy-MM-dd');
+
+  useEffect(() => {
+    const id = setTimeout(() => setAnchor(liveAnchor), FETCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [liveAnchor]);
+
+  const { muscles, isLoading, error } = useMuscleLoad(windowDays, anchor);
 
   const selectedLoad = selected ? muscles.find(m => m.muscleId === selected) ?? null : null;
   const missed = coolestMuscles(muscles, 3);
-  const isToday = anchor === TODAY();
+  const isToday = weekOffset === 0;
 
-  const stepBack = () => setAnchor(format(subDays(parseISO(anchor), windowDays), 'yyyy-MM-dd'));
-  const stepForward = () => setAnchor(format(addDays(parseISO(anchor), windowDays), 'yyyy-MM-dd'));
-  const rangeLabel = range
-    ? `${format(parseISO(range.from), 'd MMM')} – ${format(parseISO(range.to), 'd MMM')}`
-    : '…';
+  const liveTo = parseISO(liveAnchor);
+  const rangeLabel = `${format(subDays(liveTo, windowDays), 'd MMM')} – ${format(liveTo, 'd MMM')}`;
+
+  const resetToday = () => {
+    setWeekOffset(0);
+    setAnchor(today);
+  };
 
   return (
     <section>
@@ -66,36 +79,35 @@ export function MobileMusclesCard() {
       )}
 
       <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-        {/* Period navigation */}
-        <div className="mb-2 flex items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={stepBack}
-            aria-label="Previous period"
-            className="rounded-md border border-gray-300 p-1.5 text-gray-600 active:bg-gray-50"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <span className="min-w-[8rem] text-center text-sm font-medium tabular-nums text-gray-700">
-            {rangeLabel}
-          </span>
-          <button
-            type="button"
-            onClick={stepForward}
-            aria-label="Next period"
-            className="rounded-md border border-gray-300 p-1.5 text-gray-600 active:bg-gray-50"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-          {!isToday && (
-            <button
-              type="button"
-              onClick={() => setAnchor(TODAY())}
-              className="rounded-md px-2 py-1 text-xs font-semibold text-blue-600 active:bg-blue-50"
+        {/* Time scrubber */}
+        <div className="mb-2">
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <span
+              className={`text-sm font-medium tabular-nums text-gray-700 ${isLoading ? 'animate-pulse text-gray-400' : ''}`}
             >
-              Today
-            </button>
-          )}
+              {rangeLabel}
+            </span>
+            {!isToday && (
+              <button
+                type="button"
+                onClick={resetToday}
+                className="rounded-md px-2 py-1 text-xs font-semibold text-blue-600 active:bg-blue-50"
+              >
+                Today
+              </button>
+            )}
+          </div>
+          <input
+            type="range"
+            min={MIN_WEEK}
+            max={MAX_WEEK}
+            step={1}
+            value={weekOffset}
+            onChange={e => setWeekOffset(Number(e.target.value))}
+            aria-label="Scrub the period"
+            className="h-11 w-full cursor-pointer accent-gray-900"
+            style={{ touchAction: 'none' }}
+          />
         </div>
 
         {/* Planned / Actual toggle */}
@@ -115,7 +127,6 @@ export function MobileMusclesCard() {
         </div>
 
         <BodyMap loads={muscles} heatKind={mode} selectedMuscle={selected} onSelect={setSelected} />
-        {isLoading && <p className="mt-1 text-center text-xs text-gray-400">Loading…</p>}
 
         {missed.length > 0 && (
           <div className="mt-3 border-t border-gray-100 pt-3">

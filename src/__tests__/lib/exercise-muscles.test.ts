@@ -246,6 +246,101 @@ describe('assessment tiers', () => {
   });
 });
 
+describe('synthesised planned load for row-less planned sessions', () => {
+  function loadFor(loads: ReturnType<typeof aggregateMuscleLoad>, id: string) {
+    const l = loads.find(m => m.muscleId === id);
+    if (!l) throw new Error(`no load for ${id}`);
+    return l;
+  }
+
+  it('synthesises a future plan from the most recent matching real session', () => {
+    const sessions = [
+      // A real completed Push session BEFORE the window — not accumulated, but
+      // available to copy for synthesis.
+      session({
+        date: '2026-08-18',
+        completed: true,
+        components: ['Push (shoulders)'],
+        exercises: [{ id: 'e1', name: 'Incline DB press', sets: 4, done: true }],
+      }),
+      // A future row-less planned session (calendar import: components only).
+      session({
+        date: '2026-09-20',
+        planned: true,
+        completed: false,
+        components: ['Push (shoulders)'],
+        exercises: [],
+      }),
+    ];
+    const range = rangeFromAnchor('2026-10-01', 28); // 2026-09-03 .. 2026-10-01
+    const loads = aggregateMuscleLoad(sessions, [], range);
+
+    const chest = loadFor(loads, 'chest');
+    expect(chest.doneWeightedSets).toBe(0); // the real session is out of range
+    expect(chest.plannedWeightedSets).toBe(4); // synthesised from Incline DB press
+    expect(chest.plannedHeat).toBeGreaterThan(0);
+    expect(chest.doneHeat).toBe(0);
+    expect(chest.plannedEstimated).toBe(true);
+    const est = chest.exercises.find(e => e.estimated);
+    expect(est).toBeDefined();
+    expect(est!.note).toMatch(/usual Push/i);
+  });
+
+  it('falls back to a static nominal load when there is no history match', () => {
+    const sessions = [
+      session({
+        date: '2026-09-20',
+        planned: true,
+        completed: false,
+        components: ['Legs'],
+        exercises: [],
+      }),
+    ];
+    const range = rangeFromAnchor('2026-10-01', 28);
+    const loads = aggregateMuscleLoad(sessions, [], range);
+
+    const quads = loadFor(loads, 'quads');
+    expect(quads.plannedWeightedSets).toBe(9); // static legs nominal
+    expect(quads.doneWeightedSets).toBe(0);
+    expect(quads.plannedEstimated).toBe(true);
+    const est = quads.exercises.find(e => e.estimated);
+    expect(est).toBeDefined();
+    expect(est!.note).toMatch(/typical Legs day/i);
+  });
+
+  it('does NOT synthesise for a completed session (real rows win, not estimated)', () => {
+    const sessions = [
+      session({
+        date: '2026-08-24',
+        completed: true,
+        components: ['Push (shoulders)'],
+        exercises: [{ id: 'e1', name: 'Incline DB press', sets: 3, done: true }],
+      }),
+    ];
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
+    const chest = loadFor(loads, 'chest');
+    expect(chest.plannedEstimated).toBe(false);
+    expect(chest.exercises.every(e => !e.estimated)).toBe(true);
+  });
+
+  it('a future all-planned window yields planned heat and zero done heat', () => {
+    const sessions = [
+      session({
+        date: '2026-09-18',
+        planned: true,
+        completed: false,
+        components: ['Pull (back)'],
+        exercises: [],
+      }),
+    ];
+    const range = rangeFromAnchor('2026-10-01', 28);
+    const loads = aggregateMuscleLoad(sessions, [], range);
+    // Static pull nominal lights up the back muscles.
+    expect(loadFor(loads, 'lats').plannedHeat).toBeGreaterThan(0);
+    expect(loadFor(loads, 'lats').doneHeat).toBe(0);
+  });
+});
+
 describe('coolestMuscles', () => {
   it('returns the least-worked muscles first by actual heat', () => {
     const sessions = [

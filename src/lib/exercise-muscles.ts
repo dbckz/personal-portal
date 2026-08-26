@@ -13,6 +13,7 @@
 
 import { normalizeExerciseName } from './exercise-names';
 import { entryWasPerformed } from './exercise-entry';
+import { classifyExercise, componentGroups, type Group } from './exercise-targets';
 import type { ExerciseEntry, ExerciseSession } from '@/types/life';
 
 export type MuscleView = 'front' | 'back';
@@ -324,6 +325,11 @@ export interface MuscleExerciseBreakdown {
   doneSets: number;
   plannedSets: number;
   lastDoneDate: string | null;
+  // Set when this planned contribution was SYNTHESISED for a row-less planned
+  // session (a calendar import with only components), not read from real rows.
+  // `note` explains the source for the detail panel.
+  estimated?: boolean;
+  note?: string;
 }
 
 export type MuscleTier = 'none' | 'light' | 'solid' | 'high';
@@ -347,6 +353,9 @@ export interface MuscleLoad {
   // Whether the only work hitting this muscle came from cardio — lets the UI say
   // "cardio only" rather than implying strength volume.
   cardioOnly: boolean;
+  // Whether the planned load is ENTIRELY synthesised (no real planned rows) — the
+  // UI can flag the Planned figure's colour as an estimate for this muscle.
+  plannedEstimated: boolean;
   exercises: MuscleExerciseBreakdown[];
   assessment: string;
 }
@@ -380,12 +389,21 @@ const HIGH_PER_WEEK = 10;
 interface Accum {
   doneWeighted: number;
   plannedWeighted: number;
+  // Of plannedWeighted, how much was synthesised — so plannedEstimated can tell
+  // an entirely-estimated muscle from one with real planned rows.
+  estimatedPlannedWeighted: number;
   cardioDoneWeighted: number;
   byExercise: Map<string, MuscleExerciseBreakdown>;
 }
 
 function emptyAccum(): Accum {
-  return { doneWeighted: 0, plannedWeighted: 0, cardioDoneWeighted: 0, byExercise: new Map() };
+  return {
+    doneWeighted: 0,
+    plannedWeighted: 0,
+    estimatedPlannedWeighted: 0,
+    cardioDoneWeighted: 0,
+    byExercise: new Map(),
+  };
 }
 
 function bumpExercise(
@@ -394,7 +412,8 @@ function bumpExercise(
   role: MuscleRoleKind,
   doneSets: number,
   plannedSets: number,
-  doneDate: string | null
+  doneDate: string | null,
+  opts?: { estimated?: boolean; note?: string }
 ): void {
   const existing = accum.byExercise.get(name);
   if (existing) {
@@ -402,6 +421,11 @@ function bumpExercise(
     existing.plannedSets += plannedSets;
     if (doneDate && (!existing.lastDoneDate || doneDate > existing.lastDoneDate)) {
       existing.lastDoneDate = doneDate;
+    }
+    // A real contribution to the same name overrides an estimate.
+    if (!opts?.estimated) {
+      existing.estimated = false;
+      existing.note = undefined;
     }
     return;
   }
@@ -411,7 +435,70 @@ function bumpExercise(
     doneSets,
     plannedSets,
     lastDoneDate: doneDate,
+    ...(opts?.estimated ? { estimated: true, note: opts.note } : {}),
   });
+}
+
+// Nominal per-muscle planned load (weighted-set units) for a plan COMPONENT whose
+// group has no history to copy — mirrors exercise-targets' component→group logic.
+const STATIC_COMPONENT_LOAD: Record<Group, Record<string, number>> = {
+  push: { chest: 9, 'front-delts': 6, 'side-delts': 4, triceps: 5 },
+  pull: { lats: 9, 'upper-back': 6, biceps: 6, 'rear-delts': 4 },
+  legs: { quads: 9, hamstrings: 6, glutes: 6, calves: 4 },
+  core: { abs: 6, obliques: 3 },
+  run: { quads: 3, hamstrings: 3, calves: 3, glutes: 3 },
+};
+
+// The groups a plan component activates. Reuses exercise-targets' componentGroups,
+// plus football/footy → the cardio (run) set.
+function groupsForComponent(component: string): Group[] {
+  const groups = componentGroups(component);
+  if (groups.length > 0) return groups;
+  if (/\b(football|footy|soccer)\b/i.test(component)) return ['run'];
+  return [];
+}
+
+// A row-less planned session's components, flattened: split each on '+' (a
+// calendar title like "Parkrun + core + Legs"), trimmed, blanks dropped. Falls
+// back to the label when there are no components.
+function componentList(session: ExerciseSession): string[] {
+  const raw =
+    session.components && session.components.length > 0
+      ? session.components
+      : session.label
+        ? [session.label]
+        : [];
+  return raw
+    .flatMap(c => c.split('+'))
+    .map(c => c.trim())
+    .filter(Boolean);
+}
+
+// The most recent row-bearing session (completed, or planned with rows) that has
+// at least one exercise in one of `groups`, and the rows that match — so a
+// future "Push" day can reuse the exercises from the last real Push session.
+function findComponentHistory(
+  history: ExerciseSession[],
+  groups: Group[],
+  excludeDate: string
+): Array<{ name: string; sets?: number }> | null {
+  const wanted = new Set(groups);
+  const candidates = history
+    .filter(
+      s =>
+        s.date !== excludeDate &&
+        (s.exercises?.length ?? 0) > 0 &&
+        (s.completed || (s.planned && (s.exercises?.length ?? 0) > 0))
+    )
+    .sort((a, b) => b.date.localeCompare(a.date));
+  for (const session of candidates) {
+    const rows = (session.exercises ?? []).filter(e => {
+      const g = classifyExercise(normalizeExerciseName(e.name));
+      return g !== null && wanted.has(g);
+    });
+    if (rows.length > 0) return rows.map(e => ({ name: e.name, sets: e.sets }));
+  }
+  return null;
 }
 
 // Sets a row counts for. A row with no sets (a run, a plank logged as a hold)
@@ -431,11 +518,17 @@ function daysBetween(from: string, to: string): number {
 // BOTH loads are computed over the SAME range, so Planned and Actual are directly
 // comparable. Planned counts EVERY session's exercise rows (a completed session's
 // prescribed rows ARE that day's plan, regardless of whether each was performed),
-// plus programme-cache rows for dates with no session rows at all — never counting
-// a day's plan twice. Done counts only completed sessions' performed rows
-// (entryWasPerformed). A completed session therefore feeds both: its rows into
-// planned, its performed rows into done. Weighting is primary 1.0 / secondary
-// 0.5 × sets throughout.
+// plus programme-cache rows for dates with no session rows, plus SYNTHESISED rows
+// for row-less planned sessions (calendar imports with only components) — so a
+// future plan of component-only sessions still colours the Planned figure. Done
+// counts only completed sessions' performed rows (entryWasPerformed). A completed
+// session therefore feeds both: its rows into planned, its performed rows into
+// done. Weighting is primary 1.0 / secondary 0.5 × sets throughout.
+//
+// `sessions` may extend BEFORE the range (the route passes a longer history
+// slice): out-of-range sessions never contribute to the totals, but are searched
+// to synthesise a row-less planned session's expected exercises from the most
+// recent matching real session.
 export function aggregateMuscleLoad(
   sessions: ExerciseSession[],
   programmes: MuscleProgrammeDay[],
@@ -454,7 +547,7 @@ export function aggregateMuscleLoad(
   };
 
   // Dates that already have session-level exercise rows: the programme fallback
-  // must skip these so a day's plan isn't double-counted.
+  // and synthesis must skip these so a day's plan isn't double-counted.
   const datesWithSessionRows = new Set<string>();
   for (const session of sessions) {
     if (inRange(session.date) && (session.exercises?.length ?? 0) > 0) {
@@ -462,15 +555,34 @@ export function aggregateMuscleLoad(
     }
   }
 
-  const addPlanned = (name: string, sets: number | undefined) => {
+  const addPlanned = (
+    name: string,
+    sets: number | undefined,
+    opts?: { estimated?: boolean; note?: string }
+  ) => {
     const roles = exerciseMuscles(name);
     if (roles.length === 0) return;
     const n = setsOf(sets);
     for (const { muscleId, role } of roles) {
+      const weighted = ROLE_WEIGHT[role] * n;
       const accum = accumFor(muscleId);
-      accum.plannedWeighted += ROLE_WEIGHT[role] * n;
-      bumpExercise(accum, normalizeExerciseName(name), role, 0, n, null);
+      accum.plannedWeighted += weighted;
+      if (opts?.estimated) accum.estimatedPlannedWeighted += weighted;
+      bumpExercise(accum, normalizeExerciseName(name), role, 0, n, null, opts);
     }
+  };
+
+  // A synthesised nominal load: a flat weighted amount on one muscle, with a
+  // labelled estimated breakdown entry (there's no real exercise behind it).
+  const addPlannedNominal = (muscleId: string, weighted: number, label: string) => {
+    if (!MUSCLE_IDS.has(muscleId)) return;
+    const accum = accumFor(muscleId);
+    accum.plannedWeighted += weighted;
+    accum.estimatedPlannedWeighted += weighted;
+    bumpExercise(accum, label, 'primary', 0, round1(weighted), null, {
+      estimated: true,
+      note: label,
+    });
   };
 
   const addDone = (entry: ExerciseEntry, date: string) => {
@@ -501,9 +613,45 @@ export function aggregateMuscleLoad(
   }
 
   // Programme rows only for dates with no session rows at all.
+  const coveredByProgramme = new Set<string>();
   for (const day of programmes) {
     if (!inRange(day.date) || datesWithSessionRows.has(day.date)) continue;
     for (const row of day.rows) addPlanned(row.name, row.sets);
+    coveredByProgramme.add(day.date);
+  }
+
+  // Synthesise a plan for row-less planned sessions in range not already covered
+  // by real rows or the programme cache (past skipped plans included). Per
+  // component: reuse the most recent matching real session's rows, else a static
+  // nominal load. Marked estimated so it's never shown as a literal prescription.
+  for (const session of sessions) {
+    if (!inRange(session.date)) continue;
+    if (!(session.planned && !session.completed)) continue;
+    if ((session.exercises?.length ?? 0) > 0) continue;
+    if (datesWithSessionRows.has(session.date) || coveredByProgramme.has(session.date)) continue;
+
+    const seen = new Set<Group>();
+    for (const component of componentList(session)) {
+      const groups = groupsForComponent(component).filter(g => !seen.has(g));
+      if (groups.length === 0) continue;
+      groups.forEach(g => seen.add(g));
+
+      const match = findComponentHistory(sessions, groups, session.date);
+      if (match) {
+        for (const row of match) {
+          addPlanned(row.name, row.sets, {
+            estimated: true,
+            note: `expected — from your usual ${component} session`,
+          });
+        }
+      } else {
+        for (const group of groups) {
+          for (const [muscleId, weighted] of Object.entries(STATIC_COMPONENT_LOAD[group])) {
+            addPlannedNominal(muscleId, weighted, `typical ${component} day`);
+          }
+        }
+      }
+    }
   }
 
   const days = Math.max(daysBetween(range.from, range.to), 1);
@@ -515,6 +663,8 @@ export function aggregateMuscleLoad(
     const doneHeat = Math.min(1, doneSetsPerWeek / HEAT_CAP_PER_WEEK);
     const plannedHeat = Math.min(1, plannedSetsPerWeek / HEAT_CAP_PER_WEEK);
     const cardioOnly = accum.doneWeighted > 0 && accum.cardioDoneWeighted >= accum.doneWeighted;
+    const plannedEstimated =
+      accum.plannedWeighted > 0 && accum.estimatedPlannedWeighted >= accum.plannedWeighted - 1e-9;
     const tier = tierFor(doneSetsPerWeek);
     const exercises = [...accum.byExercise.values()].sort(
       (a, b) => b.doneSets - a.doneSets || b.plannedSets - a.plannedSets
@@ -529,6 +679,7 @@ export function aggregateMuscleLoad(
       plannedHeat,
       tier,
       cardioOnly,
+      plannedEstimated,
       exercises,
       assessment: assess(muscle, {
         doneWeighted: accum.doneWeighted,

@@ -26,6 +26,13 @@ export function MuscleDetail({ load }: { load: MuscleLoad }) {
 
       <p className="rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-700">{load.assessment}</p>
 
+      {load.plannedEstimated && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Planned figure is an estimate from your usual sessions — this day is a calendar plan with
+          no exercises filled in yet.
+        </p>
+      )}
+
       {load.exercises.length > 0 ? (
         <div>
           <div className="mb-1 grid grid-cols-[1fr_auto_auto_auto] gap-x-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
@@ -40,10 +47,15 @@ export function MuscleDetail({ load }: { load: MuscleLoad }) {
                 key={ex.name}
                 className="grid grid-cols-[1fr_auto_auto_auto] items-baseline gap-x-3 text-sm"
               >
-                <span className="min-w-0 truncate text-gray-700">
+                <span className="min-w-0 truncate text-gray-700" title={ex.estimated ? ex.note : undefined}>
                   {ex.name}
                   {ex.role === 'secondary' && (
                     <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-400">2nd</span>
+                  )}
+                  {ex.estimated && (
+                    <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium uppercase tracking-wide text-amber-700">
+                      est
+                    </span>
                   )}
                 </span>
                 <span className="text-right tabular-nums text-gray-600">{ex.doneSets || '—'}</span>

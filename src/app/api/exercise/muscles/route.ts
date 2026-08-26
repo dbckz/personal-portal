@@ -17,6 +17,9 @@ const DEFAULT_WINDOW_DAYS = 28;
 const MIN_WINDOW_DAYS = 7;
 const MAX_WINDOW_DAYS = 120;
 const MAX_ANCHOR_OFFSET_DAYS = 366;
+// How far before the display range to read sessions, for synthesising a row-less
+// planned session's plan from the most recent matching real session.
+const HISTORY_LOOKBACK_DAYS = 120;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -48,8 +51,16 @@ export async function GET(request: NextRequest) {
     const anchor = clampAnchor(searchParams.get('anchor'));
     const range = rangeFromAnchor(anchor, windowDays);
 
+    // Fetch a longer history slice than the display range so a row-less planned
+    // session (a calendar import with only components) can be synthesised from
+    // the most recent matching real session. Out-of-range sessions never count
+    // toward the totals — aggregateMuscleLoad only accumulates within `range`.
+    const historyFrom = new Date(`${range.from}T00:00:00Z`);
+    historyFrom.setUTCDate(historyFrom.getUTCDate() - HISTORY_LOOKBACK_DAYS);
+    const historyFromIso = historyFrom.toISOString().slice(0, 10);
+
     const [sessions, programmeRows] = await Promise.all([
-      getSessionsInRange(range.from, range.to),
+      getSessionsInRange(historyFromIso, range.to),
       Promise.resolve(getProgrammesInRange(range.from, range.to)),
     ]);
 

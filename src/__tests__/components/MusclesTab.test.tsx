@@ -81,18 +81,29 @@ describe('MusclesTab', () => {
     expect(screen.getByText('Incline DB press')).toBeInTheDocument();
   });
 
-  it('steps the period back and offers a Today reset', async () => {
+  it('scrubs the period with the slider, debounces the fetch, and offers a Today reset', async () => {
+    const todayIso = new Date().toISOString().slice(0, 10);
     render(<MusclesTab />);
     await waitFor(() => expect(getMuscleLoad).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /previous period/i }));
+    // Drag the scrubber back four weeks.
+    fireEvent.change(screen.getByRole('slider', { name: /scrub the period/i }), {
+      target: { value: '-4' },
+    });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument());
-    // The latest fetch used a non-today anchor.
-    const lastAnchor = getMuscleLoad.mock.calls.at(-1)?.[1];
-    expect(lastAnchor).toBeDefined();
-    expect(lastAnchor).not.toBe('2026-08-25');
+    // The Today reset appears immediately (live), before any refetch.
+    expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument();
+
+    // The fetch is debounced, then fires with a new (non-today) anchor.
+    await waitFor(() =>
+      expect(getMuscleLoad.mock.calls.some(c => c[1] && c[1] !== todayIso)).toBe(true)
+    );
+
+    // Reset recentres the slider and hides the Today button.
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument();
+    expect((screen.getByRole('slider', { name: /scrub the period/i }) as HTMLInputElement).value).toBe('0');
   });
 
   it('lists the coolest muscles in the most-missed strip', async () => {
