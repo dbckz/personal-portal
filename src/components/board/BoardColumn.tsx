@@ -32,6 +32,10 @@ export function BoardColumn({
 }: BoardColumnProps) {
   const [isOver, setIsOver] = useState(false);
   const canDrop = !!draggingCard && draggingCard.status !== status;
+  // 'Agents running' is the one manually-set, automation column — give it an
+  // indigo accent (unused elsewhere) so it reads distinctly; the other columns
+  // keep the shared neutral treatment.
+  const accented = status === 'agents_running';
 
   return (
     <div
@@ -53,8 +57,18 @@ export function BoardColumn({
       data-testid={`board-column-${status}`}
     >
       <div className="mb-2 flex items-center justify-between px-1">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</h3>
-        <span className="rounded-full bg-gray-200 px-1.5 text-[11px] font-medium text-gray-600">
+        <h3
+          className={`text-xs font-semibold uppercase tracking-wide ${
+            accented ? 'text-indigo-500' : 'text-gray-500'
+          }`}
+        >
+          {label}
+        </h3>
+        <span
+          className={`rounded-full px-1.5 text-[11px] font-medium ${
+            accented ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-200 text-gray-600'
+          }`}
+        >
           {cards.length}
         </span>
       </div>

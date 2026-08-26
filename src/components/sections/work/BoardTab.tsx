@@ -108,6 +108,7 @@ export function BoardTab({
   const cardsByStatus = useMemo(() => {
     const map: Record<BoardStatus, BoardCard[]> = {
       todo: [],
+      agents_running: [],
       in_progress: [],
       waiting: [],
       done: [],
@@ -203,7 +204,7 @@ export function BoardTab({
           Loading the board…
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {BOARD_COLUMNS.map(col => (
             <BoardColumn
               key={col.id}

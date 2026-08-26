@@ -92,7 +92,13 @@ export function MobileBoardTab({
   );
 
   const statusCounts = useMemo(() => {
-    const counts: Record<BoardStatus, number> = { todo: 0, in_progress: 0, waiting: 0, done: 0 };
+    const counts: Record<BoardStatus, number> = {
+      todo: 0,
+      agents_running: 0,
+      in_progress: 0,
+      waiting: 0,
+      done: 0,
+    };
     for (const card of filteredCards) counts[card.status] += 1;
     return counts;
   }, [filteredCards]);
@@ -194,16 +200,21 @@ export function MobileBoardTab({
       </div>
 
       {/* Status segment */}
-      <div className="grid grid-cols-4 gap-1 rounded-lg bg-gray-100 p-1">
+      <div className="grid grid-cols-5 gap-1 rounded-lg bg-gray-100 p-1">
         {BOARD_COLUMNS.map(col => {
           const active = col.id === status;
+          const accented = col.id === 'agents_running';
           return (
             <button
               key={col.id}
               type="button"
               onClick={() => setStatus(col.id)}
               className={`flex flex-col items-center justify-center rounded-md px-1 py-1.5 text-[11px] font-medium leading-tight transition-colors ${
-                active ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 active:text-gray-700'
+                active
+                  ? 'bg-white text-orange-600 shadow-sm'
+                  : accented
+                    ? 'text-indigo-500 active:text-indigo-600'
+                    : 'text-gray-500 active:text-gray-700'
               }`}
             >
               <span>{col.label}</span>

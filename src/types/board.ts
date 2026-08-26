@@ -1,15 +1,18 @@
 // Weekly task board types. The board mirrors the calendar: every app-created
 // WORK block for a week is one card, filterable by day of the week, in one of
-// four status columns. A single-task block is one card; a grouped block (several
+// the status columns. A single-task block is one card; a grouped block (several
 // Asana/ad-hoc tasks sharing one calendar event) is one card with its member
 // tasks listed underneath. See src/lib/board.ts for how cards are built and
 // src/lib/storage/board.ts for the persisted per-card status.
 
-// The four board columns, in display order.
-export type BoardStatus = 'todo' | 'in_progress' | 'waiting' | 'done';
+// The board columns, in display order. 'agents_running' is a manual-only column
+// (a card lands there only when moved there explicitly); deriveBoardCardStatus
+// never derives it.
+export type BoardStatus = 'todo' | 'agents_running' | 'in_progress' | 'waiting' | 'done';
 
 export const BOARD_COLUMNS: Array<{ id: BoardStatus; label: string }> = [
   { id: 'todo', label: 'To start' },
+  { id: 'agents_running', label: 'Agents running' },
   { id: 'in_progress', label: 'In progress' },
   { id: 'waiting', label: 'Waiting' },
   { id: 'done', label: 'Done' },

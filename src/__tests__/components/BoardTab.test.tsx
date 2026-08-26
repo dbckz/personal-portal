@@ -87,16 +87,16 @@ function renderBoard() {
 describe('BoardTab', () => {
   beforeEach(() => setBoardStatus.mockClear());
 
-  it('renders the four status columns', async () => {
+  it('renders the five status columns in order', async () => {
     renderBoard();
     // Wait for a card so the board (not the loading spinner) is on screen.
     await screen.findByText('Write report');
-    for (const status of ['todo', 'in_progress', 'waiting', 'done']) {
+    for (const status of ['todo', 'agents_running', 'in_progress', 'waiting', 'done']) {
       expect(screen.getByTestId(`board-column-${status}`)).toBeInTheDocument();
     }
     // Column headings (the labels also appear as <option>s, so scope to headings).
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
-    expect(headings).toEqual(['To start', 'In progress', 'Waiting', 'Done']);
+    expect(headings).toEqual(['To start', 'Agents running', 'In progress', 'Waiting', 'Done']);
   });
 
   it('shows both cards under All, and narrows to a single day', async () => {

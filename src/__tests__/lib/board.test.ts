@@ -10,6 +10,7 @@ import {
   WORK_RITUAL_KINDS,
   type BuildBoardCardsInput,
 } from '@/lib/board';
+import { BOARD_COLUMNS } from '@/types';
 import type {
   AdHocTask,
   BoardTaskState,
@@ -387,6 +388,36 @@ describe('buildBoardCards — rituals', () => {
     );
     expect(withState[0].status).toBe('in_progress');
     expect(withState[0].statusSource).toBe('explicit');
+  });
+});
+
+describe('board columns', () => {
+  it('lists the columns in order, with Agents running between To start and In progress', () => {
+    expect(BOARD_COLUMNS.map(c => c.id)).toEqual([
+      'todo',
+      'agents_running',
+      'in_progress',
+      'waiting',
+      'done',
+    ]);
+    expect(BOARD_COLUMNS.find(c => c.id === 'agents_running')?.label).toBe('Agents running');
+  });
+
+  it('honours an explicit agents_running state on a card', () => {
+    const cards = buildBoardCards(
+      baseInput({
+        ritualBlocks: [ritual({ googleEventId: 'mon' })],
+        states: {
+          'block:mon': {
+            key: 'block:mon',
+            status: 'agents_running',
+            updatedAt: '2026-08-18T00:00:00.000Z',
+          },
+        },
+      })
+    );
+    expect(cards[0].status).toBe('agents_running');
+    expect(cards[0].statusSource).toBe('explicit');
   });
 });
 
