@@ -126,7 +126,9 @@ describe('planReplan - classification', () => {
     });
     expect(moves).toHaveLength(1);
     expect(moves[0].reason).toBe('conflict');
-    expect(moves[0].newStart).toBe('09:00'); // re-slotted into the free preferred window
+    // A full overlap (the whole 14:00–15:00 block is buried) is NOT nibbled in
+    // place — it re-slots into the free preferred window.
+    expect(moves[0].newStart).toBe('09:00');
     expect(moves[0].newDate).toBe('2026-07-15');
   });
 
@@ -789,6 +791,152 @@ describe('planReplan - deep-work morning flex on re-slot (3c)', () => {
     expect(moves[0].newDate).toBe('2026-07-15'); // Wednesday
     expect(moves[0].newStart).toBe('10:15');
     expect(moves[0].durationMinutes).toBe(90); // full duration kept
+  });
+});
+
+describe('planReplan - in-place conflict resolution + unplaceable slot reservation', () => {
+  const deepConfig = makeConfig({
+    quotas: {
+      'Writing/Deep Work': { weeklyCount: 2, targetLength: '90min', preferredTimes: ['09:00-11:00'] },
+    },
+  });
+
+  // The 25 Aug 2026 incident: a plain 15-minute calendar event overlapped only the
+  // first 15 minutes of a 90-minute deep-work container. The old code uprooted the
+  // whole container (and then packed new blocks into its "vacated" time). It must
+  // instead resolve IN PLACE — slid past the meeting on the same day.
+  it('slides a conflicted deep-work container past a small edge overlap instead of uprooting it', () => {
+    const { moves, unplaceable, backfill, conversions } = run({
+      config: deepConfig,
+      blocks: [
+        block({
+          googleEventId: 'deepwork',
+          date: '2026-07-15', // Wednesday, future (now Wed 08:00)
+          start: '08:30',
+          durationMinutes: 90, // 08:30–10:00
+          category: 'Writing/Deep Work',
+          isCategoryContainer: true,
+          titles: ['✍️ Deep work'],
+        }),
+      ],
+      otherBusy: [busy(15, 8, 30, 8, 45)], // a 15-min event over the first 15 minutes
+      now: WED_8AM,
+    });
+    expect(unplaceable).toHaveLength(0);
+    expect(conversions).toHaveLength(0); // a container is not converted
+    expect(moves).toHaveLength(1);
+    expect(moves[0].googleEventId).toBe('deepwork');
+    expect(moves[0].reason).toBe('conflict');
+    expect(moves[0].oldDate).toBe('2026-07-15');
+    expect(moves[0].newDate).toBe('2026-07-15'); // same day — never uprooted
+    expect(moves[0].newStart).toBe('08:45'); // slid to the end of the overlap
+    expect(moves[0].durationMinutes).toBe(90); // full duration kept
+    // Nothing is packed into the block's original 08:30 start.
+    expect(backfill.some(b => b.date === '2026-07-15' && b.start < '10:15')).toBe(false);
+  });
+
+  // A conflicted block ≥90 min with a PARTIAL overlap that cannot slide at full
+  // length trims toward the 60-min floor to stay on its own day rather than
+  // moving off it.
+  it('trims a long conflicted block to fit the same day rather than uprooting it', () => {
+    const config = makeConfig({
+      quotas: { Ops: { weeklyCount: 1, targetLength: '90min', preferredTimes: ['09:00-11:00'] } },
+      scheduling: { workingDays: ['Wednesday'], workingHours: { start: '09:00', end: '10:40' } },
+    });
+    const { moves, unplaceable } = run({
+      config,
+      blocks: [
+        block({
+          googleEventId: 'ops',
+          date: '2026-07-15',
+          start: '09:00',
+          durationMinutes: 90, // 09:00–10:30
+          category: 'Ops',
+        }),
+      ],
+      otherBusy: [busy(15, 9, 0, 9, 40)], // 40-min overlap on a 90-min block (< half)
+      now: WED_8AM,
+    });
+    expect(unplaceable).toHaveLength(0);
+    expect(moves).toHaveLength(1);
+    expect(moves[0].newDate).toBe('2026-07-15'); // same day
+    expect(moves[0].newStart).toBe('09:40'); // slid past the meeting
+    expect(moves[0].durationMinutes).toBe(60); // trimmed from 90 to the 60-min floor to fit before 10:40
+  });
+
+  // A conflicted block half-or-more buried under a meeting is NOT nibbled in
+  // place (the in-place window ignores the preferred-window end); it re-slots
+  // into its category's preferred window via the cross-day mover logic.
+  it('does not resolve a majority-overlap conflict in place', () => {
+    const { moves } = run({
+      blocks: [
+        block({
+          googleEventId: 'c',
+          date: '2026-07-15',
+          start: '14:00',
+          durationMinutes: 60, // 14:00–15:00
+        }),
+      ],
+      otherBusy: [busy(15, 14, 0, 14, 45)], // 45-min overlap on a 60-min block (≥ half)
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(1);
+    expect(moves[0].reason).toBe('conflict');
+    // Falls through to the preferred-window re-slot (09:00) rather than sliding
+    // in place to 14:45.
+    expect(moves[0].newStart).toBe('09:00');
+    expect(moves[0].newStart).not.toBe('14:45');
+  });
+
+  // When a block genuinely cannot be placed anywhere (in place or otherwise), its
+  // event still sits on the calendar — so its ORIGINAL slot must be reserved and
+  // never handed to a ritual addition, task backfill or free-slot listing.
+  it('reserves an unplaceable block’s original slot against additions, backfill and free slots', () => {
+    const config = makeConfig({
+      quotas: {
+        Ops: { weeklyCount: 1, targetLength: '60min', preferredTimes: ['09:00-10:40'] },
+        Todos: { targetLength: '30min', preferredTimes: [] }, // quota-less catch-all → free slots
+      },
+      scheduling: { workingDays: ['Wednesday'], workingHours: { start: '09:00', end: '10:40' } },
+    });
+    // Free gaps in 09:00–10:40 are 09:00–09:40 (40m) and 10:00–10:40 (40m): a
+    // 60-min Ops block fits in neither (and, being < 90 min, cannot trim), so it is
+    // unplaceable. Its original slot is 09:00–10:00 with a genuinely free 09:00–09:40
+    // head that free slots would otherwise grab.
+    const { moves, unplaceable, backfill, freeSlots } = run({
+      config,
+      blocks: [
+        block({
+          googleEventId: 'ops',
+          date: '2026-07-15',
+          start: '09:00',
+          durationMinutes: 60, // 09:00–10:00
+          category: 'Ops',
+        }),
+      ],
+      otherBusy: [busy(15, 9, 40, 10, 0)], // a meeting over the block's last 20 minutes
+      candidateTasks: [cand({ gid: 'todo1', signal: 'todo' })],
+      existingScheduledCounts: { Ops: 1 }, // Ops quota met → no Ops backfill
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(unplaceable.map(u => u.googleEventId)).toEqual(['ops']);
+
+    // Nothing may occupy any part of the reserved original interval [09:00, 10:00).
+    const origStart = ms('2026-07-15', '09:00');
+    const origEnd = ms('2026-07-15', '10:00');
+    const overlapsOriginal = (date: string, start: string, durationMinutes: number) => {
+      const s = ms(date, start);
+      return s < origEnd && s + durationMinutes * 60 * 1000 > origStart;
+    };
+    for (const s of freeSlots) {
+      expect(overlapsOriginal(s.date, s.start, s.durationMinutes)).toBe(false);
+    }
+    for (const b of backfill) {
+      expect(overlapsOriginal(b.date, b.start, b.durationMinutes)).toBe(false);
+    }
+    // The genuinely-free tail (10:00–10:40) is still offered as free space.
+    expect(freeSlots.some(s => s.date === '2026-07-15' && s.start === '10:00')).toBe(true);
   });
 });
 

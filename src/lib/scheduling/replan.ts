@@ -45,6 +45,7 @@ import {
   resolveWorkingWindow,
   timeStr,
   type BusyMs,
+  type TimeOfDay,
   type Window,
   type WorkingDay,
   type WorkRun,
@@ -657,10 +658,60 @@ export function planReplan(input: ReplanInput): ReplanResult {
 
   for (const { block, reason } of toMove) {
     // A prep block whose meeting has already started/passed can never be
-    // usefully re-slotted → stale.
+    // usefully re-slotted → stale. Its calendar event stays put (the confirm
+    // route's dismiss / mark-done paths delete only the prep record, never the
+    // Google event), so its slot is still occupied — reserve it (see below).
     if (block.mustEndBeforeMs !== undefined && block.mustEndBeforeMs <= nowMs) {
       stale.push(staleOf(block, reason));
+      busy.push({ start: block.startMs, end: block.endMs, isBreak: block.isBreak });
       continue;
+    }
+
+    // A conflicted (non-ritual, non-prep) block should first try to stay on its
+    // OWN day — sliding past, or trimming around, the meeting that now overlaps
+    // it — rather than being uprooted to another day for what may be a few
+    // minutes' edge overlap. This applies only to a PARTIAL overlap (under half
+    // the block): the in-place window runs to the end of the day (ignoring the
+    // category's preferred-window end), so a block half-or-more buried under a
+    // meeting is better re-slotted into its preferred window and falls through to
+    // the cross-day mover logic below. Missed blocks (already ended) have no slot
+    // to keep, so they skip this.
+    if (
+      reason === 'conflict' &&
+      !block.ritualKind &&
+      block.mustEndBeforeMs === undefined &&
+      coveredWithin(block.startMs, block.endMs, otherBusyMs) * 2 <
+        block.durationMinutes * MS_PER_MINUTE
+    ) {
+      const inPlace = resolveConflictInPlace(
+        block,
+        workingDays,
+        workRun,
+        busy,
+        nowMs,
+        config,
+        workingHoursEnd
+      );
+      if (inPlace) {
+        moves.push({
+          googleEventId: block.googleEventId,
+          googleIntegrationId: block.googleIntegrationId,
+          category: block.category,
+          titles: block.titles,
+          oldDate: block.date,
+          oldStart: block.start,
+          newDate: block.date,
+          newStart: timeStr(inPlace.startMs),
+          durationMinutes: inPlace.durationMinutes,
+          reason,
+        });
+        busy.push({
+          start: inPlace.startMs,
+          end: inPlace.startMs + inPlace.durationMinutes * MS_PER_MINUTE,
+          isBreak: block.isBreak,
+        });
+        continue;
+      }
     }
 
     // Ritual movers re-slot into their ritual window (lunch prefers 11:30–13:00,
@@ -739,6 +790,13 @@ export function planReplan(input: ReplanInput): ReplanResult {
           reason,
         });
       }
+      // Reserve the block's ORIGINAL slot. An unplaceable or stale block's
+      // calendar event is NOT removed — the confirm route's defer /
+      // leave-unscheduled / dismiss / mark-done paths all leave the Google event
+      // exactly where it is — so its time stays occupied. Push it into `busy` so
+      // no later mover, overflow option, ritual addition, task backfill or
+      // free-slot listing can reuse the slot and double-book the event.
+      busy.push({ start: block.startMs, end: block.endMs, isBreak: block.isBreak });
       continue;
     }
 
@@ -1039,6 +1097,79 @@ function capWindows(windows: Window[], capMs: number): Window[] {
     if (endMs > w.startMs) out.push({ ...w, endMs });
   }
   return out;
+}
+
+// Total time within [startMs, endMs) covered by any of the busy intervals, with
+// overlapping intervals merged so shared time is counted once. Used to size a
+// conflicted block's overlap against its own duration.
+function coveredWithin(startMs: number, endMs: number, busy: BusyMs[]): number {
+  const clipped = busy
+    .map(b => ({ start: Math.max(b.start, startMs), end: Math.min(b.end, endMs) }))
+    .filter(iv => iv.end > iv.start)
+    .sort((a, b) => a.start - b.start);
+  let total = 0;
+  let curStart = -1;
+  let curEnd = -1;
+  for (const iv of clipped) {
+    if (iv.start > curEnd) {
+      total += Math.max(0, curEnd - curStart);
+      curStart = iv.start;
+      curEnd = iv.end;
+    } else {
+      curEnd = Math.max(curEnd, iv.end);
+    }
+  }
+  total += Math.max(0, curEnd - curStart);
+  return total;
+}
+
+// Try to resolve a conflicted block WITHOUT leaving its day: slide its start
+// later (past the meeting that now overlaps it) and, for a long-enough block,
+// trim it, keeping it within the same day's working window. Returns the adjusted
+// placement (start + possibly reduced duration) or null when the day has no room.
+// Only starts at/after the block's original start are considered, so a block
+// never jumps to an earlier gap it was never in. A deep-work block stays within
+// its morning (noon-extended) and may shrink to the 60-min morning floor, reusing
+// findDeepWorkMorningPlacement; a non-deep block ≥90 min may likewise trim toward
+// a 60-min floor, while a shorter one keeps its full duration (strict run rule,
+// then the relaxed cap to abut the meeting).
+function resolveConflictInPlace(
+  block: ReplanBlock,
+  workingDays: WorkingDay[],
+  workRun: WorkRun,
+  busy: BusyMs[],
+  nowMs: number,
+  config: WorkflowConfig,
+  workingHoursEnd: TimeOfDay
+): { startMs: number; durationMinutes: number } | null {
+  const day = workingDays.find(d => d.dateStr === block.date);
+  if (!day) return null; // its day is gone (past / out-of-office) — no same-day option
+
+  const deep = isDeepWork(block.category);
+  let windowEndMs = day.whEndMs;
+  if (deep) {
+    const morning = deepWorkMorningWindows(
+      preferredWindowsForCategory(config, block.category, workingHoursEnd),
+      [day]
+    );
+    if (morning.length === 0) return null; // no morning claim → let the cross-day logic run
+    windowEndMs = Math.max(...morning.map(w => w.endMs));
+  }
+  if (windowEndMs <= block.startMs) return null;
+  const windows: Window[] = [
+    { date: day.date, dateStr: day.dateStr, startMs: block.startMs, endMs: windowEndMs, preferred: deep, bestTimeMatch: false },
+  ];
+  const search = (dur: number, wr: WorkRun) => findSlot(windows, dur, wr, busy, nowMs);
+
+  // Deep work, or any block ≥90 min, slides then shrinks toward the 60-min floor.
+  if (deep || block.durationMinutes >= 90) {
+    const placement = findDeepWorkMorningPlacement(search, block.durationMinutes, workRun);
+    return placement ? { startMs: placement.slot.startMs, durationMinutes: placement.duration } : null;
+  }
+  // A shorter non-deep block keeps its full duration.
+  const relaxed: WorkRun = { maxMinutes: Infinity, bufferMinutes: workRun.bufferMinutes };
+  const slot = search(block.durationMinutes, workRun) ?? search(block.durationMinutes, relaxed);
+  return slot ? { startMs: slot.startMs, durationMinutes: block.durationMinutes } : null;
 }
 
 // Absolute-ms interval for a local yyyy-MM-dd + HH:mm + duration.
