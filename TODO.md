@@ -2,6 +2,14 @@
 
 ## Open
 
+- Muscle map → plan generation (26 Aug 2026): feed the per-muscle planned/done
+  loads (`src/lib/exercise-muscles.ts`, `/api/exercise/muscles`) into
+  programme generation so the plan self-adjusts to hit all muscle groups
+  consistently — bias next week's exercise selection toward under-hit groups
+  (traps currently 0 sets/wk; forearms and calves light), let consistently
+  over-hit groups yield accessory slots. Respect existing constraints (legs
+  stay off Fri/Sun, runs pinned Tue/Thu/Sat).
+
 - Exercise plan handover (agreed 9 Aug 2026): the calendar is the source of
   truth for sessions until the authored plan ends on 3 Sep 2026. From then the
   PORTAL takes over defining future sessions (from the weekly routine + the
