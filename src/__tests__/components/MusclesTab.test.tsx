@@ -1,12 +1,14 @@
 /**
  * @jest-environment jsdom
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-import { MUSCLES, aggregateMuscleLoad } from '@/lib/exercise-muscles';
+import {
+  MUSCLES,
+  aggregateMuscleLoad,
+  rangeFromAnchor,
+} from '@/lib/exercise-muscles';
 import type { ExerciseSession } from '@/types/life';
-
-const NOW = new Date('2026-08-25T12:00:00.000Z');
 
 const sampleSessions: ExerciseSession[] = [
   {
@@ -24,52 +26,79 @@ const sampleSessions: ExerciseSession[] = [
   },
 ];
 
-const muscleLoad = aggregateMuscleLoad(sampleSessions, [], 28, NOW);
+const getMuscleLoad = jest.fn((windowDays: number, anchor?: string) => {
+  const resolvedAnchor = anchor ?? '2026-08-25';
+  const range = rangeFromAnchor(resolvedAnchor, windowDays);
+  return Promise.resolve({
+    muscles: aggregateMuscleLoad(sampleSessions, [], range),
+    range,
+    anchor: resolvedAnchor,
+    windowDays,
+  });
+});
 
 jest.mock('@/lib/api', () => ({
   api: {
-    getMuscleLoad: jest.fn().mockResolvedValue({ muscles: muscleLoad, windowDays: 28 }),
+    getMuscleLoad: (windowDays: number, anchor?: string) => getMuscleLoad(windowDays, anchor),
   },
 }));
 
 import { MusclesTab } from '@/components/sections/exercise/MusclesTab';
 
+beforeEach(() => getMuscleLoad.mockClear());
+
 describe('MusclesTab', () => {
-  it('renders both front and back figures', async () => {
-    const { container } = render(<MusclesTab />);
-    await waitFor(() => expect(container.querySelector('[data-muscle]')).not.toBeNull());
-    expect(screen.getByLabelText('Front view muscle heatmap')).toBeInTheDocument();
-    expect(screen.getByLabelText('Back view muscle heatmap')).toBeInTheDocument();
+  it('renders a Planned figure beside an Actual figure', async () => {
+    render(<MusclesTab />);
+    await waitFor(() => expect(getMuscleLoad).toHaveBeenCalled());
+    expect(screen.getByText('Planned')).toBeInTheDocument();
+    expect(screen.getByText('Actual')).toBeInTheDocument();
+    // Two figures, each with a front and back view.
+    expect(screen.getAllByLabelText('Front view muscle heatmap')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Back view muscle heatmap')).toHaveLength(2);
   });
 
-  it('draws every muscle region', async () => {
+  it('draws every muscle region on both figures', async () => {
     const { container } = render(<MusclesTab />);
     await waitFor(() => expect(container.querySelector('[data-muscle]')).not.toBeNull());
     for (const muscle of MUSCLES) {
       expect(container.querySelector(`[data-muscle="${muscle.id}"]`)).not.toBeNull();
     }
-    expect(container.querySelectorAll('[data-muscle]')).toHaveLength(MUSCLES.length);
+    // Two figures × 18 muscles.
+    expect(container.querySelectorAll('[data-muscle]')).toHaveLength(MUSCLES.length * 2);
   });
 
-  it('shows the muscle detail when a region is selected', async () => {
+  it('shows the muscle detail when a region is selected on either figure', async () => {
     const { container } = render(<MusclesTab />);
     await waitFor(() => expect(container.querySelector('[data-muscle="chest"]')).not.toBeNull());
-
-    // Before selection, the panel prompts for a choice.
-    expect(screen.getByText(/click one for the full breakdown/i)).toBeInTheDocument();
+    expect(screen.getByText(/click one on either figure/i)).toBeInTheDocument();
 
     fireEvent.click(container.querySelector('[data-muscle="chest"]')!);
 
     await waitFor(() =>
       expect(screen.getByText(/push the arms forward and across the body/i)).toBeInTheDocument()
     );
-    // The chest was pressed 4 sets in the window, so its exercise appears.
     expect(screen.getByText('Incline DB press')).toBeInTheDocument();
+  });
+
+  it('steps the period back and offers a Today reset', async () => {
+    render(<MusclesTab />);
+    await waitFor(() => expect(getMuscleLoad).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /previous period/i }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument());
+    // The latest fetch used a non-today anchor.
+    const lastAnchor = getMuscleLoad.mock.calls.at(-1)?.[1];
+    expect(lastAnchor).toBeDefined();
+    expect(lastAnchor).not.toBe('2026-08-25');
   });
 
   it('lists the coolest muscles in the most-missed strip', async () => {
     const { container } = render(<MusclesTab />);
     await waitFor(() => expect(container.querySelector('[data-muscle]')).not.toBeNull());
-    expect(screen.getByText('Most missed')).toBeInTheDocument();
+    const missed = screen.getByText('Most missed').closest('section')!;
+    expect(within(missed).getAllByRole('button').length).toBeGreaterThan(0);
   });
 });

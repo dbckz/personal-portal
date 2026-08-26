@@ -328,22 +328,40 @@ export interface MuscleExerciseBreakdown {
 
 export type MuscleTier = 'none' | 'light' | 'solid' | 'high';
 
-// A muscle's rolled-up load over the window.
+// A muscle's rolled-up load over the range. Planned and done are computed over
+// the SAME range, so the two figures are directly comparable — done is what was
+// actually performed, planned is what the map would look like had every planned
+// row been done.
 export interface MuscleLoad {
   muscleId: string;
   doneWeightedSets: number;
   plannedWeightedSets: number;
   doneSetsPerWeek: number;
   plannedSetsPerWeek: number;
-  // 0–1 for colouring the diagram; capped so one huge week doesn't wash out the
-  // scale (see HEAT_CAP_PER_WEEK).
-  heat: number;
+  // 0–1 heats for colouring the two diagrams, both off the same
+  // HEAT_CAP_PER_WEEK scale so Planned and Actual read on one temperature.
+  doneHeat: number;
+  plannedHeat: number;
+  // The done tier, kept for the assessment/most-missed logic.
   tier: MuscleTier;
   // Whether the only work hitting this muscle came from cardio — lets the UI say
   // "cardio only" rather than implying strength volume.
   cardioOnly: boolean;
   exercises: MuscleExerciseBreakdown[];
   assessment: string;
+}
+
+// An inclusive [from, to] date range (yyyy-MM-dd) the load is computed over.
+export interface DateRange {
+  from: string;
+  to: string;
+}
+
+// The [anchor - windowDays, anchor] range the UI steps through.
+export function rangeFromAnchor(anchor: string, windowDays: number): DateRange {
+  const d = new Date(`${anchor}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - windowDays);
+  return { from: d.toISOString().slice(0, 10), to: anchor };
 }
 
 // A planned session's programme rows for a date, as read from the programme
@@ -402,34 +420,28 @@ function setsOf(sets: number | undefined): number {
   return sets && sets > 0 ? sets : 1;
 }
 
-function isoDaysAgo(now: Date, days: number): string {
-  const d = new Date(now);
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+function daysBetween(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000
+  );
 }
 
-// Roll logged and planned work up per muscle around `now`.
+// Roll logged and planned work up per muscle over an explicit inclusive range.
 //
-// Done work looks BACK `windowDays` (what has actually been trained); planned
-// work also looks FORWARD `windowDays`, since a plan is future-dated — an
-// upcoming planned session or programme day is "planned", a completed one is not.
-//
-// Done: completed sessions' exercise rows performed (entryWasPerformed), weighted
-// primary 1.0 / secondary 0.5 × sets. Planned: planned sessions' exercise rows,
-// plus programme-cache rows for any date with no session rows at all — so a day's
-// plan is never counted twice (a completed session already carries its own rows,
-// and a planned session's rows are preferred over the programme's for that date).
+// BOTH loads are computed over the SAME range, so Planned and Actual are directly
+// comparable. Planned counts EVERY session's exercise rows (a completed session's
+// prescribed rows ARE that day's plan, regardless of whether each was performed),
+// plus programme-cache rows for dates with no session rows at all — never counting
+// a day's plan twice. Done counts only completed sessions' performed rows
+// (entryWasPerformed). A completed session therefore feeds both: its rows into
+// planned, its performed rows into done. Weighting is primary 1.0 / secondary
+// 0.5 × sets throughout.
 export function aggregateMuscleLoad(
   sessions: ExerciseSession[],
   programmes: MuscleProgrammeDay[],
-  windowDays: number,
-  now: Date = new Date()
+  range: DateRange
 ): MuscleLoad[] {
-  const from = isoDaysAgo(now, windowDays);
-  const today = now.toISOString().slice(0, 10);
-  const forwardTo = isoDaysAgo(now, -windowDays);
-  const inDoneWindow = (date: string) => date >= from && date <= today;
-  const inPlannedWindow = (date: string) => date >= from && date <= forwardTo;
+  const inRange = (date: string) => date >= range.from && date <= range.to;
 
   const accums = new Map<string, Accum>();
   const accumFor = (id: string): Accum => {
@@ -441,60 +453,67 @@ export function aggregateMuscleLoad(
     return a;
   };
 
-  // Dates that already have session-level exercise rows (planned or completed):
-  // the programme fallback must skip these so a day's plan isn't double-counted.
+  // Dates that already have session-level exercise rows: the programme fallback
+  // must skip these so a day's plan isn't double-counted.
   const datesWithSessionRows = new Set<string>();
   for (const session of sessions) {
-    if (inPlannedWindow(session.date) && (session.exercises?.length ?? 0) > 0) {
+    if (inRange(session.date) && (session.exercises?.length ?? 0) > 0) {
       datesWithSessionRows.add(session.date);
     }
   }
 
-  const addEntry = (entry: ExerciseEntry, date: string, kind: 'done' | 'planned') => {
+  const addPlanned = (name: string, sets: number | undefined) => {
+    const roles = exerciseMuscles(name);
+    if (roles.length === 0) return;
+    const n = setsOf(sets);
+    for (const { muscleId, role } of roles) {
+      const accum = accumFor(muscleId);
+      accum.plannedWeighted += ROLE_WEIGHT[role] * n;
+      bumpExercise(accum, normalizeExerciseName(name), role, 0, n, null);
+    }
+  };
+
+  const addDone = (entry: ExerciseEntry, date: string) => {
     const roles = exerciseMuscles(entry.name);
     if (roles.length === 0) return;
     const cardio = isCardioExercise(normalizeExerciseName(entry.name));
-    const sets = setsOf(entry.sets);
+    const n = setsOf(entry.sets);
     for (const { muscleId, role } of roles) {
-      const weighted = ROLE_WEIGHT[role] * sets;
+      const weighted = ROLE_WEIGHT[role] * n;
       const accum = accumFor(muscleId);
-      if (kind === 'done') {
-        accum.doneWeighted += weighted;
-        if (cardio) accum.cardioDoneWeighted += weighted;
-        bumpExercise(accum, normalizeExerciseName(entry.name), role, sets, 0, date);
-      } else {
-        accum.plannedWeighted += weighted;
-        bumpExercise(accum, normalizeExerciseName(entry.name), role, 0, sets, null);
-      }
+      accum.doneWeighted += weighted;
+      if (cardio) accum.cardioDoneWeighted += weighted;
+      bumpExercise(accum, normalizeExerciseName(entry.name), role, n, 0, date);
     }
   };
 
   for (const session of sessions) {
+    if (!inRange(session.date)) continue;
     const entries = session.exercises ?? [];
-    if (session.completed && inDoneWindow(session.date)) {
+    // Every session's rows are the plan for its day.
+    for (const entry of entries) addPlanned(entry.name, entry.sets);
+    // Only a completed session's performed rows count as done.
+    if (session.completed) {
       for (const entry of entries) {
-        if (entryWasPerformed(entry)) addEntry(entry, session.date, 'done');
+        if (entryWasPerformed(entry)) addDone(entry, session.date);
       }
-    }
-    if (session.planned && !session.completed && inPlannedWindow(session.date)) {
-      for (const entry of entries) addEntry(entry, session.date, 'planned');
     }
   }
 
   // Programme rows only for dates with no session rows at all.
   for (const day of programmes) {
-    if (!inPlannedWindow(day.date) || datesWithSessionRows.has(day.date)) continue;
-    for (const row of day.rows) {
-      addEntry({ id: '', name: row.name, sets: row.sets }, day.date, 'planned');
-    }
+    if (!inRange(day.date) || datesWithSessionRows.has(day.date)) continue;
+    for (const row of day.rows) addPlanned(row.name, row.sets);
   }
 
-  const weeks = Math.max(windowDays / 7, 1 / 7);
+  const days = Math.max(daysBetween(range.from, range.to), 1);
+  const weeks = Math.max(days / 7, 1 / 7);
   return MUSCLES.map(muscle => {
     const accum = accums.get(muscle.id) ?? emptyAccum();
     const doneSetsPerWeek = accum.doneWeighted / weeks;
     const plannedSetsPerWeek = accum.plannedWeighted / weeks;
-    const heat = Math.min(1, doneSetsPerWeek / HEAT_CAP_PER_WEEK);
+    const doneHeat = Math.min(1, doneSetsPerWeek / HEAT_CAP_PER_WEEK);
+    const plannedHeat = Math.min(1, plannedSetsPerWeek / HEAT_CAP_PER_WEEK);
     const cardioOnly = accum.doneWeighted > 0 && accum.cardioDoneWeighted >= accum.doneWeighted;
     const tier = tierFor(doneSetsPerWeek);
     const exercises = [...accum.byExercise.values()].sort(
@@ -506,7 +525,8 @@ export function aggregateMuscleLoad(
       plannedWeightedSets: round1(accum.plannedWeighted),
       doneSetsPerWeek: round1(doneSetsPerWeek),
       plannedSetsPerWeek: round1(plannedSetsPerWeek),
-      heat,
+      doneHeat,
+      plannedHeat,
       tier,
       cardioOnly,
       exercises,
@@ -516,7 +536,7 @@ export function aggregateMuscleLoad(
         doneSetsPerWeek,
         plannedSetsPerWeek,
         cardioOnly,
-        windowDays,
+        days,
       }),
     };
   });
@@ -539,12 +559,12 @@ interface AssessInput {
   doneSetsPerWeek: number;
   plannedSetsPerWeek: number;
   cardioOnly: boolean;
-  windowDays: number;
+  days: number;
 }
 
 // One deterministic sentence for the detail panel and tooltip.
 function assess(muscle: Muscle, load: AssessInput): string {
-  const weeks = Math.round(load.windowDays / 7);
+  const weeks = Math.max(1, Math.round(load.days / 7));
   const perWeek = round1(load.doneSetsPerWeek);
   const example = muscle.examples[0] ?? 'a targeted exercise';
 
@@ -569,10 +589,12 @@ function assess(muscle: Muscle, load: AssessInput): string {
   return `High volume — about ${perWeek} sets a week, plenty for this muscle.`;
 }
 
-// The n coolest muscles by heat (least-worked first), for the "most missed"
-// strip. Ties broken by the MUSCLES order.
+// The n coolest muscles by ACTUAL heat (least-worked first), for the "most
+// missed" strip. Ties broken by the MUSCLES order.
 export function coolestMuscles(loads: MuscleLoad[], n: number): MuscleLoad[] {
-  return [...loads].sort((a, b) => a.heat - b.heat || a.doneWeightedSets - b.doneWeightedSets).slice(0, n);
+  return [...loads]
+    .sort((a, b) => a.doneHeat - b.doneHeat || a.doneWeightedSets - b.doneWeightedSets)
+    .slice(0, n);
 }
 
 export function muscleById(id: string): Muscle | undefined {

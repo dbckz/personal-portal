@@ -2,37 +2,55 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getSessionsInRange } from '@/lib/storage/exercise';
 import { getProgrammesInRange } from '@/lib/storage/exercise-programmes';
-import { aggregateMuscleLoad, type MuscleProgrammeDay } from '@/lib/exercise-muscles';
+import {
+  aggregateMuscleLoad,
+  rangeFromAnchor,
+  type MuscleProgrammeDay,
+} from '@/lib/exercise-muscles';
 
-// GET /api/exercise/muscles?windowDays=28 — per-muscle done vs planned load over
-// the window, for the Muscles heatmap. Reads completed + planned sessions and the
-// programme cache server-side and returns the aggregated result; the diagram's
-// static muscle metadata lives in the exercise-muscles lib on the client.
+// GET /api/exercise/muscles?anchor=yyyy-MM-dd&windowDays=28 — per-muscle planned
+// vs done load over the inclusive range [anchor - windowDays, anchor]. Reads
+// sessions and the programme cache server-side and returns the aggregated result
+// plus the resolved range so the UI can label the period. The diagram's static
+// muscle metadata lives in the exercise-muscles lib on the client.
 const DEFAULT_WINDOW_DAYS = 28;
 const MIN_WINDOW_DAYS = 7;
 const MAX_WINDOW_DAYS = 120;
+const MAX_ANCHOR_OFFSET_DAYS = 366;
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function clampAnchor(raw: string | null): string {
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  if (!raw || !ISO_DATE.test(raw) || Number.isNaN(Date.parse(`${raw}T00:00:00Z`))) {
+    return todayIso;
+  }
+  // Keep the anchor within a year either side of today.
+  const min = new Date(today);
+  min.setUTCDate(min.getUTCDate() - MAX_ANCHOR_OFFSET_DAYS);
+  const max = new Date(today);
+  max.setUTCDate(max.getUTCDate() + MAX_ANCHOR_OFFSET_DAYS);
+  const minIso = min.toISOString().slice(0, 10);
+  const maxIso = max.toISOString().slice(0, 10);
+  if (raw < minIso) return minIso;
+  if (raw > maxIso) return maxIso;
+  return raw;
+}
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const raw = Number(searchParams.get('windowDays'));
-    const windowDays = Number.isFinite(raw)
-      ? Math.min(MAX_WINDOW_DAYS, Math.max(MIN_WINDOW_DAYS, Math.round(raw)))
+    const rawWindow = Number(searchParams.get('windowDays'));
+    const windowDays = Number.isFinite(rawWindow)
+      ? Math.min(MAX_WINDOW_DAYS, Math.max(MIN_WINDOW_DAYS, Math.round(rawWindow)))
       : DEFAULT_WINDOW_DAYS;
-
-    // Done work looks back, planned work looks forward, so fetch the union
-    // [now-window, now+window] and let aggregateMuscleLoad split the two.
-    const now = new Date();
-    const back = new Date(now);
-    back.setDate(back.getDate() - windowDays);
-    const forward = new Date(now);
-    forward.setDate(forward.getDate() + windowDays);
-    const fromIso = back.toISOString().slice(0, 10);
-    const toIso = forward.toISOString().slice(0, 10);
+    const anchor = clampAnchor(searchParams.get('anchor'));
+    const range = rangeFromAnchor(anchor, windowDays);
 
     const [sessions, programmeRows] = await Promise.all([
-      getSessionsInRange(fromIso, toIso),
-      Promise.resolve(getProgrammesInRange(fromIso, toIso)),
+      getSessionsInRange(range.from, range.to),
+      Promise.resolve(getProgrammesInRange(range.from, range.to)),
     ]);
 
     const programmes: MuscleProgrammeDay[] = programmeRows.map(day => ({
@@ -40,8 +58,8 @@ export async function GET(request: NextRequest) {
       rows: day.rows.map(row => ({ name: row.name, sets: row.target?.sets })),
     }));
 
-    const muscles = aggregateMuscleLoad(sessions, programmes, windowDays, now);
-    return NextResponse.json({ muscles, windowDays });
+    const muscles = aggregateMuscleLoad(sessions, programmes, range);
+    return NextResponse.json({ muscles, range, anchor, windowDays });
   } catch (error) {
     console.error('Error building muscle load:', error);
     return NextResponse.json({ error: 'Failed to build muscle load' }, { status: 500 });

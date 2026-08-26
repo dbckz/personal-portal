@@ -5,6 +5,7 @@ import {
   aggregateMuscleLoad,
   coolestMuscles,
   isCardioExercise,
+  rangeFromAnchor,
   type MuscleProgrammeDay,
 } from '@/lib/exercise-muscles';
 import { EXERCISE_NAME_ALIASES } from '@/lib/exercise-names';
@@ -25,7 +26,8 @@ function session(partial: Partial<ExerciseSession> & { date: string }): Exercise
   };
 }
 
-const NOW = new Date('2026-08-25T12:00:00.000Z');
+// A 28-day range ending 2026-08-25 (from 2026-07-28) for the aggregation tests.
+const RANGE = rangeFromAnchor('2026-08-25', 28);
 
 describe('exerciseMuscles mapping', () => {
   it('maps every canonical alias value to at least one real muscle', () => {
@@ -102,7 +104,7 @@ describe('aggregateMuscleLoad', () => {
         ],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
     expect(loadFor(loads, 'chest').doneWeightedSets).toBe(4); // 1.0 * 4
     expect(loadFor(loads, 'triceps').doneWeightedSets).toBe(2); // 0.5 * 4
     expect(loadFor(loads, 'front-delts').doneWeightedSets).toBe(2);
@@ -116,12 +118,12 @@ describe('aggregateMuscleLoad', () => {
         exercises: [{ id: 'e1', name: 'Outdoor run', done: true }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
     expect(loadFor(loads, 'quads').doneWeightedSets).toBe(1); // primary * 1
     expect(loadFor(loads, 'calves').doneWeightedSets).toBe(0.5);
   });
 
-  it('excludes not-performed rows and out-of-window sessions', () => {
+  it('excludes not-performed rows from done and out-of-range sessions entirely', () => {
     const sessions = [
       session({
         date: '2026-08-20',
@@ -129,16 +131,32 @@ describe('aggregateMuscleLoad', () => {
         exercises: [{ id: 'e1', name: 'Pec fly', sets: 3, done: false }],
       }),
       session({
-        date: '2026-06-01', // before the 28-day window
+        date: '2026-06-01', // before the range
         completed: true,
         exercises: [{ id: 'e2', name: 'Pec fly', sets: 3, done: true }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
+    // The in-range row was not performed -> no done; but it IS still the plan.
     expect(loadFor(loads, 'chest').doneWeightedSets).toBe(0);
+    expect(loadFor(loads, 'chest').plannedWeightedSets).toBe(3);
   });
 
-  it('counts planned session rows as planned, not done', () => {
+  it('counts a completed session into BOTH planned and done', () => {
+    const sessions = [
+      session({
+        date: '2026-08-20',
+        completed: true,
+        exercises: [{ id: 'e1', name: 'Leg press', sets: 3, done: true }],
+      }),
+    ];
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
+    // A completed session's prescribed rows ARE that day's plan.
+    expect(loadFor(loads, 'quads').plannedWeightedSets).toBe(3);
+    expect(loadFor(loads, 'quads').doneWeightedSets).toBe(3);
+  });
+
+  it('a planned-only future window yields planned heat but zero done', () => {
     const sessions = [
       session({
         date: '2026-08-26',
@@ -147,9 +165,13 @@ describe('aggregateMuscleLoad', () => {
         exercises: [{ id: 'e1', name: 'Leg press', sets: 3 }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    // Anchor forward so the upcoming planned session falls in range.
+    const forward = rangeFromAnchor('2026-09-05', 28); // 2026-08-08 .. 2026-09-05
+    const loads = aggregateMuscleLoad(sessions, [], forward);
     expect(loadFor(loads, 'quads').plannedWeightedSets).toBe(3);
     expect(loadFor(loads, 'quads').doneWeightedSets).toBe(0);
+    expect(loadFor(loads, 'quads').plannedHeat).toBeGreaterThan(0);
+    expect(loadFor(loads, 'quads').doneHeat).toBe(0);
   });
 
   it('uses programme rows only for dates with no session rows (no double count)', () => {
@@ -166,10 +188,12 @@ describe('aggregateMuscleLoad', () => {
       // A bare date with no session -> counts as planned.
       { date: '2026-08-22', rows: [{ name: 'Leg extension', sets: 4 }] },
     ];
-    const loads = aggregateMuscleLoad(sessions, programmes, 28, NOW);
-    // Only the session's done work, plus the lone programme day's planned work.
+    const loads = aggregateMuscleLoad(sessions, programmes, RANGE);
+    // Done = the completed session's 3. Planned = that same session's 3 (its rows
+    // are the plan) + the lone programme day's 4 = 7. The 2026-08-20 programme row
+    // is skipped (the session already covers that date), proving the dedup.
     expect(loadFor(loads, 'quads').doneWeightedSets).toBe(3);
-    expect(loadFor(loads, 'quads').plannedWeightedSets).toBe(4);
+    expect(loadFor(loads, 'quads').plannedWeightedSets).toBe(7);
   });
 
   it('marks a muscle worked only through cardio as cardioOnly', () => {
@@ -180,7 +204,7 @@ describe('aggregateMuscleLoad', () => {
         exercises: [{ id: 'e1', name: 'Outdoor run', done: true }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
     expect(loadFor(loads, 'calves').cardioOnly).toBe(true);
     expect(loadFor(loads, 'calves').assessment).toMatch(/cardio/i);
   });
@@ -195,12 +219,12 @@ describe('assessment tiers', () => {
         exercises: [{ id: 'e1', name: exerciseName, sets, done: true }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], windowDays, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], rangeFromAnchor('2026-08-25', windowDays));
     return loads.find(m => m.muscleId === id)!.assessment;
   }
 
   it('flags zero logged work with a suggestion', () => {
-    const loads = aggregateMuscleLoad([], [], 28, NOW);
+    const loads = aggregateMuscleLoad([], [], RANGE);
     const chest = loads.find(m => m.muscleId === 'chest')!;
     expect(chest.tier).toBe('none');
     expect(chest.assessment).toMatch(/No logged work/i);
@@ -223,7 +247,7 @@ describe('assessment tiers', () => {
 });
 
 describe('coolestMuscles', () => {
-  it('returns the least-worked muscles first', () => {
+  it('returns the least-worked muscles first by actual heat', () => {
     const sessions = [
       session({
         date: '2026-08-24',
@@ -231,11 +255,11 @@ describe('coolestMuscles', () => {
         exercises: [{ id: 'e1', name: 'Pec fly', sets: 20, done: true }],
       }),
     ];
-    const loads = aggregateMuscleLoad(sessions, [], 28, NOW);
+    const loads = aggregateMuscleLoad(sessions, [], RANGE);
     const cool = coolestMuscles(loads, 3);
     expect(cool).toHaveLength(3);
     // Chest was hammered, so it must not be among the coolest.
     expect(cool.some(l => l.muscleId === 'chest')).toBe(false);
-    expect(cool[0].heat).toBeLessThanOrEqual(cool[1].heat);
+    expect(cool[0].doneHeat).toBeLessThanOrEqual(cool[1].doneHeat);
   });
 });

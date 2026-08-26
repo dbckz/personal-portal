@@ -39,7 +39,7 @@ import type { InferredEvidence, InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { FreeformDraft } from '@/lib/exercise-freeform';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
-import type { MuscleLoad } from '@/lib/exercise-muscles';
+import type { DateRange, MuscleLoad } from '@/lib/exercise-muscles';
 import type { DelegationStats } from '@/lib/delegation-stats';
 import type { ProjectScan } from '@/lib/projects/scan';
 import type { ProjectSummary } from '@/lib/projects/summarise';
@@ -2034,10 +2034,16 @@ export const api = {
     );
   },
 
-  // Per-muscle done vs planned load over the window, for the Muscles heatmap.
-  async getMuscleLoad(windowDays: number): Promise<{ muscles: MuscleLoad[]; windowDays: number }> {
-    return fetchWithRetry<{ muscles: MuscleLoad[]; windowDays: number }>(
-      `/api/exercise/muscles?windowDays=${windowDays}`
+  // Per-muscle planned vs done load over [anchor - windowDays, anchor], for the
+  // Muscles heatmap. anchor defaults to today when omitted.
+  async getMuscleLoad(
+    windowDays: number,
+    anchor?: string
+  ): Promise<{ muscles: MuscleLoad[]; range: DateRange; anchor: string; windowDays: number }> {
+    const params = new URLSearchParams({ windowDays: String(windowDays) });
+    if (anchor) params.set('anchor', anchor);
+    return fetchWithRetry<{ muscles: MuscleLoad[]; range: DateRange; anchor: string; windowDays: number }>(
+      `/api/exercise/muscles?${params.toString()}`
     );
   },
 
