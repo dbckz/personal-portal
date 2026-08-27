@@ -331,6 +331,7 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
+- Some exercises are variants of the same movement — in particular calf raises with and without a step ("Standing calf raise", "Standing calf raise (step)", "Standing calf raise (no step)"). A session must include at most one variant: pick one, never both.
 - Resistance band exercises are a home-workout tool: in a planned GYM session never include them or substitute band variants for gym lifts. (If a HOME SESSION block appears below, that rule is reversed — follow the home block.)
 - Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
@@ -590,6 +591,47 @@ function cleanTarget(raw: unknown, cardio?: { name: string; recent: ProgressionP
   return out;
 }
 
+// Mutually-exclusive exercise variants: exercises that are variants of the same
+// movement, of which a session must contain at most ONE. Dave's rule, 27 Aug
+// 2026: never a step and a no-step calf raise in the same session. The three
+// "Standing calf raise" spellings stay distinct exercises with separate
+// histories, but only one may be programmed on any given day.
+//
+// Each rule maps a name-matcher to a group id; the first row whose name belongs
+// to a group survives, later ones in that group are dropped (like the single-
+// cardio rule). To add a new exclusion, append a rule here — nothing else changes.
+const EXCLUSIVE_VARIANT_RULES: Array<{ match: (name: string) => boolean; group: string }> = [
+  { match: name => /calf raise/i.test(name), group: 'calf-raise' },
+];
+
+// The exclusive-variant group an exercise belongs to, or undefined if it belongs
+// to none. Exported for tests and any caller that needs to reason about variants.
+export function exclusiveGroup(name: string): string | undefined {
+  return EXCLUSIVE_VARIANT_RULES.find(rule => rule.match(name))?.group;
+}
+
+// Claim an exercise's exclusive-variant group: true when it may be included
+// (it belongs to no group, or to one not yet taken — which this call then
+// takes), false when its group is already spoken for. Every path that appends
+// a row shares one `seenVariantGroups` set, so the first variant wins wherever
+// it came from.
+function claimVariantGroup(name: string, seenVariantGroups: Set<string>): boolean {
+  const group = exclusiveGroup(name);
+  if (!group) return true;
+  if (seenVariantGroups.has(group)) return false;
+  seenVariantGroups.add(group);
+  return true;
+}
+
+// Keep the first row of each exclusive-variant group, drop any later ones (a
+// second calf-raise). A pure pass over already-built rows: used on the cached
+// read path to fix programmes cached before the exclusion rule, which re-runs
+// post-processing without regenerating. Rows in no group are always kept.
+export function dropExclusiveDuplicates(rows: ProgrammeRow[]): ProgrammeRow[] {
+  const seenVariantGroups = new Set<string>();
+  return rows.filter(row => claimVariantGroup(row.name, seenVariantGroups));
+}
+
 // Turn the model's raw records into validated rows. Drops anything malformed or
 // naming an exercise not in the input, overrides lastSummary with real history
 // (so the numbers are never hallucinated), and enforces the safety rules on the
@@ -615,6 +657,10 @@ export function validateProgramme(
 
   const rows: ProgrammeRow[] = [];
   const seen = new Set<string>();
+  // The exclusive-variant groups already present: at most one variant per group
+  // (e.g. one calf-raise spelling), the first survives, the rest are dropped —
+  // shared with the append paths so padding never adds a second variant either.
+  const seenVariantGroups = new Set<string>();
   // At most one cardio piece per session: the first survives, the rest are
   // dropped so a day never carries two runs.
   let sawCardio = false;
@@ -627,6 +673,8 @@ export function validateProgramme(
     const key = exerciseKey(name);
     const known = byKey.get(key);
     if (!known || seen.has(key)) continue; // unknown or duplicate exercise
+    // A second variant of an exclusive group (a second calf-raise) — drop it.
+    if (!claimVariantGroup(known.name, seenVariantGroups)) continue;
     seen.add(key);
 
     const kind = KINDS.includes(record.kind as ExerciseKind)
@@ -675,7 +723,12 @@ export function validateProgramme(
     });
   }
 
-  const covered = guaranteeGroupCoverage(guaranteeFixed(rows, seen, input), seen, input);
+  const covered = guaranteeGroupCoverage(
+    guaranteeFixed(rows, seen, seenVariantGroups, input),
+    seen,
+    seenVariantGroups,
+    input
+  );
   return enforceToFailure(
     orderProgrammeRows(markFixed(covered, input.plan.routineDay), input.plan.routineDay)
   );
@@ -709,6 +762,7 @@ function groupMinimum(group: Group): number {
 function guaranteeGroupCoverage(
   rows: ProgrammeRow[],
   seen: Set<string>,
+  seenVariantGroups: Set<string>,
   input: ProgrammerInput
 ): ProgrammeRow[] {
   const day = input.plan.routineDay;
@@ -731,6 +785,9 @@ function guaranteeGroupCoverage(
       if (count >= min) break;
       if (seen.has(known.key) || classifyExercise(known.name) !== group) continue;
       if (home && !isHomeExercise(known)) continue;
+      // Skip a candidate whose exclusive-variant group is already present (a
+      // second calf-raise), so padding never adds one.
+      if (!claimVariantGroup(known.name, seenVariantGroups)) continue;
       seen.add(known.key);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({
@@ -819,6 +876,7 @@ export function orderProgrammeRows(
 function guaranteeFixed(
   rows: ProgrammeRow[],
   seen: Set<string>,
+  seenVariantGroups: Set<string>,
   input: ProgrammerInput
 ): ProgrammeRow[] {
   const day = input.plan.routineDay;
@@ -838,6 +896,12 @@ function guaranteeFixed(
       if (!key || seen.has(key)) continue;
       const known = byKey.get(key);
       if (!known) continue; // buildProgrammerInput guarantees it, but stay safe
+      // A fixed lift that is a second variant of an exclusive group (a second
+      // calf-raise) is skipped, so a session never carries two variants. The
+      // group is only claimed once the row is actually appended below — the
+      // home paths between here and there can still bail out.
+      const variantGroup = exclusiveGroup(known.name);
+      if (variantGroup && seenVariantGroups.has(variantGroup)) continue;
 
       if (home) {
         // Already covered by a model stand-in — nothing to add.
@@ -874,6 +938,7 @@ function guaranteeFixed(
       }
 
       seen.add(key);
+      if (variantGroup) seenVariantGroups.add(variantGroup);
       const hasHistory = known.lastSummary !== 'no history';
       out.push({
         name: known.name,

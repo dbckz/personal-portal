@@ -26,6 +26,7 @@ import { normalizeExerciseName } from '@/lib/exercise-names';
 import { entryWasPerformed } from '@/lib/exercise-entry';
 import {
   buildProgrammerInput,
+  dropExclusiveDuplicates,
   enforceToFailure,
   markFixed,
   orderProgrammeRows,
@@ -133,7 +134,13 @@ export async function resolveSessionTargets(
     // to what validateProgramme produces for a freshly generated programme.
     // markFixed also re-stamps the anchor/staple provenance so programmes cached
     // before the fixed-badge change gain it without regeneration.
-    const ordered = enforceToFailure(orderProgrammeRows(markFixed(cached, routineDay), routineDay));
+    // dropExclusiveDuplicates runs BEFORE enforceToFailure so a programme cached
+    // before the one-variant-per-session rule (a second calf-raise the legs-
+    // balance padding appended) loses the duplicate here — and if the dropped row
+    // carried the to-failure marker, enforceToFailure re-marks a valid finisher.
+    const ordered = enforceToFailure(
+      orderProgrammeRows(dropExclusiveDuplicates(markFixed(cached, routineDay)), routineDay)
+    );
     return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 

@@ -9,6 +9,7 @@
 import {
   buildProgrammerInput,
   buildProgrammerPrompt,
+  exclusiveGroup,
   generateProgramme,
   HOME_EQUIPMENT,
   orderProgrammeRows,
@@ -700,6 +701,79 @@ describe('guaranteeGroupCoverage — per-group minimum rows', () => {
     const run = rows.find(r => r.name === 'Parkrun');
     expect(run).toBeDefined();
     expect(run!.target.distanceKm).toBe(5);
+  });
+});
+
+describe('mutually-exclusive exercise variants — one calf raise per session', () => {
+  it('groups every calf-raise spelling together and nothing else', () => {
+    expect(exclusiveGroup('Standing calf raise')).toBe('calf-raise');
+    expect(exclusiveGroup('Standing calf raise (step)')).toBe('calf-raise');
+    expect(exclusiveGroup('Standing calf raise (no step)')).toBe('calf-raise');
+    expect(exclusiveGroup('Leg press')).toBeUndefined();
+  });
+
+  it('keeps only the first calf-raise variant the model returns, dropping later ones', () => {
+    const legs = buildProgrammerInput(
+      [
+        progression('Leg press', [{ date: '2026-08-02', sets: 3, reps: 10, weightKg: 120 }], 6),
+        progression('Standing calf raise (step)', [{ date: '2026-08-02', sets: 3, reps: 15, weightKg: 40 }], 4),
+        progression('Standing calf raise (no step)', [{ date: '2026-08-02', sets: 3, reps: 15, weightKg: 30 }], 3),
+      ],
+      { label: 'Legs', components: [] },
+      '2026-08-06',
+      6
+    );
+    const rows = validateProgramme(
+      [
+        { name: 'Leg press', kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 120 } },
+        { name: 'Standing calf raise (step)', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 15, weightKg: 40 } },
+        { name: 'Standing calf raise (no step)', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 15, weightKg: 30 } },
+      ],
+      legs
+    );
+    const calf = rows.filter(r => /calf raise/i.test(r.name));
+    expect(calf).toHaveLength(1);
+    expect(calf[0].name).toBe('Standing calf raise (step)');
+  });
+
+  it('group-coverage padding never adds a second calf-raise variant', () => {
+    const load = (kg: number, reps = 10): ProgressionPoint[] => [
+      { date: '2026-08-02', sets: 3, reps, weightKg: kg },
+    ];
+    const legs = buildProgrammerInput(
+      [
+        // Both calf variants are heavily trained, so padding would reach for the
+        // second if the exclusion did not stop it.
+        progression('Standing calf raise (step)', load(40, 15), 6),
+        progression('Standing calf raise (no step)', load(30, 15), 6),
+        progression('Leg press', load(120), 6),
+        progression('Leg extension', load(50), 6),
+        progression('Leg curl', load(45), 5),
+        progression('Hip thrust', load(80), 5),
+        progression('Reverse lunge', load(20), 4),
+      ],
+      {
+        label: 'Legs',
+        components: ['Legs'],
+        routineDay: { title: 'Legs', anchors: [], staples: [] },
+      },
+      '2026-08-06',
+      6
+    );
+    // The model returns one calf variant and one other leg lift — below the floor,
+    // so guaranteeGroupCoverage pads the legs group from the vocabulary.
+    const rows = validateProgramme(
+      [
+        { name: 'Standing calf raise (step)', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 15, weightKg: 40 } },
+        { name: 'Leg press', kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 120 } },
+      ],
+      legs
+    );
+    const calf = rows.filter(r => /calf raise/i.test(r.name));
+    expect(calf).toHaveLength(1);
+    expect(calf[0].name).toBe('Standing calf raise (step)');
+    // The padding still met the legs floor from the non-variant vocabulary.
+    expect(rows.filter(r => classifyExercise(r.name) === 'legs').length).toBeGreaterThanOrEqual(5);
   });
 });
 

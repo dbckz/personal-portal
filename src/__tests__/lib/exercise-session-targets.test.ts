@@ -29,6 +29,8 @@ jest.mock('@/lib/storage/goals', () => ({
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
 import { getCachedProgramme } from '@/lib/storage/exercise-programmes';
+import type { ProgrammeRow } from '@/lib/exercise-programmer';
+import { exerciseKey } from '@/lib/exercise-progression';
 
 const mockRoutine = getWeeklyRoutine as jest.Mock;
 const mockGetCached = getCachedProgramme as jest.Mock;
@@ -120,5 +122,69 @@ describe('resolveSessionTargets — a planned run with no run history', () => {
     expect(cardio[0].name).toBe('Parkrun');
     // Cardio leads the session.
     expect(resolved.targets[0].name).toBe('Parkrun');
+  });
+});
+
+// A programme cached BEFORE the one-variant-per-session rule: the model's pick
+// "Standing calf raise (step)" plus a second "Standing calf raise (no step)" the
+// legs-balance padding appended — with the to-failure finisher on that dropped
+// row (as today's 27 Aug cache has). The cached read path re-runs post-processing,
+// so it must shed the duplicate variant and re-mark a valid finisher.
+function row(name: string, over: Partial<ProgrammeRow> = {}): ProgrammeRow {
+  return {
+    name,
+    key: exerciseKey(name),
+    kind: 'core',
+    toFailure: false,
+    target: { sets: 3, reps: 10, weightKg: 40 },
+    rationale: '',
+    lastSummary: 'no history',
+    ...over,
+  };
+}
+
+function legsPlan(): ExerciseSession {
+  return {
+    id: 'legs',
+    date: '2026-08-27',
+    type: 'gym',
+    planned: true,
+    completed: false,
+    source: 'manual',
+    createdAt: '2026-08-27T00:00:00.000Z',
+    updatedAt: '2026-08-27T00:00:00.000Z',
+    label: 'Legs',
+    components: ['Legs'],
+  };
+}
+
+describe('resolveSessionTargets — a cached programme with two calf-raise variants', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // 2026-08-27 is a Thursday (dayOfWeek 4).
+    mockRoutine.mockResolvedValue([{ dayOfWeek: 4, title: 'Legs', anchors: [], staples: [] }]);
+    mockGetCached.mockReturnValue([
+      row('Leg press'),
+      row('Standing calf raise (step)', { kind: 'rotation' }),
+      // The second variant, last and carrying the to-failure marker.
+      row('Standing calf raise (no step)', { kind: 'rotation', toFailure: true }),
+    ]);
+  });
+
+  it('serves only the first variant and still ends with exactly one to-failure row', async () => {
+    const resolved = await resolveSessionTargets('2026-08-27', [legsPlan()]);
+    expect(resolved.source).toBe('ai');
+
+    // Only the first calf-raise variant survives; the duplicate is dropped.
+    const calf = resolved.targets.filter(t => /calf raise/i.test(t.name));
+    expect(calf).toHaveLength(1);
+    expect(calf[0].name).toBe('Standing calf raise (step)');
+    expect(resolved.targets.some(t => t.name === 'Standing calf raise (no step)')).toBe(false);
+
+    // Exactly one to-failure finisher, on the last row — re-marked after the row
+    // that carried the marker was dropped.
+    const failing = resolved.targets.filter(t => t.toFailure);
+    expect(failing).toHaveLength(1);
+    expect(failing[0].name).toBe(resolved.targets[resolved.targets.length - 1].name);
   });
 });
