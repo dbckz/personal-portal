@@ -62,6 +62,9 @@ describe('MobileBoardTab', () => {
     moveCard.mockClear();
     toggleMember.mockClear();
     pinToWeek.mockClear();
+    // The day filter now persists in sessionStorage; clear it so a filter
+    // selected in one test does not leak into the next.
+    sessionStorage.clear();
   });
 
   it('renders the four status segments', () => {
@@ -85,6 +88,22 @@ describe('MobileBoardTab', () => {
 
     // Unplanned: only the card with no blocks.
     fireEvent.click(screen.getByRole('button', { name: /^Unplanned/ }));
+    expect(screen.queryByText('Planned task')).not.toBeInTheDocument();
+    expect(screen.getByText('Floating task')).toBeInTheDocument();
+  });
+
+  it('restores the persisted day filter on remount', () => {
+    mockCards = [
+      makeCard({ key: 'adhoc:planned', stateKey: 'adhoc:planned', source: 'task', title: 'Planned task', date: weekStart }),
+      makeCard({ key: 'adhoc:floating', stateKey: 'adhoc:floating', title: 'Floating task' }),
+    ];
+    const { unmount } = renderTab();
+    fireEvent.click(screen.getByRole('button', { name: /^Unplanned/ }));
+    expect(screen.queryByText('Planned task')).not.toBeInTheDocument();
+    unmount();
+
+    // Remount: the 'unplanned' filter is restored, so the planned card stays hidden.
+    renderTab();
     expect(screen.queryByText('Planned task')).not.toBeInTheDocument();
     expect(screen.getByText('Floating task')).toBeInTheDocument();
   });

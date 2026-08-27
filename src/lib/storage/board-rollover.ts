@@ -7,8 +7,8 @@
 // module is the I/O around it.
 
 import { getUserData, saveUserData } from './core';
-import { getScheduledAsanaTasks, updateScheduledAsanaTask, getBlockDoneOverrides } from './schedule';
-import { getAdHocTasks, updateAdHocTask } from './ad-hoc-tasks';
+import { getScheduledAsanaTasks, updateScheduledAsanaTask, unscheduleAsanaTask, getBlockDoneOverrides } from './schedule';
+import { getAdHocTasks, updateAdHocTask, deleteAdHocTask } from './ad-hoc-tasks';
 import { getBoardTaskStates } from './board';
 import { getAllTaskMetadata } from './attributions';
 import { getAllWeeklyStats } from './weekly-stats';
@@ -33,6 +33,8 @@ export async function setBoardRolloverLastDay(day: string): Promise<void> {
 
 export interface RunBoardRolloverResult {
   rolledCount: number;
+  // Duplicate overdue records deleted (see planBoardRollover dedupe).
+  removedCount: number;
   logicalDay: string;
   // True when the rollover had already run for this logical day and was skipped.
   alreadyRan: boolean;
@@ -52,7 +54,7 @@ export async function runBoardRollover(opts: {
 
   const state = await getBoardRolloverState();
   if (state.lastRolloverDay === day) {
-    return { rolledCount: 0, logicalDay: day, alreadyRan: true };
+    return { rolledCount: 0, removedCount: 0, logicalDay: day, alreadyRan: true };
   }
 
   const [scheduledAsanaTasks, adHocTasks, states, metadata, blockDone, weeklyStats, deferrals] =
@@ -110,7 +112,21 @@ export async function runBoardRollover(opts: {
     });
   }
 
+  // Delete the duplicate overdue records the dedupe collapsed (mirrors the
+  // single-record removal path: unscheduleAsanaTask / deleteAdHocTask).
+  for (const id of plan.removeScheduledIds) {
+    await unscheduleAsanaTask(id);
+  }
+  for (const id of plan.removeAdhocIds) {
+    await deleteAdHocTask(id);
+  }
+
   await setBoardRolloverLastDay(day);
 
-  return { rolledCount: plan.scheduled.length + plan.adhoc.length, logicalDay: day, alreadyRan: false };
+  return {
+    rolledCount: plan.scheduled.length + plan.adhoc.length,
+    removedCount: plan.removeScheduledIds.length + plan.removeAdhocIds.length,
+    logicalDay: day,
+    alreadyRan: false,
+  };
 }

@@ -94,6 +94,10 @@ export interface RolledEntry {
 export interface RolloverPlan {
   scheduled: RolledEntry[];
   adhoc: RolledEntry[];
+  // Duplicate overdue records to delete (a task re-planned across weeks has one
+  // scheduled entry per week; only one survives — see decideTaskRollover).
+  removeScheduledIds: string[];
+  removeAdhocIds: string[];
 }
 
 // A task is deferred out of the way when it has a resume date strictly after the
@@ -103,40 +107,159 @@ function isDeferredForward(taskId: string, logicalToday: string, deferrals: Reco
   return typeof until === 'string' && until > logicalToday;
 }
 
-// Compute the rollover plan. An eligible task has a date strictly BEFORE the
-// logical day, is not done, and is not deferred to a future date; its new date
-// is the next working day on/after the logical day (today itself when today is a
-// working day). originallyPlannedFor is set from the CURRENT date only when not
-// already present; rolls increments from its current value (absent ⇒ 0).
+// --- Per-task dedupe ---------------------------------------------------------
+//
+// A single task legitimately has SEVERAL dated records: it can be GENUINELY
+// planned on more than one day in the same week (a block on Thursday AND another
+// on Friday — intentional multi-day planning, not duplication), and the rollover
+// itself leaves a moved record behind. A naive per-record rollover multiplies the
+// task across the board, so given ALL of one task's dated records we decide which
+// single overdue record to roll forward and which overdue records to delete —
+// WITHOUT ever destroying a genuine record as a "duplicate" of another.
+//
+// A record is ROLLED/stale when the rollover created or moved it (rolls >= 1 or
+// an originallyPlannedFor is set); otherwise it is GENUINE. A `blocked` record
+// (done, or deferred to a future date) is never rolled and never removed.
+//
+//  - Any record on or after `logicalToday` (genuine OR rolled) means the task is
+//    already on the board today/ahead: roll nothing, and drop only the stale
+//    ROLLED overdue records — genuine overdue records are left as history.
+//  - Otherwise (nothing scheduled today or later) roll exactly ONE overdue record
+//    forward — the latest scheduledDate, tie-broken by the latest
+//    originallyPlannedFor — and remove the other overdue records.
+//
+// Pure and self-contained: a one-off data cleanup reuses it.
+
+export interface TaskRolloverRecord {
+  id: string;
+  date: string; // yyyy-MM-dd (scheduledDate / dueDate)
+  blocked?: boolean;
+  // Rollover bookkeeping, used to tell a rolled/stale record from a genuine one
+  // and to tie-break the survivor. Absent on a genuinely-planned record.
+  rolls?: number;
+  originallyPlannedFor?: string;
+}
+
+export interface TaskRolloverDecision {
+  keep: string | null; // record id to roll forward, or null when nothing rolls
+  remove: string[]; // record ids to delete
+  rollTarget?: string; // new date for the kept record (present iff keep !== null)
+}
+
+function isRolled(r: TaskRolloverRecord): boolean {
+  return (r.rolls ?? 0) >= 1 || r.originallyPlannedFor != null;
+}
+
+export function decideTaskRollover(
+  records: TaskRolloverRecord[],
+  logicalToday: string,
+  workingDays?: string[]
+): TaskRolloverDecision {
+  const overdue = records.filter(r => !r.blocked && r.date && r.date < logicalToday);
+  if (overdue.length === 0) return { keep: null, remove: [] };
+
+  // Already scheduled today or later (a genuine or rolled anchor): roll nothing
+  // and drop only the stale rolled overdue records, keeping genuine history.
+  if (records.some(r => r.date && r.date >= logicalToday)) {
+    return { keep: null, remove: overdue.filter(isRolled).map(r => r.id) };
+  }
+
+  // Nothing on/after today: roll the most-recent overdue record forward (latest
+  // scheduledDate, tie-broken by latest originallyPlannedFor); remove the rest.
+  const survivor = overdue.reduce((a, b) => {
+    if (b.date !== a.date) return b.date > a.date ? b : a;
+    return (b.originallyPlannedFor ?? '') > (a.originallyPlannedFor ?? '') ? b : a;
+  });
+  return {
+    keep: survivor.id,
+    remove: overdue.filter(r => r.id !== survivor.id).map(r => r.id),
+    rollTarget: nextWorkingDayOnOrAfter(logicalToday, workingDays),
+  };
+}
+
+// A dated record tagged with the task it belongs to: asanaTaskId for a scheduled
+// entry, the task's own id for an ad-hoc task (which is always one record).
+interface IdentifiedRecord extends TaskRolloverRecord {
+  taskId: string;
+}
+
+// Group records by task identity and run decideTaskRollover on each group,
+// collecting the entries to roll and the ids to delete. Shared by the scheduled
+// and ad-hoc passes, which differ only in where their fields come from.
+function planRecordGroups(
+  records: IdentifiedRecord[],
+  logicalToday: string,
+  target: string,
+  workingDays?: string[]
+): { rolled: RolledEntry[]; removeIds: string[] } {
+  const byTask = new Map<string, IdentifiedRecord[]>();
+  for (const r of records) {
+    const group = byTask.get(r.taskId);
+    if (group) group.push(r);
+    else byTask.set(r.taskId, [r]);
+  }
+
+  const rolled: RolledEntry[] = [];
+  const removeIds: string[] = [];
+  for (const group of byTask.values()) {
+    const decision = decideTaskRollover(group, logicalToday, workingDays);
+    removeIds.push(...decision.remove);
+    const survivor = group.find(r => r.id === decision.keep);
+    if (survivor) {
+      rolled.push({
+        id: survivor.id,
+        date: target,
+        originallyPlannedFor: survivor.originallyPlannedFor ?? survivor.date,
+        rolls: (survivor.rolls ?? 0) + 1,
+      });
+    }
+  }
+  return { rolled, removeIds };
+}
+
+// Compute the rollover plan. Records are grouped by task identity and deduped
+// via decideTaskRollover, which protects genuine multi-day planning: at most ONE
+// overdue record per task rolls to the next working day on/after the logical
+// day, stale rolled duplicates are removed, and genuine records (especially any
+// on/after today) are preserved. originallyPlannedFor is set from the CURRENT
+// date only when not already present; rolls increments from its value (absent ⇒ 0).
 export function planBoardRollover(input: RolloverInput): RolloverPlan {
   const { logicalToday, workingDays, scheduledAsanaTasks, adHocTasks, deferrals } = input;
   const target = nextWorkingDayOnOrAfter(logicalToday, workingDays);
 
-  const scheduled: RolledEntry[] = [];
+  const scheduledRecords: IdentifiedRecord[] = [];
   for (const s of scheduledAsanaTasks) {
-    if (!s.scheduledDate || s.scheduledDate >= logicalToday) continue;
-    if (scheduledDone(s, input)) continue;
-    if (isDeferredForward(s.asanaTaskId, logicalToday, deferrals)) continue;
-    scheduled.push({
+    if (!s.scheduledDate) continue;
+    scheduledRecords.push({
+      taskId: s.asanaTaskId,
       id: s.id,
-      date: target,
-      originallyPlannedFor: s.originallyPlannedFor ?? s.scheduledDate,
-      rolls: (s.rolls ?? 0) + 1,
+      date: s.scheduledDate,
+      blocked: scheduledDone(s, input) || isDeferredForward(s.asanaTaskId, logicalToday, deferrals),
+      rolls: s.rolls,
+      originallyPlannedFor: s.originallyPlannedFor,
     });
   }
 
-  const adhoc: RolledEntry[] = [];
+  const adhocRecords: IdentifiedRecord[] = [];
   for (const t of adHocTasks) {
-    if (!t.dueDate || t.dueDate >= logicalToday) continue;
-    if (adhocDone(t, input)) continue;
-    if (isDeferredForward(t.id, logicalToday, deferrals)) continue;
-    adhoc.push({
+    if (!t.dueDate) continue;
+    adhocRecords.push({
+      taskId: t.id,
       id: t.id,
-      date: target,
-      originallyPlannedFor: t.originallyPlannedFor ?? t.dueDate,
-      rolls: (t.rolls ?? 0) + 1,
+      date: t.dueDate,
+      blocked: adhocDone(t, input) || isDeferredForward(t.id, logicalToday, deferrals),
+      rolls: t.rolls,
+      originallyPlannedFor: t.originallyPlannedFor,
     });
   }
 
-  return { scheduled, adhoc };
+  const scheduledPlan = planRecordGroups(scheduledRecords, logicalToday, target, workingDays);
+  const adhocPlan = planRecordGroups(adhocRecords, logicalToday, target, workingDays);
+
+  return {
+    scheduled: scheduledPlan.rolled,
+    adhoc: adhocPlan.rolled,
+    removeScheduledIds: scheduledPlan.removeIds,
+    removeAdhocIds: adhocPlan.removeIds,
+  };
 }

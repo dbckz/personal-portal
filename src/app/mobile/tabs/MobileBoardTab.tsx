@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Loader2, Plus } from 'lucide-react';
 import {
   AdHocTask,
@@ -13,7 +13,7 @@ import {
   TaskMetadata,
 } from '@/types';
 import { filterCardsForDay, weekStartFor } from '@/lib/board';
-import { addDaysStr, dayFilterChips, todayStr, weekRangeLabel } from '@/lib/board-format';
+import { addDaysStr, dayFilterChips, todayStr, weekDates, weekRangeLabel } from '@/lib/board-format';
 import { useBoard } from '@/hooks/useBoard';
 import { MobileBoardCard } from '../components/MobileBoardCard';
 import { MobileBoardCardSheet } from '../components/MobileBoardCardSheet';
@@ -24,6 +24,15 @@ function shiftWeek(weekStart: string, weeks: number): string {
 }
 
 type DayFilter = 'all' | 'unplanned' | string;
+
+// Persist the selected day filter across refreshes (separate key from desktop).
+const DAY_FILTER_STORAGE_KEY = 'mobile.workboard.dayFilter';
+
+// A stored filter is restorable when it is 'all'/'unplanned', or a concrete day
+// within the currently-viewed week; a stale day falls back to 'all'.
+function isRestorableDayFilter(value: string, weekStart: string): boolean {
+  return value === 'all' || value === 'unplanned' || weekDates(weekStart).includes(value);
+}
 
 // The mobile weekly task board: week nav, a day-chips filter, a status segment
 // and the selected column's cards as a tappable list. Reuses useBoard /
@@ -59,6 +68,27 @@ export function MobileBoardTab({
   const [status, setStatus] = useState<BoardStatus>('todo');
   const [openStateKey, setOpenStateKey] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+
+  // The saved day filter is applied after mount so SSR and the first client
+  // render agree; every change goes through changeDayFilter, which persists it.
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(DAY_FILTER_STORAGE_KEY);
+      if (stored && isRestorableDayFilter(stored, weekStart)) setDayFilter(stored);
+    } catch {
+      // sessionStorage unavailable — keep the default.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changeDayFilter = useCallback((next: DayFilter) => {
+    setDayFilter(next);
+    try {
+      sessionStorage.setItem(DAY_FILTER_STORAGE_KEY, next);
+    } catch {
+      // Private-mode quota errors just lose the persistence, nothing else.
+    }
+  }, []);
 
   const { cards, isLoading, error, moveCard, toggleMember, pinToWeek, busyKeys } = useBoard({
     weekStart,
@@ -172,7 +202,7 @@ export function MobileBoardTab({
 
       {/* Day chips */}
       <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1">
-        <button type="button" onClick={() => setDayFilter('all')} className={chipClass(dayFilter === 'all')}>
+        <button type="button" onClick={() => changeDayFilter('all')} className={chipClass(dayFilter === 'all')}>
           <span>All</span>
           <span className="text-[10px] opacity-70">{dayCounts.all}</span>
         </button>
@@ -180,7 +210,7 @@ export function MobileBoardTab({
           <button
             key={day.date}
             type="button"
-            onClick={() => setDayFilter(day.date)}
+            onClick={() => changeDayFilter(day.date)}
             className={`${chipClass(dayFilter === day.date)} ${
               day.date === today && dayFilter !== day.date ? 'ring-1 ring-orange-400' : ''
             }`}
@@ -191,7 +221,7 @@ export function MobileBoardTab({
         ))}
         <button
           type="button"
-          onClick={() => setDayFilter('unplanned')}
+          onClick={() => changeDayFilter('unplanned')}
           className={chipClass(dayFilter === 'unplanned')}
         >
           <span>Unplanned</span>

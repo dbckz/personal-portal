@@ -75,6 +75,22 @@ describe('runBoardRollover', () => {
     expect(s.rolls).toBe(1); // not double-rolled
   });
 
+  it('dedupes duplicate overdue records for one task: one rolls, the rest are deleted', async () => {
+    const dupes: ScheduledAsanaTask[] = [
+      { ...sched, id: 'd1', asanaTaskId: 'gdup', scheduledDate: '2026-08-20' },
+      { ...sched, id: 'd2', asanaTaskId: 'gdup', scheduledDate: '2026-08-24' },
+      { ...sched, id: 'd3', asanaTaskId: 'gdup', scheduledDate: '2026-08-18' },
+    ];
+    await seed(dupes, []);
+
+    const res = await runBoardRollover({ now: noon(2026, 8, 26), rolloverHour: 4 });
+    expect(res).toMatchObject({ rolledCount: 1, removedCount: 2, alreadyRan: false });
+
+    const remaining = await getScheduledAsanaTasks();
+    expect(remaining.map(s => s.id)).toEqual(['d2']);
+    expect(remaining[0]).toMatchObject({ scheduledDate: '2026-08-26', rolls: 1 });
+  });
+
   it('rolls again on a NEW logical day, preserving the original date and incrementing rolls', async () => {
     await seed([{ ...sched }], []);
     await runBoardRollover({ now: noon(2026, 8, 26), rolloverHour: 4 }); // Wed

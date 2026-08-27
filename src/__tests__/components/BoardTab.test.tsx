@@ -85,6 +85,10 @@ function renderBoard() {
   );
 }
 
+// The day filter now persists in sessionStorage; clear it so a filter selected
+// in one test does not leak into the next.
+beforeEach(() => sessionStorage.clear());
+
 describe('BoardTab', () => {
   beforeEach(() => setBoardStatus.mockClear());
 

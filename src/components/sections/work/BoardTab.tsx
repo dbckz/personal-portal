@@ -12,7 +12,7 @@ import {
   filterCardsForDay,
   weekStartFor,
 } from '@/lib/board';
-import { addDaysStr, todayStr } from '@/lib/board-format';
+import { addDaysStr, todayStr, weekDates } from '@/lib/board-format';
 import {
   BOARD_COLUMNS,
   type AdHocTask,
@@ -27,6 +27,15 @@ import { BoardColumn } from '@/components/board/BoardColumn';
 import { DayFilterChips, type DayFilter } from '@/components/board/DayFilterChips';
 import { WeekNav } from '@/components/board/WeekNav';
 import { AddBoardTaskModal, type NewBoardTask } from '@/components/board/AddBoardTaskModal';
+
+// Persist the selected day filter across refreshes (per device/tab session).
+const DAY_FILTER_STORAGE_KEY = 'workboard.dayFilter';
+
+// A stored filter is restorable when it is 'all'/'unplanned', or a concrete day
+// that falls within the currently-viewed week; a stale day falls back to 'all'.
+function isRestorableDayFilter(value: string, weekStart: string): value is DayFilter {
+  return value === 'all' || value === 'unplanned' || weekDates(weekStart).includes(value);
+}
 
 interface BoardTabProps {
   asanaTasks: CalendarEvent[]; // live incomplete Asana tasks
@@ -64,6 +73,27 @@ export function BoardTab({
 
   useEffect(() => {
     api.getCustomTaskTypes().then(r => setCustomTypes(r.customTypes)).catch(console.error);
+  }, []);
+
+  // The saved day filter is applied after mount so SSR and the first client
+  // render agree; every change goes through changeDayFilter, which persists it.
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(DAY_FILTER_STORAGE_KEY);
+      if (stored && isRestorableDayFilter(stored, weekStart)) setDayFilter(stored);
+    } catch {
+      // sessionStorage unavailable — keep the default.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changeDayFilter = useCallback((next: DayFilter) => {
+    setDayFilter(next);
+    try {
+      sessionStorage.setItem(DAY_FILTER_STORAGE_KEY, next);
+    } catch {
+      // Private-mode quota errors just lose the persistence, nothing else.
+    }
   }, []);
 
   const onCompleteAsana = useCallback(
@@ -119,8 +149,8 @@ export function BoardTab({
 
   const goWeek = useCallback((next: string) => {
     setWeekStart(next);
-    setDayFilter('all');
-  }, []);
+    changeDayFilter('all');
+  }, [changeDayFilter]);
 
   const handleAddNew = useCallback(
     async (task: NewBoardTask) => {
@@ -192,7 +222,7 @@ export function BoardTab({
           selected={dayFilter}
           today={today}
           counts={counts}
-          onSelect={setDayFilter}
+          onSelect={changeDayFilter}
         />
       </div>
 

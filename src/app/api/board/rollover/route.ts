@@ -14,9 +14,9 @@ export async function POST() {
     const rolloverHour = normalizeRolloverHour(config.scheduling?.dayRolloverHour);
     const workingDays = config.scheduling?.workingDays;
 
-    const { rolledCount } = await runBoardRollover({ rolloverHour, workingDays });
+    const { rolledCount, removedCount } = await runBoardRollover({ rolloverHour, workingDays });
 
-    return NextResponse.json({ rolledCount });
+    return NextResponse.json({ rolledCount, removedCount });
   } catch (error) {
     console.error('Error rolling over the board:', error);
     return NextResponse.json(
