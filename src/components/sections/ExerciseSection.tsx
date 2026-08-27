@@ -17,6 +17,7 @@ import { SectionGoals } from '@/components/goals/SectionGoals';
 import { AdherenceTrendChart } from './exercise/AdherenceTrendChart';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
+import { RehabBlock } from './exercise/RehabBlock';
 import { FreeformLog } from './exercise/FreeformLog';
 import { MusclesTab } from './exercise/MusclesTab';
 import { ProgressionTab } from './exercise/ProgressionTab';
@@ -36,7 +37,18 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
       />
     );
   }
-  if (subTab === 'today') return <ExerciseToday />;
+  if (subTab === 'today') {
+    // The daily back-rehab block sits below the main Today checklist — separate
+    // system, so it renders every day regardless of whether a session exists.
+    return (
+      <>
+        <ExerciseToday />
+        <div className="max-w-3xl mx-auto px-6 pb-6">
+          <RehabBlock />
+        </div>
+      </>
+    );
+  }
   if (subTab === 'routine') return <RoutineTab />;
   if (subTab === 'analysis') return <ExerciseAnalysisTab />;
   if (subTab === 'muscles') return <MusclesTab />;

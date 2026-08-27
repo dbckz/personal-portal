@@ -17,6 +17,7 @@ import type {
   ExerciseAnalysis,
   ExerciseEntry,
   ExerciseSession,
+  RehabRoutine,
   WeeklyRoutineDay,
   Goal,
   GoalCheckIn,
@@ -2059,6 +2060,29 @@ export const api = {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ routine }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // The daily back-rehab block — a tickable home routine tracked separately from
+  // the gym programme. Read the full routine (exercise list + per-day ticks).
+  async getRehabRoutine(): Promise<{ routine: RehabRoutine }> {
+    return fetchWithRetry<{ routine: RehabRoutine }>('/api/exercise/rehab');
+  },
+
+  // Tick/untick one rehab exercise on one day; returns the updated routine.
+  async setRehabTick(
+    date: string,
+    exerciseId: string,
+    done: boolean
+  ): Promise<{ routine: RehabRoutine }> {
+    return fetchWithRetry<{ routine: RehabRoutine }>(
+      '/api/exercise/rehab',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, exerciseId, done }),
       },
       { maxRetries: 0 }
     );

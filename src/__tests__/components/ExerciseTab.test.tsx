@@ -15,6 +15,7 @@ jest.mock('@/lib/api', () => ({
     getExerciseSessions: jest.fn().mockResolvedValue({ sessions: [] }),
     getExerciseProgressions: jest.fn().mockResolvedValue({ progressions: [] }),
     getWeeklyRoutine: jest.fn().mockResolvedValue({ routine: [] }),
+    getRehabRoutine: jest.fn().mockResolvedValue({ routine: { exercises: [], ticks: {} } }),
     syncExerciseCalendar: jest.fn(),
     deleteExerciseSession: jest.fn(),
   },

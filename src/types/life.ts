@@ -321,6 +321,26 @@ export interface WeeklyRoutineDay {
   rest?: boolean;
 }
 
+// One movement in Dave's daily back-rehab block — a deliberately separate,
+// tickable home routine (tight hip flexors / anterior pelvic tilt from running),
+// tracked apart from the gym programme. `prescription` is the plain target text
+// ("90 s per side", "2×15"); `note` is the form cue. Seeded and read/written
+// through lib/storage/rehab.
+export interface RehabExercise {
+  id: string;
+  name: string;
+  prescription: string;
+  note?: string;
+}
+
+// The whole rehab domain: the ordered exercise list plus per-day tick records,
+// keyed by yyyy-MM-dd → the ids ticked done that day. Shown every day (rest days
+// included), independent of the exercise session/programme system.
+export interface RehabRoutine {
+  exercises: RehabExercise[];
+  ticks: Record<string, string[]>;
+}
+
 // A session as read out of the training-log spreadsheet, before it is given ids
 // and written to storage.
 export interface SheetSession {

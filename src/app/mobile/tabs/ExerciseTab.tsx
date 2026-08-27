@@ -14,6 +14,7 @@ import { pct } from '@/components/analysis/format';
 import { FreeformLogCard } from '../components/FreeformLogCard';
 import { MobileMusclesCard } from '../components/MobileMusclesCard';
 import { MobileSessionSheet } from '../components/MobileSessionSheet';
+import { RehabBlock } from '@/components/sections/exercise/RehabBlock';
 import { RoutineCard } from '../components/RoutineCard';
 import { TodayChecklist } from '../components/TodayChecklist';
 
@@ -104,6 +105,9 @@ export function ExerciseTab({
   return (
     <div className="space-y-5">
       <TodayChecklist onSessionChanged={onSessionChanged} />
+
+      {/* The daily back-rehab block — a separate system, shown every day. */}
+      <RehabBlock />
 
       {/* The escape hatch from the checklist: the day the plan didn't happen. */}
       <FreeformLogCard onLogged={onSessionChanged} />
