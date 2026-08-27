@@ -2,6 +2,14 @@
 
 ## Open
 
+- Exercise midnight rollover (28 Aug 2026): a workout in progress when the
+  clock passes midnight vanishes from the Today view, which flips to the new
+  date's plan mid-session. The Today tab (desktop and mobile) should keep
+  showing an unfinished started session from "yesterday" until it is completed
+  or abandoned — e.g. resolve "today" to the most recent date with an
+  incomplete started session within the last ~6 hours, or offer a "finish
+  yesterday's session" banner.
+
 - Muscle map → plan generation (26 Aug 2026): feed the per-muscle planned/done
   loads (`src/lib/exercise-muscles.ts`, `/api/exercise/muscles`) into
   programme generation so the plan self-adjusts to hit all muscle groups
