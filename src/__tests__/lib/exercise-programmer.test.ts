@@ -723,6 +723,15 @@ describe('mutually-exclusive exercise variants — one calf raise per session', 
     expect(exclusiveGroup('Band pull-apart')).toBeUndefined();
   });
 
+  it('groups lunges with split squats, but leaves plain squats free', () => {
+    expect(exclusiveGroup('Reverse lunge')).toBe('single-leg-knee-dominant');
+    expect(exclusiveGroup('Walking lunges')).toBe('single-leg-knee-dominant');
+    expect(exclusiveGroup('Bulgarian split squat')).toBe('single-leg-knee-dominant');
+    // The bodyweight-squat home stand-in must be able to sit beside a split squat.
+    expect(exclusiveGroup('Bodyweight squat')).toBeUndefined();
+    expect(exclusiveGroup('Goblet squat')).toBeUndefined();
+  });
+
   it('keeps only the first calf-raise variant the model returns, dropping later ones', () => {
     const legs = buildProgrammerInput(
       [
