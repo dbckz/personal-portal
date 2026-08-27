@@ -308,6 +308,12 @@ export interface AdHocTask {
   // task's type signals. Optional for backward compatibility with tasks stored
   // before this field existed (those fall back to classification).
   category?: string;
+  // Daily board rollover: when an unfinished dated task rolls to the next
+  // working day, its ORIGINAL planned date is captured here on the first roll and
+  // never overwritten, and `rolls` counts how many times it has rolled. Used to
+  // badge the board card ("from Tue") without moving the Google Calendar event.
+  originallyPlannedFor?: string; // yyyy-MM-dd
+  rolls?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -335,6 +341,12 @@ export interface ScheduledAsanaTask {
   // what the user actually placed. Optional for backward compatibility with
   // entries stored before this field existed (those fall back to classification).
   category?: string;
+  // Daily board rollover: when an unfinished scheduled task rolls to the next
+  // working day, its ORIGINAL scheduled date is captured here on the first roll
+  // and never overwritten, and `rolls` counts how many times it has rolled. Used
+  // to badge the board card ("from Tue") without moving the Google Calendar event.
+  originallyPlannedFor?: string; // yyyy-MM-dd
+  rolls?: number;
 }
 
 export interface GoogleCalendarCredentials {

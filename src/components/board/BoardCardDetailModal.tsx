@@ -10,7 +10,7 @@ import {
   type BoardStatus,
 } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
-import { boardWhenLabel, formatDuration } from '@/lib/board-format';
+import { boardWhenLabel, formatDuration, rolledDetailLabel } from '@/lib/board-format';
 
 const PRIORITY_DOT: Record<'low' | 'medium' | 'high', string> = {
   low: 'bg-gray-300',
@@ -48,6 +48,7 @@ export function BoardCardDetailModal({
 }: BoardCardDetailModalProps) {
   const busy = busyKeys.has(card.key);
   const whenLabel = boardWhenLabel(card);
+  const rolledDetail = rolledDetailLabel(card);
   const doneCount = card.members.filter(m => m.done).length;
   const statusLabel = BOARD_COLUMNS.find(c => c.id === card.status)?.label ?? card.status;
 
@@ -107,6 +108,8 @@ export function BoardCardDetailModal({
               {statusLabel}
             </span>
           </div>
+
+          {rolledDetail && <p className="-mt-2 text-[11px] text-gray-400">{rolledDetail}</p>}
 
           {/* Members */}
           {card.members.length > 0 && (

@@ -79,6 +79,12 @@ export interface BoardCard {
   statusSource: 'explicit' | 'derived';
   // The block — a single occurrence, not an array. Absent for unplanned cards.
   date?: string; // yyyy-MM-dd
+  // Daily rollover: the date this card's backing task was ORIGINALLY planned for,
+  // set once the task first rolls to a later working day; `rolls` counts the
+  // rolls. Present only when it differs from the current `date`, so the UI can
+  // badge the card ("from Tue"). See src/lib/board-rollover.ts.
+  originallyPlannedFor?: string; // yyyy-MM-dd
+  rolls?: number;
   start?: string; // HH:mm
   durationMinutes?: number;
   googleEventId?: string;

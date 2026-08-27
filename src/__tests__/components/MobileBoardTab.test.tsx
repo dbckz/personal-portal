@@ -89,6 +89,22 @@ describe('MobileBoardTab', () => {
     expect(screen.getByText('Floating task')).toBeInTheDocument();
   });
 
+  it('badges a rolled card with its original weekday', () => {
+    mockCards = [
+      makeCard({
+        key: 'adhoc:rolled',
+        stateKey: 'adhoc:rolled',
+        source: 'task',
+        title: 'Rolled task',
+        date: '2026-08-26',
+        originallyPlannedFor: '2026-08-24', // Mon
+        rolls: 1,
+      }),
+    ];
+    renderTab();
+    expect(screen.getByText('from Mon')).toBeInTheDocument();
+  });
+
   it('calls moveCard when a status button is tapped in the card sheet', async () => {
     const card = makeCard({ key: 'adhoc:go', stateKey: 'adhoc:go', source: 'task', title: 'Draft the report', status: 'todo', adhocId: 'go' });
     mockCards = [card];

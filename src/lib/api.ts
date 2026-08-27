@@ -325,6 +325,9 @@ export interface BoardResponse {
   // the durable title/category snapshot for cards dropped from the live fetch.
   weeklyOutcomes: Record<string, { outcome: WeeklyTaskOutcomeKind; category?: string; title?: string }>;
   blockDoneGoogleEventIds: string[]; // event ids marked done-for-planning → Done
+  // True when the daily rollover of unfinished one-off tasks hasn't run for the
+  // current logical day yet → the client fires POST /api/board/rollover once.
+  needsRollover: boolean;
 }
 
 // One portal-done ("waiting on others") task surfaced in the end-of-week review.
@@ -1445,6 +1448,16 @@ export const api = {
       ? `/api/board?weekStart=${encodeURIComponent(weekStart)}`
       : '/api/board';
     return fetchWithRetry<BoardResponse>(url);
+  },
+
+  // Weekly task board: run the daily rollover of unfinished one-off tasks to the
+  // next working day. Idempotent per logical day server-side; returns how many
+  // tasks moved. Fired by useBoard when a board fetch reports needsRollover.
+  async rollOverBoard(): Promise<{ rolledCount: number }> {
+    return fetchWithRetry<{ rolledCount: number }>('/api/board/rollover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, { maxRetries: 0 });
   },
 
   // Weekly task board: upsert one card's status. Dumb persistence only — status

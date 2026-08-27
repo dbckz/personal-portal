@@ -6,6 +6,8 @@ import {
   boardWhenLabel,
   weekRangeLabel,
   dayFilterChips,
+  rolledBadgeLabel,
+  rolledDetailLabel,
 } from '@/lib/board-format';
 
 describe('board-format', () => {
@@ -66,6 +68,39 @@ describe('board-format', () => {
 
     it('shows both months when the week spans a boundary', () => {
       expect(weekRangeLabel('2026-07-27')).toBe('Mon 27 Jul – Sun 2 Aug');
+    });
+  });
+
+  describe('rolledBadgeLabel', () => {
+    it('names the original weekday', () => {
+      // Originally Mon 24 Aug, now on Wed 26 Aug.
+      expect(rolledBadgeLabel({ date: '2026-08-26', originallyPlannedFor: '2026-08-24' })).toBe('from Mon');
+    });
+
+    it('appends the roll count from the second roll on', () => {
+      expect(
+        rolledBadgeLabel({ date: '2026-08-26', originallyPlannedFor: '2026-08-24', rolls: 3 })
+      ).toBe('from Mon · ×3');
+    });
+
+    it('returns null when the card was not rolled', () => {
+      expect(rolledBadgeLabel({ date: '2026-08-26' })).toBeNull();
+      expect(rolledBadgeLabel({ date: '2026-08-26', originallyPlannedFor: '2026-08-26' })).toBeNull();
+    });
+  });
+
+  describe('rolledDetailLabel', () => {
+    it('spells out the original date and the roll count', () => {
+      expect(
+        rolledDetailLabel({ date: '2026-08-26', originallyPlannedFor: '2026-08-24', rolls: 2 })
+      ).toBe('Originally planned for Mon 24 Aug · rolled 2 times');
+    });
+
+    it('uses "once" for a single roll and null when not rolled', () => {
+      expect(rolledDetailLabel({ date: '2026-08-26', originallyPlannedFor: '2026-08-24' })).toBe(
+        'Originally planned for Mon 24 Aug · rolled once'
+      );
+      expect(rolledDetailLabel({ date: '2026-08-26' })).toBeNull();
     });
   });
 

@@ -150,6 +150,21 @@ export interface BuildBoardCardsInput {
   customTypes: CustomTaskType[];
 }
 
+// The card's rollover badge fields, from its backing dated record. Emitted only
+// when the task was rolled to a LATER day than originally planned (i.e. the
+// original differs from the card's current date), so the card can be badged
+// "from Tue". See src/lib/board-rollover.ts.
+function rolloverFields(
+  date: string | undefined,
+  rec: { originallyPlannedFor?: string; rolls?: number } | undefined
+): { originallyPlannedFor?: string; rolls?: number } {
+  if (!rec?.originallyPlannedFor || !date || rec.originallyPlannedFor === date) return {};
+  return {
+    originallyPlannedFor: rec.originallyPlannedFor,
+    ...(rec.rolls ? { rolls: rec.rolls } : {}),
+  };
+}
+
 // Explicit state wins; otherwise the source-specific derivation.
 function resolveStatus(
   state: BoardTaskState | undefined,
@@ -305,6 +320,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
           : undefined,
       ...resolveStatus(state, derived),
       ...(date ? { date } : {}),
+      ...rolloverFields(date, entry ?? adhocEntry),
       ...(start ? { start } : {}),
       ...(durationMinutes ? { durationMinutes } : {}),
       googleEventId: eventId,
@@ -358,6 +374,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
       ...(typeLabel ? { typeLabel, typeEmoji: categoryEmoji(typeLabel) } : {}),
       ...resolveStatus(state, derived),
       date: s.scheduledDate,
+      ...rolloverFields(s.scheduledDate, s),
       start: s.scheduledTime,
       durationMinutes: s.duration,
       members: [member],
@@ -412,6 +429,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
       ...(display.emoji ? { typeEmoji: display.emoji } : {}),
       ...resolveStatus(state, derived),
       ...(planned && task.dueDate ? { date: task.dueDate } : {}),
+      ...(planned ? rolloverFields(task.dueDate, task) : {}),
       ...(planned && task.dueTime ? { start: task.dueTime } : {}),
       ...(planned && task.duration ? { durationMinutes: task.duration } : {}),
       members: [member],

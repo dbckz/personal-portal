@@ -73,6 +73,33 @@ export function boardWhenLabel(when: {
   return parts.join(' · ');
 }
 
+// A rolled card's short badge, e.g. "from Tue" (or "from Tue · ×2" once it has
+// rolled two or more times). Returns null when the card wasn't rolled (its
+// backing task's original date equals its current date, or is absent).
+export function rolledBadgeLabel(card: {
+  date?: string;
+  originallyPlannedFor?: string;
+  rolls?: number;
+}): string | null {
+  if (!card.originallyPlannedFor || card.originallyPlannedFor === card.date) return null;
+  const weekday = WEEKDAY_ABBR[dateFromStr(card.originallyPlannedFor).getDay()];
+  const rolls = card.rolls ?? 1;
+  return rolls >= 2 ? `from ${weekday} · ×${rolls}` : `from ${weekday}`;
+}
+
+// A rolled card's full sentence for the detail view, e.g. "Originally planned
+// for Tue 25 Aug · rolled 2 times". Returns null when the card wasn't rolled.
+export function rolledDetailLabel(card: {
+  date?: string;
+  originallyPlannedFor?: string;
+  rolls?: number;
+}): string | null {
+  if (!card.originallyPlannedFor || card.originallyPlannedFor === card.date) return null;
+  const rolls = card.rolls ?? 1;
+  const times = rolls === 1 ? 'once' : `${rolls} times`;
+  return `Originally planned for ${shortDayLabel(card.originallyPlannedFor, true)} · rolled ${times}`;
+}
+
 // The header's week-range label, e.g. "Mon 17 – Sun 23 Aug" (same month) or
 // "Mon 28 Jul – Sun 3 Aug" (spanning two months).
 export function weekRangeLabel(weekStart: string): string {

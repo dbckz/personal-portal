@@ -2,7 +2,7 @@
 
 import { Loader2 } from 'lucide-react';
 import type { BoardCard } from '@/types';
-import { boardWhenLabel } from '@/lib/board-format';
+import { boardWhenLabel, rolledBadgeLabel } from '@/lib/board-format';
 
 // One tappable card row in the mobile board's status list. Shows the title,
 // type (emoji + label), the date/time chip (or "Unplanned") and a source hint.
@@ -27,6 +27,7 @@ export function MobileBoardCard({
             ? card.projectName || 'Asana'
             : 'Ad hoc';
   const whenLabel = boardWhenLabel(card);
+  const rolledLabel = rolledBadgeLabel(card);
   const doneCount = card.members.filter(m => m.done).length;
 
   return (
@@ -73,6 +74,10 @@ export function MobileBoardCard({
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-500">
             {doneCount}/{card.members.length} done
           </span>
+        )}
+
+        {rolledLabel && (
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-400">{rolledLabel}</span>
         )}
 
         <span className="text-gray-400">{sourceHint}</span>

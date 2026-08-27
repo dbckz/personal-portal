@@ -10,7 +10,7 @@ import {
   type BoardStatus,
 } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
-import { boardWhenLabel } from '@/lib/board-format';
+import { boardWhenLabel, rolledBadgeLabel } from '@/lib/board-format';
 import { BoardCardDetailModal } from './BoardCardDetailModal';
 
 const PRIORITY_DOT: Record<'low' | 'medium' | 'high', string> = {
@@ -50,6 +50,7 @@ export function BoardCard({
   const busy = busyKeys.has(card.key);
   const clickable = !!card.gid && card.source !== 'group';
   const whenLabel = boardWhenLabel(card);
+  const rolledLabel = rolledBadgeLabel(card);
   const doneCount = card.members.filter(m => m.done).length;
 
   const openAsana = () => {
@@ -109,6 +110,14 @@ export function BoardCard({
         ) : (
           <span className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500">
             Unplanned
+          </span>
+        )}
+        {rolledLabel && (
+          <span
+            className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-400"
+            title="Rolled over from an earlier day"
+          >
+            {rolledLabel}
           </span>
         )}
       </div>

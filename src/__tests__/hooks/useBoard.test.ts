@@ -14,6 +14,7 @@ jest.mock('@/lib/api', () => ({
     completeAsanaTask: jest.fn(),
     updateAdHocTask: jest.fn(),
     upsertTaskMetadata: jest.fn(),
+    rollOverBoard: jest.fn(),
   },
 }));
 
@@ -62,6 +63,7 @@ function boardResponse(over: Record<string, unknown> = {}) {
     adHocTasks: [],
     portalDoneGids: [],
     weeklyOutcomes: {}, blockDoneGoogleEventIds: [],
+    needsRollover: false,
     ...over,
   };
 }
@@ -96,6 +98,7 @@ beforeEach(() => {
   mockApi.upsertTaskMetadata.mockResolvedValue({
     metadata: { asanaTaskGid: 'g1', integrationId: 'om', updatedAt: 'now' },
   });
+  mockApi.rollOverBoard.mockResolvedValue({ rolledCount: 0 });
 });
 
 async function renderBoard(over: Partial<UseBoardOptions> = {}) {
@@ -306,5 +309,33 @@ describe('useBoard', () => {
       .members.find(m => m.gid === 'g1')!;
     expect(updated.done).toBe(false);
     expect(result.current.error).toBeTruthy();
+  });
+
+  describe('daily rollover trigger', () => {
+    it('fires the rollover once when a fetch reports needsRollover, then refetches', async () => {
+      mockApi.getBoard
+        .mockResolvedValueOnce(boardResponse({ needsRollover: true }))
+        .mockResolvedValue(boardResponse({ needsRollover: false }));
+      await renderBoard();
+      await waitFor(() => expect(mockApi.rollOverBoard).toHaveBeenCalledTimes(1));
+      // A refetch follows the roll: the initial load + the post-roll reload.
+      await waitFor(() => expect(mockApi.getBoard.mock.calls.length).toBeGreaterThanOrEqual(2));
+    });
+
+    it('does not fire when needsRollover is false', async () => {
+      mockApi.getBoard.mockResolvedValue(boardResponse({ needsRollover: false }));
+      await renderBoard();
+      expect(mockApi.rollOverBoard).not.toHaveBeenCalled();
+    });
+
+    it('fires at most once even if a later fetch still reports needsRollover', async () => {
+      mockApi.getBoard.mockResolvedValue(boardResponse({ needsRollover: true }));
+      const { result } = await renderBoard();
+      await waitFor(() => expect(mockApi.rollOverBoard).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await result.current.reload();
+      });
+      expect(mockApi.rollOverBoard).toHaveBeenCalledTimes(1);
+    });
   });
 });

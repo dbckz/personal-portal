@@ -86,6 +86,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     Record<string, { outcome: WeeklyTaskOutcomeKind; category?: string; title?: string }>
   >({});
   const [blockDoneEventIds, setBlockDoneEventIds] = useState<string[]>([]);
+  const [needsRollover, setNeedsRollover] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
@@ -101,6 +102,10 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     };
   }, []);
 
+  // Guards the once-per-mount rollover trigger: a fetch may report needsRollover
+  // again if two clients race, but this client fires the POST at most once.
+  const rolloverFiredRef = useRef(false);
+
   const reload = useCallback(async () => {
     try {
       const res = await api.getBoard(weekStart);
@@ -112,6 +117,7 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       setPortalDoneGids(res.portalDoneGids || []);
       setWeeklyOutcomes(res.weeklyOutcomes || {});
       setBlockDoneEventIds(res.blockDoneGoogleEventIds || []);
+      setNeedsRollover(!!res.needsRollover);
       setError(null);
     } catch (err) {
       console.error('Failed to load board:', err);
@@ -140,6 +146,23 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [reload]);
+
+  // When a fetch reports the daily rollover is due, fire it once, then reload so
+  // the moved cards land on their new day. Guarded so it can't loop.
+  useEffect(() => {
+    if (!needsRollover || rolloverFiredRef.current) return;
+    rolloverFiredRef.current = true;
+    let cancelled = false;
+    api
+      .rollOverBoard()
+      .then(() => {
+        if (!cancelled) reload();
+      })
+      .catch(err => console.error('Board rollover failed:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [needsRollover, reload]);
 
   // portalDone is read from the metadata prop; merge the route's portalDoneGids
   // so a flag set server-side is honoured even before the metadata hook catches up.

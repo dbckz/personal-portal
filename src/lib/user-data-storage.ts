@@ -36,3 +36,4 @@ export * from './storage/daily-review';
 export * from './storage/type-verdicts';
 export * from './storage/reminder-verdicts';
 export * from './storage/board';
+export * from './storage/board-rollover';

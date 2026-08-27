@@ -172,6 +172,15 @@ export interface UserData {
   // week-suffixed key for rituals, the plain card key for asana/adhoc). See
   // lib/storage/board and lib/board.
   boardTasks?: Record<string, BoardTaskState>;
+  // Daily board-rollover bookkeeping: the logical day (yyyy-MM-dd) the unfinished-
+  // task rollover last ran for, so it runs at most once per logical day. See
+  // lib/storage/board-rollover and lib/board-rollover.
+  boardRollover?: BoardRolloverState;
+}
+
+// Idempotence stamp for the daily board rollover (see lib/board-rollover).
+export interface BoardRolloverState {
+  lastRolloverDay?: string; // yyyy-MM-dd (logical day the rollover last ran for)
 }
 
 export interface DailyReviewState {
@@ -244,6 +253,7 @@ const DEFAULT_USER_DATA: UserData = {
   dailyReviewState: {},
   weeklyRoutine: [],
   boardTasks: {},
+  boardRollover: {},
 };
 
 export async function getUserData(): Promise<UserData> {
@@ -326,6 +336,13 @@ export async function getUserData(): Promise<UserData> {
             typeof (v as BoardTaskState).status === 'string'
         )
       ),
+      // Tolerant load: keep only a string lastRolloverDay.
+      boardRollover:
+        parsed.boardRollover &&
+        typeof parsed.boardRollover === 'object' &&
+        typeof parsed.boardRollover.lastRolloverDay === 'string'
+          ? { lastRolloverDay: parsed.boardRollover.lastRolloverDay }
+          : {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into

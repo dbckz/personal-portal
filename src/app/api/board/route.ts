@@ -10,7 +10,10 @@ import {
   getAllTaskMetadata,
   getWeeklyStats,
   getBlockDoneOverrides,
+  getBoardRolloverState,
 } from '@/lib/user-data-storage';
+import { getWorkflowConfig } from '@/lib/workflow-config-storage';
+import { logicalToday, normalizeRolloverHour } from '@/lib/date-utils';
 
 // Normalise a yyyy-MM-dd date (or undefined → today) to its Monday. Built from
 // local parts so a bare date never drifts across a timezone boundary.
@@ -42,7 +45,7 @@ export async function GET(request: NextRequest) {
     );
     const inWeek = (date?: string) => !!date && date >= weekStart && date <= weekEnd;
 
-    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, prepBlocksAll, metadata, weekStats, blockDone] =
+    const [states, scheduledAsanaAll, adHocTasks, ritualBlocksAll, prepBlocksAll, metadata, weekStats, blockDone, rolloverState, config] =
       await Promise.all([
         getBoardTaskStates(),
         getScheduledAsanaTasks(),
@@ -52,6 +55,8 @@ export async function GET(request: NextRequest) {
         getAllTaskMetadata(),
         getWeeklyStats(weekStart),
         getBlockDoneOverrides(),
+        getBoardRolloverState(),
+        getWorkflowConfig(),
       ]);
 
     const scheduledAsanaTasks = scheduledAsanaAll.filter(s => inWeek(s.scheduledDate));
@@ -82,6 +87,12 @@ export async function GET(request: NextRequest) {
       .filter(([, v]) => !!v)
       .map(([eventId]) => eventId);
 
+    // The daily rollover of unfinished one-off tasks hasn't run for the current
+    // logical day yet → the client fires POST /api/board/rollover once. Kept a
+    // flag here so this route stays read-only.
+    const rolloverHour = normalizeRolloverHour(config.scheduling?.dayRolloverHour);
+    const needsRollover = rolloverState.lastRolloverDay !== logicalToday(new Date(), rolloverHour);
+
     return NextResponse.json({
       weekStart,
       states,
@@ -92,6 +103,7 @@ export async function GET(request: NextRequest) {
       portalDoneGids,
       weeklyOutcomes,
       blockDoneGoogleEventIds,
+      needsRollover,
     });
   } catch (error) {
     console.error('Error building board data:', error);

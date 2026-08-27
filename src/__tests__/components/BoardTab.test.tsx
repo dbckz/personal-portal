@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 
 import { BoardTab } from '@/components/sections/work/BoardTab';
 import { weekStartFor } from '@/lib/board';
+import { addDaysStr } from '@/lib/board-format';
 import type { AdHocTask, CalendarEvent, ScheduledAsanaTask } from '@/types';
 
 // Dumb api: the board's local stores come back empty, so cards derive purely
@@ -109,6 +110,26 @@ describe('BoardTab', () => {
     fireEvent.click(screen.getByText('Mon'));
     expect(screen.getByText('Write report')).toBeInTheDocument();
     expect(screen.queryByText('Unplanned todo')).not.toBeInTheDocument();
+  });
+
+  it('badges a rolled card with its original weekday', async () => {
+    render(
+      <BoardTab
+        asanaTasks={[asanaTask]}
+        adHocTasks={[]}
+        scheduledAsanaTasks={[
+          { ...scheduled[0], originallyPlannedFor: addDaysStr(MONDAY, -3), rolls: 2 },
+        ]}
+        metadataByGid={{}}
+        saveMetadata={jest.fn().mockResolvedValue(undefined)}
+        completeAsanaTask={jest.fn().mockResolvedValue(undefined)}
+        addTask={jest.fn().mockResolvedValue(null)}
+        updateTask={jest.fn().mockResolvedValue(null)}
+      />
+    );
+    await screen.findByText('Write report');
+    // Rolled twice → "from <weekday> · ×2".
+    expect(screen.getByText(/^from \w{3} · ×2$/)).toBeInTheDocument();
   });
 
   it('moving a card via the select fallback persists the new status', async () => {

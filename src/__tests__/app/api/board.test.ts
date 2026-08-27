@@ -14,12 +14,18 @@ jest.mock('@/lib/user-data-storage', () => ({
   getAllTaskMetadata: jest.fn(),
   getWeeklyStats: jest.fn(),
   getBlockDoneOverrides: jest.fn(),
+  getBoardRolloverState: jest.fn(),
+  runBoardRollover: jest.fn(),
   upsertBoardTaskState: jest.fn(),
+}));
+jest.mock('@/lib/workflow-config-storage', () => ({
+  getWorkflowConfig: jest.fn(),
 }));
 
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/board/route';
 import { PATCH } from '@/app/api/board/status/route';
+import { POST } from '@/app/api/board/rollover/route';
 import {
   getBoardTaskStates,
   getScheduledAsanaTasks,
@@ -29,8 +35,12 @@ import {
   getAllTaskMetadata,
   getWeeklyStats,
   getBlockDoneOverrides,
+  getBoardRolloverState,
+  runBoardRollover,
   upsertBoardTaskState,
 } from '@/lib/user-data-storage';
+import { getWorkflowConfig } from '@/lib/workflow-config-storage';
+import { logicalToday } from '@/lib/date-utils';
 
 function getReq(url: string) {
   return new NextRequest(new Request(url));
@@ -55,6 +65,10 @@ beforeEach(() => {
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
   (getWeeklyStats as jest.Mock).mockResolvedValue(null);
   (getBlockDoneOverrides as jest.Mock).mockResolvedValue({});
+  (getBoardRolloverState as jest.Mock).mockResolvedValue({});
+  (getWorkflowConfig as jest.Mock).mockResolvedValue({
+    scheduling: { dayRolloverHour: 4, workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+  });
 });
 
 describe('GET /api/board', () => {
@@ -116,6 +130,20 @@ describe('GET /api/board', () => {
     expect(body.blockDoneGoogleEventIds).toEqual(['ev1']);
   });
 
+  it('flags needsRollover when the rollover has not run for the logical day', async () => {
+    (getBoardRolloverState as jest.Mock).mockResolvedValue({ lastRolloverDay: '2020-01-01' });
+    const res = await GET(getReq('http://localhost/api/board?weekStart=2026-08-17'));
+    const body = await res.json();
+    expect(body.needsRollover).toBe(true);
+  });
+
+  it('clears needsRollover once the rollover has run for the current logical day', async () => {
+    (getBoardRolloverState as jest.Mock).mockResolvedValue({ lastRolloverDay: logicalToday(new Date(), 4) });
+    const res = await GET(getReq('http://localhost/api/board?weekStart=2026-08-17'));
+    const body = await res.json();
+    expect(body.needsRollover).toBe(false);
+  });
+
   it('defaults to the current Monday when no date is given', async () => {
     const res = await GET(getReq('http://localhost/api/board'));
     const body = await res.json();
@@ -148,5 +176,25 @@ describe('PATCH /api/board/status', () => {
     const res = await PATCH(patchReq({ key: 'asana:g1', status: 'todo' }));
     expect(res.status).toBe(400);
     expect(upsertBoardTaskState).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/board/rollover', () => {
+  it('runs the rollover with the configured hour + working days and returns the count', async () => {
+    (runBoardRollover as jest.Mock).mockResolvedValue({ rolledCount: 3, logicalDay: '2026-08-26', alreadyRan: false });
+    const res = await POST();
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ rolledCount: 3 });
+    expect(runBoardRollover).toHaveBeenCalledWith({
+      rolloverHour: 4,
+      workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    });
+  });
+
+  it('surfaces a 500 when the runner throws', async () => {
+    (runBoardRollover as jest.Mock).mockRejectedValue(new Error('boom'));
+    const res = await POST();
+    expect(res.status).toBe(500);
   });
 });

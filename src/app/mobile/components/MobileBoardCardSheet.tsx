@@ -5,7 +5,7 @@ import { Check, ExternalLink, Loader2, X } from 'lucide-react';
 import { BOARD_COLUMNS, type BoardCard, type BoardCardMember, type BoardStatus } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
 import { MobileSheet } from './MobileSheet';
-import { boardWhenLabel } from '@/lib/board-format';
+import { boardWhenLabel, rolledDetailLabel } from '@/lib/board-format';
 
 // Card detail bottom sheet: title, type, the date/time chip, the member list
 // (tap to tick each done, for grouped blocks), four big status buttons (the
@@ -33,6 +33,7 @@ export function MobileBoardCardSheet({
   const [localError, setLocalError] = useState<string | null>(null);
   const error = moveError ?? localError;
   const whenLabel = boardWhenLabel(card);
+  const rolledDetail = rolledDetailLabel(card);
   const doneCount = card.members.filter(m => m.done).length;
 
   const handleMove = async (status: BoardStatus) => {
@@ -88,6 +89,7 @@ export function MobileBoardCardSheet({
             Planned
           </div>
           <div className="text-sm text-gray-700">{whenLabel ?? 'Unplanned'}</div>
+          {rolledDetail && <div className="mt-1 text-xs text-gray-400">{rolledDetail}</div>}
         </div>
 
         {card.source === 'group' && card.members.length > 0 && (
