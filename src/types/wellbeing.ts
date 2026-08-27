@@ -51,6 +51,23 @@ export interface HabitWeekPoint {
   logged: number;
 }
 
+// One calendar day of a habit's daily series, over the window from its first
+// logged day up to yesterday (today is excluded — it may be legitimately
+// unanswered). A day with no log that is in the past counts as a miss: the
+// habits are daily, so silence is a miss rather than "unknown" here.
+export interface HabitDailyPoint {
+  date: string; // yyyy-MM-dd
+  // The day's outcome: true only when a log exists answered done.
+  done: boolean;
+  // Whether a log exists for the day at all (false = unlogged past day).
+  logged: boolean;
+  // Streak-aware EWMA (alpha 0.25), 0-1. Consecutive misses compound; a single
+  // miss followed by a done day recovers fast.
+  consistency: number;
+  // Mean of the last up-to-7 daily outcomes, 0-1.
+  rolling7: number;
+}
+
 // Free-text skip reasons grouped by their normalised form, so "too tired" and
 // "Too tired." count as the same obstacle. The original spelling of the most
 // recent occurrence is what gets shown.
@@ -74,6 +91,9 @@ export interface HabitSummary {
   currentStreak: number;
   longestStreak: number;
   byWeek: HabitWeekPoint[];
+  // Per-day outcome, consistency and rolling done-rate over the window (first
+  // logged day to yesterday). Empty until there is at least one past logged day.
+  daily: HabitDailyPoint[];
   reasons: HabitReasonGroup[];
 }
 

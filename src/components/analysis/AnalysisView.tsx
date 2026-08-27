@@ -4,20 +4,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { Loader2, RefreshCw } from 'lucide-react';
 
+import { TrendLineChart } from '@/components/charts/TrendLineChart';
+
 import { pct } from './format';
 import { StackedTimeBars } from './StackedTimeBars';
 import { TimeDrilldownModal, type DrilldownTarget } from './TimeDrilldownModal';
 import type { AnalysisResponse, ReconcileResponse, WeekSummary } from './types';
 
-// Colour scale for the trend columns: green when most of what was scheduled got
-// finished or started, amber in the middle, orange when the week was heavily
-// over-scheduled. The per-category bars split finished from started instead, so
-// they use the fixed emerald/amber pair rather than this scale.
-function rateColor(rate: number): string {
-  if (rate >= 0.8) return 'bg-emerald-500';
-  if (rate >= 0.5) return 'bg-amber-500';
-  return 'bg-orange-400';
-}
+// Emerald matches the "finished or started" accent used across the week cards.
+const COMPLETION_COLOUR = '#059669';
 
 // Working days in a normal week. A week with fewer available is not comparable
 // to a full one: less was possible, so less got done.
@@ -36,13 +31,6 @@ function outOfOfficeLabel(week: WeekSummary): string | null {
   if (out === 0) return null;
   if (daysAvailable(week) === 0) return 'away all week';
   return `${out} day${out === 1 ? '' : 's'} out of office`;
-}
-
-// A week spent away is shown neutral rather than in the "you missed a lot"
-// orange: the rate is honest, but painting an expected quiet week as a failure
-// is not.
-function trendColor(week: WeekSummary): string {
-  return daysAvailable(week) === 0 ? 'bg-gray-300' : rateColor(week.completionRate);
 }
 
 function weekLabel(weekStart: string): string {
@@ -68,6 +56,18 @@ const CARD = 'bg-white rounded-xl border border-gray-200 p-4';
 // two weeks — a single column is a data point, not a trend, and reads as broken.
 function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
   const oldestFirst = [...weeks].reverse();
+  const labels = oldestFirst.map(w => shortWeekLabel(w.weekStart));
+  // A week spent entirely away is a GAP in the line, not a zero: the rate is
+  // honest, but a low point would read as a slump when nothing was possible.
+  const values = oldestFirst.map(w =>
+    daysAvailable(w) === 0 ? null : pct(w.completionRate)
+  );
+
+  // Weeks with any days away, called out under the chart so a gap or a dip is
+  // read against the working days that were actually available.
+  const awayNotes = oldestFirst
+    .filter(w => daysOut(w) > 0)
+    .map(w => `${shortWeekLabel(w.weekStart)} (${outOfOfficeLabel(w)})`);
 
   return (
     <div className={CARD}>
@@ -75,35 +75,15 @@ function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
       <p className="text-[11px] text-gray-400 mb-3">
         Share of scheduled tasks finished or started, oldest week first.
       </p>
-      {/* The fixed height belongs to the bar track, not the column: with it on
-          the row, the track claimed every pixel and the labels above and below
-          were pushed outside the card. */}
-      <ul className="flex items-end gap-2">
-        {oldestFirst.map(week => (
-          <li key={week.weekStart} className="flex-1 flex flex-col items-center justify-end">
-            <span className="text-[11px] text-gray-500 mb-1">{pct(week.completionRate)}%</span>
-            <div className="w-full h-24 bg-gray-100 rounded-full flex flex-col justify-end overflow-hidden">
-              <div
-                className={`w-full rounded-full ${trendColor(week)}`}
-                style={{ height: `${Math.max(pct(week.completionRate), 2)}%` }}
-                aria-label={`${shortWeekLabel(week.weekStart)}: ${pct(week.completionRate)} per cent finished or started${
-                  outOfOfficeLabel(week) ? `, ${outOfOfficeLabel(week)}` : ''
-                }`}
-              />
-            </div>
-            <span className="text-[10px] text-gray-400 mt-1 truncate w-full text-center">
-              {shortWeekLabel(week.weekStart)}
-            </span>
-            {/* Days away are shown on the column itself: a low bar means
-                something different when half the week wasn't worked. */}
-            {daysOut(week) > 0 && (
-              <span className="text-[10px] text-gray-400 truncate w-full text-center">
-                🌴 {daysAvailable(week) === 0 ? 'away' : `${daysOut(week)}d out`}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      <TrendLineChart
+        labels={labels}
+        series={[{ label: 'Finished or started', color: COMPLETION_COLOUR, values }]}
+      />
+      {awayNotes.length > 0 && (
+        <p className="mt-2 text-[11px] text-gray-400">
+          🌴 Out of office: {awayNotes.join(', ')}. Weeks away all week are shown as a gap.
+        </p>
+      )}
     </div>
   );
 }

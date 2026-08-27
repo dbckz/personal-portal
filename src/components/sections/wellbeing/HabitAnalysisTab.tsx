@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 
 import { api } from '@/lib/api';
+import { TrendLineChart } from '@/components/charts/TrendLineChart';
 import type { HabitSummary, WellbeingAnalysis } from '@/types/wellbeing';
+
+// Consistency in emerald, the 7-day rolling done-rate in indigo — the same
+// colourblind-validated pair the exercise adherence chart uses.
+const CONSISTENCY_COLOUR = '#059669';
+const ROLLING_COLOUR = '#6366f1';
 
 // The windows offered above the analysis. 90 days matches the API default.
 const WINDOWS = [
@@ -159,6 +165,8 @@ function HabitCard({ habit }: { habit: HabitSummary }) {
         <Stat label="Longest streak" value={String(habit.longestStreak)} />
       </div>
 
+      <HabitDailyChart habit={habit} />
+
       {habit.byWeek.length > 0 && (
         <div className="mt-4">
           <h4 className="text-[11px] uppercase tracking-wide text-gray-500 mb-1.5">By week</h4>
@@ -212,6 +220,37 @@ function HabitCard({ habit }: { habit: HabitSummary }) {
         </div>
       )}
     </section>
+  );
+}
+
+// The daily consistency chart. Needs at least two past days to draw a line —
+// a single point is not a trend.
+function HabitDailyChart({ habit }: { habit: HabitSummary }) {
+  if (habit.daily.length < 2) return null;
+
+  const labels = habit.daily.map(d => format(parseISO(d.date), 'd MMM'));
+  const series = [
+    {
+      label: 'Consistency',
+      color: CONSISTENCY_COLOUR,
+      values: habit.daily.map(d => d.consistency * 100),
+    },
+    {
+      label: '7-day rate',
+      color: ROLLING_COLOUR,
+      values: habit.daily.map(d => d.rolling7 * 100),
+    },
+  ];
+
+  return (
+    <div className="mt-4">
+      <h4 className="text-[11px] uppercase tracking-wide text-gray-500 mb-1.5">Daily consistency</h4>
+      <TrendLineChart labels={labels} series={series} height={168} />
+      <p className="mt-1.5 text-[11px] text-gray-400">
+        Consistency weights recent days most — consecutive misses compound, a single miss recovers
+        fast. An unlogged past day counts as a miss.
+      </p>
+    </div>
   );
 }
 

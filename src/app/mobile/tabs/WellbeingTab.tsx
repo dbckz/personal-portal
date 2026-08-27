@@ -5,6 +5,7 @@ import { format, parseISO } from 'date-fns';
 import { FlaskConical, HeartPulse, Pencil, Plus, Trash2 } from 'lucide-react';
 
 import { api } from '@/lib/api';
+import { TrendLineChart } from '@/components/charts/TrendLineChart';
 import { useToast } from '@/hooks/useToast';
 import type {
   Experiment,
@@ -14,6 +15,11 @@ import type {
 } from '@/types/wellbeing';
 import { MobileHabitCheckCard } from '../components/MobileHabitCheckCard';
 import { MobileExperimentSheet } from '../components/MobileExperimentSheet';
+
+// Same colourblind-validated pair as desktop: consistency emerald, 7-day rate
+// indigo.
+const CONSISTENCY_COLOUR = '#059669';
+const ROLLING_COLOUR = '#6366f1';
 
 // Mobile Wellbeing is read/write, matching desktop: today's habits are answered
 // in the card up top, and experiments can be created, checked in on, edited and
@@ -87,6 +93,31 @@ export function WellbeingTab({
                   {habit.daysDone}/{habit.daysLogged} logged days
                   {habit.reasons[0] ? ` · usually: ${habit.reasons[0].reason}` : ''}
                 </p>
+                {habit.daily.length >= 2 && (
+                  <div className="mt-3">
+                    <TrendLineChart
+                      labels={habit.daily.map(d => format(parseISO(d.date), 'd MMM'))}
+                      series={[
+                        {
+                          label: 'Consistency',
+                          color: CONSISTENCY_COLOUR,
+                          values: habit.daily.map(d => d.consistency * 100),
+                        },
+                        {
+                          label: '7-day rate',
+                          color: ROLLING_COLOUR,
+                          values: habit.daily.map(d => d.rolling7 * 100),
+                        },
+                      ]}
+                      height={120}
+                      compact
+                    />
+                    <p className="mt-1 text-[10px] text-gray-400">
+                      Consistency weights recent days most — consecutive misses compound, a single
+                      miss recovers fast.
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
           </div>

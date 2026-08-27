@@ -204,3 +204,126 @@ describe('computeWellbeingAnalysis', () => {
     expect(meditate(analysis).daysLogged).toBe(1);
   });
 });
+
+describe('computeWellbeingAnalysis — habit daily series', () => {
+  it('holds consistency at 1 when every day is done', () => {
+    const analysis = computeWellbeingAnalysis(
+      [
+        day('2026-08-01', [yes('meditate')]),
+        day('2026-08-02', [yes('meditate')]),
+        day('2026-08-03', [yes('meditate')]),
+        day('2026-08-04', [yes('meditate')]),
+        day('2026-08-05', [yes('meditate')]),
+        day('2026-08-06', [yes('meditate')]),
+      ],
+      '2026-08-01',
+      '2026-08-07' // to = today, excluded
+    );
+
+    const daily = meditate(analysis).daily;
+    // First logged day (1 Aug) to yesterday (6 Aug) inclusive.
+    expect(daily.map(d => d.date)).toEqual([
+      '2026-08-01',
+      '2026-08-02',
+      '2026-08-03',
+      '2026-08-04',
+      '2026-08-05',
+      '2026-08-06',
+    ]);
+    expect(daily.every(d => d.done && d.logged)).toBe(true);
+    expect(daily.every(d => d.consistency === 1 && d.rolling7 === 1)).toBe(true);
+  });
+
+  it('dips far deeper for three consecutive misses than one isolated miss', () => {
+    // Same length, same number of done days at the edges — only the run differs.
+    const isolated = computeWellbeingAnalysis(
+      [
+        day('2026-08-01', [yes('meditate')]),
+        day('2026-08-02', [yes('meditate')]),
+        day('2026-08-03', [no('meditate', 'Ill')]),
+        day('2026-08-04', [yes('meditate')]),
+        day('2026-08-05', [yes('meditate')]),
+        day('2026-08-06', [yes('meditate')]),
+      ],
+      '2026-08-01',
+      '2026-08-07'
+    );
+    const consecutive = computeWellbeingAnalysis(
+      [
+        day('2026-08-01', [yes('meditate')]),
+        day('2026-08-02', [yes('meditate')]),
+        day('2026-08-03', [no('meditate', 'Ill')]),
+        day('2026-08-04', [no('meditate', 'Ill')]),
+        day('2026-08-05', [no('meditate', 'Ill')]),
+        day('2026-08-06', [yes('meditate')]),
+      ],
+      '2026-08-01',
+      '2026-08-07'
+    );
+
+    const lowestIsolated = Math.min(...isolated.habits.find(h => h.habitId === 'meditate')!.daily.map(d => d.consistency));
+    const lowestConsecutive = Math.min(...consecutive.habits.find(h => h.habitId === 'meditate')!.daily.map(d => d.consistency));
+
+    // The isolated miss only ever pulls the score to 0.75; three in a row
+    // compound well below half of that dip.
+    expect(lowestIsolated).toBeCloseTo(0.75, 5);
+    expect(lowestConsecutive).toBeLessThan(0.45);
+    expect(lowestIsolated - lowestConsecutive).toBeGreaterThan(0.3);
+  });
+
+  it('counts an unlogged past day as a miss', () => {
+    const analysis = computeWellbeingAnalysis(
+      [
+        day('2026-08-01', [yes('meditate')]),
+        // 2–4 Aug never logged, all in the past.
+        day('2026-08-05', [yes('meditate')]),
+      ],
+      '2026-08-01',
+      '2026-08-06'
+    );
+
+    const daily = meditate(analysis).daily;
+    expect(daily.map(d => d.date)).toEqual([
+      '2026-08-01',
+      '2026-08-02',
+      '2026-08-03',
+      '2026-08-04',
+      '2026-08-05',
+    ]);
+    // The unlogged days are misses, and marked as not logged.
+    expect(daily[1]).toMatchObject({ date: '2026-08-02', done: false, logged: false });
+    expect(daily[3]).toMatchObject({ date: '2026-08-04', done: false, logged: false });
+    // Three consecutive misses pull consistency well down before it recovers.
+    expect(daily[3].consistency).toBeLessThan(0.5);
+  });
+
+  it('excludes today from the daily series', () => {
+    const analysis = computeWellbeingAnalysis(
+      [
+        day('2026-08-01', [yes('meditate')]),
+        day('2026-08-05', [yes('meditate')]), // this is `to` — today
+      ],
+      '2026-08-01',
+      '2026-08-05'
+    );
+
+    const daily = meditate(analysis).daily;
+    expect(daily.some(d => d.date === '2026-08-05')).toBe(false);
+    expect(daily[daily.length - 1].date).toBe('2026-08-04');
+  });
+
+  it('returns no daily points when a habit was only logged today', () => {
+    const analysis = computeWellbeingAnalysis(
+      [day('2026-08-05', [yes('meditate')])],
+      '2026-08-01',
+      '2026-08-05'
+    );
+
+    expect(meditate(analysis).daily).toEqual([]);
+  });
+
+  it('returns an empty daily series when nothing has been logged', () => {
+    const analysis = computeWellbeingAnalysis([], '2026-08-01', '2026-08-07');
+    expect(meditate(analysis).daily).toEqual([]);
+  });
+});

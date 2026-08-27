@@ -13,12 +13,18 @@ import { format, parseISO, startOfWeek } from 'date-fns';
 
 import { HABITS } from './wellbeing-habits';
 import type {
+  HabitDailyPoint,
   HabitReasonGroup,
   HabitSummary,
   HabitWeekPoint,
   WellbeingAnalysis,
   WellbeingDay,
 } from '@/types/wellbeing';
+
+// How much each new day moves the consistency score. Low enough that a single
+// miss barely dents it, high enough that consecutive misses compound quickly.
+const CONSISTENCY_ALPHA = 0.25;
+const ROLLING_WINDOW = 7;
 
 // How many notes the tab shows before it stops being a summary and starts being
 // a diary.
@@ -83,6 +89,54 @@ function eachDate(from: string, to: string): string[] {
   return dates;
 }
 
+// The day before `to` — "yesterday". Today (`to`) is excluded from the daily
+// series because it may be legitimately unanswered, exactly as the streak logic
+// forgives it.
+function dayBefore(date: string): string {
+  const d = parseISO(date);
+  d.setDate(d.getDate() - 1);
+  return format(d, 'yyyy-MM-dd');
+}
+
+// Per-day series for one habit, running from its first logged day to yesterday.
+// The habits are daily, so an unlogged past day is a MISS, not "unknown" (unlike
+// the streak/rate logic, which is deliberately agnostic about unlogged days).
+//
+// The consistency score is an EWMA `s_t = s_{t-1} + alpha*(x_t - s_{t-1})`
+// seeded at the first day's outcome. It weights recent days most: consecutive
+// misses compound (each further miss multiplies the drop), while a single miss
+// followed by a done day recovers fast — the behaviour we want for habits.
+function dailySeries(doneByDate: Map<string, boolean>, to: string): HabitDailyPoint[] {
+  if (doneByDate.size === 0) return [];
+  const logged = [...doneByDate.keys()].sort();
+  const first = logged[0];
+  const end = dayBefore(to);
+  if (first > end) return []; // only logged today — no past history yet
+
+  const dates = eachDate(first, end);
+  const out: HabitDailyPoint[] = [];
+  const outcomes: number[] = [];
+  let consistency = 0;
+
+  dates.forEach((date, i) => {
+    const answer = doneByDate.get(date);
+    const isLogged = answer !== undefined;
+    const done = answer === true;
+    // Done → 1; answered-no OR unlogged-past-day → 0.
+    const x = done ? 1 : 0;
+    outcomes.push(x);
+
+    consistency = i === 0 ? x : consistency + CONSISTENCY_ALPHA * (x - consistency);
+
+    const window = outcomes.slice(-ROLLING_WINDOW);
+    const rolling7 = window.reduce((a, b) => a + b, 0) / window.length;
+
+    out.push({ date, done, logged: isLogged, consistency, rolling7 });
+  });
+
+  return out;
+}
+
 function summariseHabit(
   habitId: string,
   label: string,
@@ -134,6 +188,7 @@ function summariseHabit(
     currentStreak: currentStreak(doneByDate, dates, to),
     longestStreak: longestStreak(doneByDate, dates),
     byWeek: [...weeks.values()].sort((a, b) => a.weekStart.localeCompare(b.weekStart)),
+    daily: dailySeries(doneByDate, to),
     reasons: [...reasons.values()].sort(
       (a, b) => b.count - a.count || b.lastOn.localeCompare(a.lastOn)
     ),

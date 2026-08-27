@@ -11,6 +11,15 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import { AnalysisView } from '@/components/analysis/AnalysisView';
 import type { AnalysisResponse, WeekSummary } from '@/components/analysis/types';
 
+// The completion trend chart measures its container; jsdom has no ResizeObserver.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(global as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
+  ResizeObserverStub;
+
 function week(overrides: Partial<WeekSummary> = {}): WeekSummary {
   return {
     weekStart: '2026-07-13',
@@ -111,13 +120,15 @@ describe('AnalysisView', () => {
     expect(screen.getByText(/appears once a second week completes/i)).toBeInTheDocument();
   });
 
-  it('renders a trend column per week once two weeks exist', async () => {
+  it('renders a trend point per week once two weeks exist', async () => {
     await renderLoaded(
       response({ weeks: [week({ weekStart: '2026-07-20', completionRate: 0.9 }), week()] })
     );
 
-    expect(screen.getByLabelText('13 Jul: 25 per cent finished or started')).toBeInTheDocument();
-    expect(screen.getByLabelText('20 Jul: 90 per cent finished or started')).toBeInTheDocument();
+    // Oldest first: 13 Jul (25%) then 20 Jul (90%), each a hover/tap hit-zone
+    // on the line chart.
+    expect(screen.getByLabelText('13 Jul: Finished or started: 25%')).toBeInTheDocument();
+    expect(screen.getByLabelText('20 Jul: Finished or started: 90%')).toBeInTheDocument();
   });
 
   it('shows an error state when the request fails', async () => {
