@@ -712,6 +712,17 @@ describe('mutually-exclusive exercise variants — one calf raise per session', 
     expect(exclusiveGroup('Leg press')).toBeUndefined();
   });
 
+  it('groups every pull-up spelling together, leaving pulldowns and rows alone', () => {
+    // Dave's 27 Aug home session paired the pull-up stand-in with a neutral-grip
+    // pull-up accessory — on a home bar the same movement twice.
+    expect(exclusiveGroup('Pull-ups or band-assisted pull-ups')).toBe('pull-up');
+    expect(exclusiveGroup('Neutral-grip pull-up')).toBe('pull-up');
+    expect(exclusiveGroup('Wide-grip pull-up')).toBe('pull-up');
+    expect(exclusiveGroup('Wide-grip lat pulldown')).toBeUndefined();
+    expect(exclusiveGroup('Face pull')).toBeUndefined();
+    expect(exclusiveGroup('Band pull-apart')).toBeUndefined();
+  });
+
   it('keeps only the first calf-raise variant the model returns, dropping later ones', () => {
     const legs = buildProgrammerInput(
       [

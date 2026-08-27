@@ -331,7 +331,7 @@ Program the session as a coach would. Apply this judgement:
 - How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
-- Some exercises are variants of the same movement — in particular calf raises with and without a step ("Standing calf raise", "Standing calf raise (step)", "Standing calf raise (no step)"). A session must include at most one variant: pick one, never both.
+- Some exercises are variants of the same movement — in particular calf raises with and without a step ("Standing calf raise", "Standing calf raise (step)", "Standing calf raise (no step)"), and pull-up variants ("Pull-ups", "Neutral-grip pull-up", "Band-assisted pull-ups"). A session must include at most one variant of a movement: pick one, never both.
 - Resistance band exercises are a home-workout tool: in a planned GYM session never include them or substitute band variants for gym lifts. (If a HOME SESSION block appears below, that rule is reversed — follow the home block.)
 - Treat each part of the day's focus as its own mini-session: on a combined day (e.g. Pull + Legs) programme EACH group properly — a combined day is naturally longer than a single-group day, so do not thin out one group to make room for the other.
 - Ordering. If the session includes a run or treadmill piece, put it FIRST. Include at most one run/cardio piece per session. After any cardio, order the rows as the REQUIRED anchors (in the order listed), then the REQUIRED staples, then the accessories — the fixed exercises come before the accessories.
@@ -592,16 +592,21 @@ function cleanTarget(raw: unknown, cardio?: { name: string; recent: ProgressionP
 }
 
 // Mutually-exclusive exercise variants: exercises that are variants of the same
-// movement, of which a session must contain at most ONE. Dave's rule, 27 Aug
-// 2026: never a step and a no-step calf raise in the same session. The three
-// "Standing calf raise" spellings stay distinct exercises with separate
-// histories, but only one may be programmed on any given day.
+// movement, of which a session must contain at most ONE. Dave's rules, 27 Aug
+// 2026: never a step and a no-step calf raise in the same session, and never
+// two pull-up rows (his 27 Aug home session paired "Pull-ups or band-assisted
+// pull-ups" — the lat-pulldown stand-in — with a "Neutral-grip pull-up"
+// accessory; on a home bar those are the same movement). The variant spellings
+// stay distinct exercises with separate histories, but only one may be
+// programmed on any given day. "Lat pulldown" and "Face pull" don't match the
+// pull-up pattern, so a gym Pull day keeps its pulldown alongside nothing worse.
 //
 // Each rule maps a name-matcher to a group id; the first row whose name belongs
 // to a group survives, later ones in that group are dropped (like the single-
 // cardio rule). To add a new exclusion, append a rule here — nothing else changes.
 const EXCLUSIVE_VARIANT_RULES: Array<{ match: (name: string) => boolean; group: string }> = [
   { match: name => /calf raise/i.test(name), group: 'calf-raise' },
+  { match: name => /pull[- ]?ups?\b/i.test(name), group: 'pull-up' },
 ];
 
 // The exclusive-variant group an exercise belongs to, or undefined if it belongs
