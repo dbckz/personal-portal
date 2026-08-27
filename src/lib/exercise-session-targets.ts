@@ -149,9 +149,13 @@ export async function resolveSessionTargets(
   // already surface here through component selection; ones with no history yet
   // are not represented in this fallback — only in the AI path, which guarantees
   // them. Left as-is because building no-history targets here is not cheap.)
-  const targets = markFixedTargets(
-    buildSessionTargets(progressions, components, 8, venue ? { venue } : {}),
-    routineDay
+  // The one-variant-per-session rule applies here too: the fallback is built
+  // straight from history, which can carry both spellings of a movement.
+  const targets = dropExclusiveDuplicates(
+    markFixedTargets(
+      buildSessionTargets(progressions, components, 8, venue ? { venue } : {}),
+      routineDay
+    )
   );
   return { plan, components, targets, source: 'fallback', input, hash };
 }

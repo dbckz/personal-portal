@@ -645,9 +645,10 @@ function claimVariantGroup(name: string, seenVariantGroups: Set<string>): boolea
 
 // Keep the first row of each exclusive-variant group, drop any later ones (a
 // second calf-raise). A pure pass over already-built rows: used on the cached
-// read path to fix programmes cached before the exclusion rule, which re-runs
-// post-processing without regenerating. Rows in no group are always kept.
-export function dropExclusiveDuplicates(rows: ProgrammeRow[]): ProgrammeRow[] {
+// read path to fix programmes cached before the exclusion rule, and on the
+// deterministic fallback targets, which validateProgramme never sees. Rows in
+// no group are always kept.
+export function dropExclusiveDuplicates<T extends { name: string }>(rows: T[]): T[] {
   const seenVariantGroups = new Set<string>();
   return rows.filter(row => claimVariantGroup(row.name, seenVariantGroups));
 }
