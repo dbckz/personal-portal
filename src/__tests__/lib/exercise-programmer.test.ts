@@ -732,6 +732,12 @@ describe('mutually-exclusive exercise variants — one calf raise per session', 
     expect(exclusiveGroup('Goblet squat')).toBeUndefined();
   });
 
+  it('groups both glute bridge variants together', () => {
+    expect(exclusiveGroup('Glute bridge')).toBe('glute-bridge');
+    expect(exclusiveGroup('Single-leg glute bridge')).toBe('glute-bridge');
+    expect(exclusiveGroup('Hip thrust')).toBeUndefined();
+  });
+
   it('keeps only the first calf-raise variant the model returns, dropping later ones', () => {
     const legs = buildProgrammerInput(
       [

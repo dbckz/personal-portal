@@ -618,6 +618,10 @@ const EXCLUSIVE_VARIANT_RULES: Array<{ match: (name: string) => boolean; group: 
   // "feels similar" — it is). Plain squats deliberately do NOT match: the
   // bodyweight-squat home stand-in must be able to sit beside a split squat.
   { match: name => /\blunges?\b|split squat/i.test(name), group: 'single-leg-knee-dominant' },
+  // Two-leg and single-leg glute bridges never share a session (Dave, 27 Aug
+  // 2026). On a home Pull + Legs day the plain bridge (the seated-leg-curl
+  // stand-in) met the single-leg staple; one of them is enough.
+  { match: name => /glute bridge/i.test(name), group: 'glute-bridge' },
 ];
 
 // The exclusive-variant group an exercise belongs to, or undefined if it belongs
