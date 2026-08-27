@@ -392,7 +392,10 @@ const STAND_IN_RULES: Array<{ gym: string[]; standIn: HomeStandIn }> = [
     gym: ['Chest-supported DB row', 'Seated cable row', 'Cable row'],
     standIn: { name: 'Band rows', sets: 3, reps: 12 },
   },
-  { gym: ['Leg press'], standIn: { name: 'Reverse lunge', sets: 3, reps: 10, perSide: true } },
+  // Bodyweight squats, not a lunge: the reverse lunge was near-identical to the
+  // Bulgarian split squat anchor it sat next to on home Pull + Legs days
+  // (Dave, 27 Aug 2026).
+  { gym: ['Leg press'], standIn: { name: 'Bodyweight squat', sets: 3, reps: 15 } },
   { gym: ['Seated leg curl'], standIn: { name: 'Glute bridge', sets: 3, reps: 15 } },
   {
     gym: ['Cable lateral raise', 'DB lateral raise'],
