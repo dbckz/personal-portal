@@ -272,7 +272,10 @@ export function programmeHash(input: ProgrammerInput): string {
     ...(input.plan.venue ? { venue: input.plan.venue } : {}),
     // A home programme is built around the stand-in map, so editing a stand-in
     // must regenerate it. Home-only, so every gym-day hash stays byte-identical.
-    ...(input.plan.venue === 'home' ? { standIns: STAND_IN_RULES } : {}),
+    // The version bumps when home programming RULES change (no-step calf rename,
+    // the home-doable-anchor substitution guard) so already-cached home plans
+    // regenerate under the new rules.
+    ...(input.plan.venue === 'home' ? { standIns: STAND_IN_RULES, homeRules: 2 } : {}),
     ...(input.plan.targetDistanceKm !== undefined
       ? { targetDistanceKm: input.plan.targetDistanceKm }
       : {}),
@@ -478,6 +481,8 @@ function buildHomeBlock(
     'Never programme a machine, cable, dumbbell or barbell lift — none of that exists here.',
     "For each REQUIRED routine anchor/staple that needs gym equipment, programme the closest home stand-in and set \"standsInFor\" to that anchor's exact name. Canonical stand-ins:",
     standInSuggestions(),
+    'Substitute ONLY a fixed lift that needs gym equipment. An anchor or staple already doable with bands or bodyweight (a split squat, a glute bridge) MUST be kept as itself — never replaced with a different movement.',
+    'Calf raises at home are done on the flat: programme "Standing calf raise (no step)", never a (step) variant.',
     'Band and bodyweight targets use sets and reps (or holdSeconds for a hold) — no weightKg.',
     `Cardio is done outdoors — name the run "Outdoor run" (never "Treadmill run") and ${runTarget}.`,
     "Keep the day's muscle focus (a Push day stays push — do not bolt on core unless the routine day already has core staples).",
@@ -689,11 +694,26 @@ export function validateProgramme(
     let name = typeof record.name === 'string' ? record.name.trim() : '';
     if (!name) continue;
     // At home there is no treadmill: any treadmill row is the outdoor run, so
-    // rename it (and recompute its key) before looking it up.
+    // rename it (and recompute its key) before looking it up. Likewise no step
+    // to raise off — any calf-raise row becomes the no-step variant (Dave,
+    // 27 Aug 2026), driven by its own history.
     if (home && /treadmill/i.test(name)) name = 'Outdoor run';
+    if (home && /calf raise/i.test(name)) name = 'Standing calf raise (no step)';
     const key = exerciseKey(name);
     const known = byKey.get(key);
     if (!known || seen.has(key)) continue; // unknown or duplicate exercise
+
+    // A stand-in for a fixed lift the model should have kept: substituting an
+    // anchor/staple that is itself home-doable (the model swapped the Bulgarian
+    // split squat for a reverse lunge) is invalid — drop the row BEFORE it can
+    // claim a variant group, so guaranteeFixed appends the real lift unhindered.
+    const claimedStandInKey =
+      typeof record.standsInFor === 'string' ? exerciseKey(record.standsInFor) : '';
+    if (claimedStandInKey && claimedStandInKey !== key && fixedKeyToName.has(claimedStandInKey)) {
+      const fixedLift = byKey.get(claimedStandInKey);
+      if (fixedLift && isHomeExercise(fixedLift)) continue;
+    }
+
     // A second variant of an exclusive group (a second calf-raise) — drop it.
     if (!claimVariantGroup(known.name, seenVariantGroups)) continue;
     seen.add(key);

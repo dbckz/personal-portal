@@ -1182,6 +1182,73 @@ describe('home session — vocabulary, hash, prompt and stand-ins', () => {
     expect(rows.some(r => r.standsInFor === 'Shoulder press machine')).toBe(false);
   });
 
+  it('renames a home calf-raise row to the no-step variant, driven by its own history', () => {
+    const input = buildProgrammerInput(
+      [
+        progression('Bulgarian split squat', [{ date: '2026-08-14', sets: 3, reps: 10 }], 4),
+        progression('Standing calf raise (step)', [{ date: '2026-08-14', sets: 3, reps: 15 }], 3),
+        progression('Standing calf raise (no step)', [{ date: '2026-08-14', sets: 3, reps: 12 }], 3),
+      ],
+      {
+        label: 'Legs',
+        components: ['Legs'],
+        venue: 'home',
+        routineDay: { title: 'Legs', anchors: ['Bulgarian split squat'], staples: [] },
+      },
+      '2026-08-21',
+      8
+    );
+    const rows = validateProgramme(
+      [
+        { name: 'Bulgarian split squat', kind: 'core', toFailure: false, target: { sets: 3, reps: 10 } },
+        // The model picked the step variant — at home there is no step.
+        { name: 'Standing calf raise (step)', kind: 'rotation', toFailure: false, target: { sets: 3, reps: 15 } },
+      ],
+      input
+    );
+    const calf = rows.filter(r => /calf raise/i.test(r.name));
+    expect(calf).toHaveLength(1);
+    expect(calf[0].name).toBe('Standing calf raise (no step)');
+    // The renamed row carries the no-step variant's own history, not the step's.
+    expect(calf[0].lastSummary).toContain('3 × 12');
+  });
+
+  it('drops a stand-in that replaces a home-doable anchor, so the real lift is guaranteed', () => {
+    const input = buildProgrammerInput(
+      [
+        progression('Bulgarian split squat', [{ date: '2026-08-14', sets: 3, reps: 10 }], 4),
+        progression('Reverse lunge', [{ date: '2026-08-14', sets: 3, reps: 12 }], 3),
+      ],
+      {
+        label: 'Legs',
+        components: ['Legs'],
+        venue: 'home',
+        routineDay: { title: 'Legs', anchors: ['Bulgarian split squat'], staples: [] },
+      },
+      '2026-08-21',
+      8
+    );
+    const rows = validateProgramme(
+      [
+        // The model substituted a bodyweight anchor it should have kept.
+        {
+          name: 'Reverse lunge',
+          kind: 'core',
+          toFailure: false,
+          standsInFor: 'Bulgarian split squat',
+          target: { sets: 3, reps: 12 },
+        },
+      ],
+      input
+    );
+    // The bogus stand-in is dropped (it must not claim the single-leg variant
+    // group either) and guaranteeFixed appends the real anchor.
+    expect(rows.some(r => r.name === 'Reverse lunge')).toBe(false);
+    const anchor = rows.find(r => r.name === 'Bulgarian split squat');
+    expect(anchor).toBeDefined();
+    expect(anchor!.fixed).toBe('anchor');
+  });
+
   it('offers a built-in home vocabulary on home days, filtered to the day’s focus', () => {
     const homeNames = homeInput('home').exercises.map(e => e.name);
     const gymNames = homeInput().exercises.map(e => e.name);
