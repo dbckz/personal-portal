@@ -10,22 +10,39 @@ import {
   runBoardRollover,
   getScheduledAsanaTasks,
   getAdHocTasks,
+  getPrepBlocks,
   getBoardRolloverState,
 } from '@/lib/user-data-storage';
 import { __resetDbForTests } from '@/lib/storage/db';
 import type { AdHocTask, ScheduledAsanaTask } from '@/types';
+import type { PrepBlock } from '@/lib/storage/core';
 
 // Local noon on a given day, so logicalToday (04:00 rollover) resolves to it.
 function noon(y: number, m: number, d: number): Date {
   return new Date(y, m - 1, d, 12, 0, 0);
 }
 
-async function seed(scheduled: ScheduledAsanaTask[], adhoc: AdHocTask[]) {
+async function seed(scheduled: ScheduledAsanaTask[], adhoc: AdHocTask[], prepBlocks: PrepBlock[] = []) {
   const data = await getUserData();
   data.scheduledAsanaTasks = scheduled;
   data.adHocTasks = adhoc;
+  data.prepBlocks = prepBlocks;
   await saveUserData(data);
 }
+
+const prepBlock: PrepBlock = {
+  id: 'pb1',
+  googleEventId: 'ev1',
+  googleIntegrationId: 'gi',
+  meetingEventId: 'm1',
+  meetingTitle: 'Meeting',
+  meetingStart: '2026-08-28T12:00:00.000Z',
+  date: '2026-08-24',
+  start: '09:00',
+  durationMinutes: 30,
+  done: false,
+  createdAt: '',
+};
 
 const sched: ScheduledAsanaTask = {
   id: 's1',
@@ -77,9 +94,9 @@ describe('runBoardRollover', () => {
 
   it('dedupes duplicate overdue records for one task: one rolls, the rest are deleted', async () => {
     const dupes: ScheduledAsanaTask[] = [
-      { ...sched, id: 'd1', asanaTaskId: 'gdup', scheduledDate: '2026-08-20' },
-      { ...sched, id: 'd2', asanaTaskId: 'gdup', scheduledDate: '2026-08-24' },
-      { ...sched, id: 'd3', asanaTaskId: 'gdup', scheduledDate: '2026-08-18' },
+      { ...sched, id: 'd1', asanaTaskId: 'gdup', scheduledDate: '2026-08-24' },
+      { ...sched, id: 'd2', asanaTaskId: 'gdup', scheduledDate: '2026-08-25' },
+      { ...sched, id: 'd3', asanaTaskId: 'gdup', scheduledDate: '2026-08-24' },
     ];
     await seed(dupes, []);
 
@@ -89,6 +106,33 @@ describe('runBoardRollover', () => {
     const remaining = await getScheduledAsanaTasks();
     expect(remaining.map(s => s.id)).toEqual(['d2']);
     expect(remaining[0]).toMatchObject({ scheduledDate: '2026-08-26', rolls: 1 });
+  });
+
+  it('rolls an overdue prep block forward (date-only) when its meeting is still to come', async () => {
+    await seed([], [], [{ ...prepBlock }]);
+
+    const res = await runBoardRollover({ now: noon(2026, 8, 26), rolloverHour: 4 });
+    expect(res).toMatchObject({ rolledCount: 1, alreadyRan: false });
+
+    const [pb] = await getPrepBlocks();
+    // Date moved forward; the block's start time is untouched.
+    expect(pb).toMatchObject({
+      date: '2026-08-26',
+      start: '09:00',
+      originallyPlannedFor: '2026-08-24',
+      rolls: 1,
+    });
+  });
+
+  it('leaves an overdue prep block put once its meeting has passed', async () => {
+    const past = { ...prepBlock, meetingStart: '2026-08-25T12:00:00.000Z' };
+    await seed([], [], [past]);
+
+    const res = await runBoardRollover({ now: noon(2026, 8, 26), rolloverHour: 4 });
+    expect(res.rolledCount).toBe(0);
+
+    const [pb] = await getPrepBlocks();
+    expect(pb.date).toBe('2026-08-24'); // unchanged
   });
 
   it('rolls again on a NEW logical day, preserving the original date and incrementing rolls', async () => {

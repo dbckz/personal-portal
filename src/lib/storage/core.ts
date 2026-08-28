@@ -60,6 +60,11 @@ export interface PrepBlock {
   durationMinutes: number;
   done: boolean;
   createdAt: string;
+  // Rollover bookkeeping (set when the daily rollover moves an unfinished prep
+  // block forward, so the card can be badged "from Tue"). Mirrors the task
+  // records — see src/lib/board-rollover.ts. Absent on a never-rolled block.
+  originallyPlannedFor?: string; // yyyy-MM-dd the block was first planned for
+  rolls?: number; // times it has been rolled
 }
 
 // A daily-ritual block (lunch / exercise / emails) the "Plan my week" flow

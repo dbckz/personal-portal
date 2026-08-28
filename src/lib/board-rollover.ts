@@ -6,16 +6,28 @@
 // day that has already passed. The task's ORIGINAL planned date is remembered
 // (once) and a roll counter incremented, so the card can be badged ("from Tue").
 //
+// The rollover is constrained to the CURRENT WEEK (Monday-start): only a record
+// dated on or after this week's Monday and before the logical day is a rollover
+// candidate. Anything dated before this week's Monday is out of scope entirely —
+// never rolled forward and never removed — because cross-week carryover is owned
+// by the end-of-week review / week planning, not the daily rollover. (Without
+// this bound the first run would sweep in unfinished tasks from weeks or months
+// ago.)
+//
 // This module is I/O-free and deterministic: it decides WHAT to roll and to
 // WHEN; the storage layer (lib/storage/board-rollover) reads the inputs, applies
-// the plan and stamps the last-run day. Rituals and prep blocks are never rolled
-// — a lapsed routine simply has tomorrow's own instance. Undated tasks are left
-// untouched. The Google Calendar event is never moved: this is a date-only move
-// on the local record, mirroring the board's own view of a card's date.
+// the plan and stamps the last-run day. RITUALS are never rolled — a lapsed
+// routine simply has tomorrow's own instance. PREP BLOCKS, by contrast, ARE
+// rolled: a prep block is a one-off tied to a specific meeting, so an unfinished
+// overdue one moves forward like a task — but only while its meeting is still to
+// come (see the prep pass below). Undated tasks are left untouched. The Google
+// Calendar event is never moved: this is a date-only move on the local record,
+// mirroring the board's own view of a card's date.
 
-import { boardKeyForAdhoc, boardKeyForBlock, boardKeyForSched } from '@/lib/board';
+import { boardKeyForAdhoc, boardKeyForBlock, boardKeyForSched, weekStartFor } from '@/lib/board';
 import { isWorkingDay } from '@/lib/scheduling/end-of-week';
 import { formatLocalDate } from '@/lib/date-utils';
+import type { PrepBlock } from '@/lib/storage/core';
 import type { AdHocTask, BoardTaskState, ScheduledAsanaTask } from '@/types';
 
 // --- Date helpers (yyyy-MM-dd, built from local parts so a bare date never
@@ -70,6 +82,17 @@ function adhocDone(t: AdHocTask, facts: DoneFacts): boolean {
   return false;
 }
 
+// A prep block is block-backed (it has a googleEventId), so its done-ness is the
+// block's own `done` flag OR the same board-state / block-done facts the board's
+// prep card reads (deriveBoardCardStatus, source 'prep': prepDone || blockDone).
+function prepBlockDone(pb: PrepBlock, facts: DoneFacts): boolean {
+  if (pb.done) return true;
+  const key = boardKeyForBlock(pb.googleEventId);
+  if (facts.states[key]?.status === 'done') return true;
+  if (facts.blockDoneEventIds.has(pb.googleEventId)) return true;
+  return false;
+}
+
 // --- Plan -------------------------------------------------------------------
 
 export interface RolloverInput extends DoneFacts {
@@ -77,6 +100,7 @@ export interface RolloverInput extends DoneFacts {
   workingDays?: string[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
   adHocTasks: AdHocTask[];
+  prepBlocks: PrepBlock[];
   // taskId → yyyy-MM-dd resume date; a task deferred to a FUTURE date is parked
   // and must not be rolled back onto the board.
   deferrals: Record<string, string>;
@@ -94,6 +118,9 @@ export interface RolledEntry {
 export interface RolloverPlan {
   scheduled: RolledEntry[];
   adhoc: RolledEntry[];
+  // Prep blocks moved forward (one record per block; no dedupe — see the prep
+  // pass). A prep block is never removed, only moved or left in place.
+  prep: RolledEntry[];
   // Duplicate overdue records to delete (a task re-planned across weeks has one
   // scheduled entry per week; only one survives — see decideTaskRollover).
   removeScheduledIds: string[];
@@ -121,12 +148,20 @@ function isDeferredForward(taskId: string, logicalToday: string, deferrals: Reco
 // an originallyPlannedFor is set); otherwise it is GENUINE. A `blocked` record
 // (done, or deferred to a future date) is never rolled and never removed.
 //
+// "Overdue" is bounded to the CURRENT WEEK: a record counts only when its date
+// falls in [weekStart, logicalToday), where weekStart is the Monday of the week
+// containing logicalToday (derived here from logicalToday via weekStartFor).
+// Records dated before weekStart are ignored completely — not rolled, not
+// removed, and they do not count as an "already on the board" anchor either
+// (they are all in the past, so the r.date >= logicalToday anchor is unaffected).
+// Cross-week carryover of those older records is the end-of-week review's job.
+//
 //  - Any record on or after `logicalToday` (genuine OR rolled) means the task is
 //    already on the board today/ahead: roll nothing, and drop only the stale
-//    ROLLED overdue records — genuine overdue records are left as history.
-//  - Otherwise (nothing scheduled today or later) roll exactly ONE overdue record
-//    forward — the latest scheduledDate, tie-broken by the latest
-//    originallyPlannedFor — and remove the other overdue records.
+//    ROLLED in-week overdue records — genuine overdue records are left as history.
+//  - Otherwise (nothing scheduled today or later) roll exactly ONE in-week overdue
+//    record forward — the latest scheduledDate, tie-broken by the latest
+//    originallyPlannedFor — and remove the other in-week overdue records.
 //
 // Pure and self-contained: a one-off data cleanup reuses it.
 
@@ -155,7 +190,13 @@ export function decideTaskRollover(
   logicalToday: string,
   workingDays?: string[]
 ): TaskRolloverDecision {
-  const overdue = records.filter(r => !r.blocked && r.date && r.date < logicalToday);
+  // Overdue is bounded to the current week: [weekStart, logicalToday). Records
+  // dated before this week's Monday are out of scope (the end-of-week review owns
+  // their carryover) — ignored here, not even counted as an anchor.
+  const weekStart = weekStartFor(logicalToday);
+  const overdue = records.filter(
+    r => !r.blocked && r.date && r.date >= weekStart && r.date < logicalToday
+  );
   if (overdue.length === 0) return { keep: null, remove: [] };
 
   // Already scheduled today or later (a genuine or rolled anchor): roll nothing
@@ -217,14 +258,51 @@ function planRecordGroups(
   return { rolled, removeIds };
 }
 
+// --- Prep-block pass ---------------------------------------------------------
+//
+// Prep blocks bypass the task dedupe machinery: each is a one-off tied to a
+// specific meeting, so there is exactly one record per block and no grouping.
+// An unfinished, IN-WEEK overdue prep block ([weekStart, logicalToday) — the
+// same current-week bound as tasks) rolls to the normal target (next working day
+// on/after logicalToday) — but ONLY when that target falls on or before the
+// meeting's LOCAL date (derived from meetingStart). Prepping after the meeting is
+// pointless, so a block whose meeting day has already passed is left where it is
+// (never rolled, never deleted). originallyPlannedFor/rolls are stamped like the
+// task pattern for the "from Tue" badge.
+function planPrepBlocks(
+  prepBlocks: PrepBlock[],
+  logicalToday: string,
+  target: string,
+  facts: DoneFacts
+): RolledEntry[] {
+  const weekStart = weekStartFor(logicalToday);
+  const rolled: RolledEntry[] = [];
+  for (const pb of prepBlocks) {
+    if (!pb.date || prepBlockDone(pb, facts)) continue;
+    if (!(pb.date >= weekStart && pb.date < logicalToday)) continue; // in-week overdue only
+    const meetingDate = formatLocalDate(new Date(pb.meetingStart));
+    if (target > meetingDate) continue; // meeting already past → leave the block put
+    rolled.push({
+      id: pb.id,
+      date: target,
+      originallyPlannedFor: pb.originallyPlannedFor ?? pb.date,
+      rolls: (pb.rolls ?? 0) + 1,
+    });
+  }
+  return rolled;
+}
+
 // Compute the rollover plan. Records are grouped by task identity and deduped
 // via decideTaskRollover, which protects genuine multi-day planning: at most ONE
 // overdue record per task rolls to the next working day on/after the logical
 // day, stale rolled duplicates are removed, and genuine records (especially any
-// on/after today) are preserved. originallyPlannedFor is set from the CURRENT
-// date only when not already present; rolls increments from its value (absent ⇒ 0).
+// on/after today) are preserved. Only IN-WEEK overdue records are candidates —
+// anything dated before this week's Monday is out of scope (the end-of-week
+// review owns cross-week carryover), so it is neither rolled nor removed.
+// originallyPlannedFor is set from the CURRENT date only when not already
+// present; rolls increments from its value (absent ⇒ 0).
 export function planBoardRollover(input: RolloverInput): RolloverPlan {
-  const { logicalToday, workingDays, scheduledAsanaTasks, adHocTasks, deferrals } = input;
+  const { logicalToday, workingDays, scheduledAsanaTasks, adHocTasks, prepBlocks, deferrals } = input;
   const target = nextWorkingDayOnOrAfter(logicalToday, workingDays);
 
   const scheduledRecords: IdentifiedRecord[] = [];
@@ -255,10 +333,12 @@ export function planBoardRollover(input: RolloverInput): RolloverPlan {
 
   const scheduledPlan = planRecordGroups(scheduledRecords, logicalToday, target, workingDays);
   const adhocPlan = planRecordGroups(adhocRecords, logicalToday, target, workingDays);
+  const prep = planPrepBlocks(prepBlocks, logicalToday, target, input);
 
   return {
     scheduled: scheduledPlan.rolled,
     adhoc: adhocPlan.rolled,
+    prep,
     removeScheduledIds: scheduledPlan.removeIds,
     removeAdhocIds: adhocPlan.removeIds,
   };

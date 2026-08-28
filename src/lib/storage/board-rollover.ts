@@ -7,7 +7,7 @@
 // module is the I/O around it.
 
 import { getUserData, saveUserData } from './core';
-import { getScheduledAsanaTasks, updateScheduledAsanaTask, unscheduleAsanaTask, getBlockDoneOverrides } from './schedule';
+import { getScheduledAsanaTasks, updateScheduledAsanaTask, unscheduleAsanaTask, getBlockDoneOverrides, getPrepBlocks, updatePrepBlock } from './schedule';
 import { getAdHocTasks, updateAdHocTask, deleteAdHocTask } from './ad-hoc-tasks';
 import { getBoardTaskStates } from './board';
 import { getAllTaskMetadata } from './attributions';
@@ -57,10 +57,11 @@ export async function runBoardRollover(opts: {
     return { rolledCount: 0, removedCount: 0, logicalDay: day, alreadyRan: true };
   }
 
-  const [scheduledAsanaTasks, adHocTasks, states, metadata, blockDone, weeklyStats, deferrals] =
+  const [scheduledAsanaTasks, adHocTasks, prepBlocks, states, metadata, blockDone, weeklyStats, deferrals] =
     await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
+      getPrepBlocks(),
       getBoardTaskStates(),
       getAllTaskMetadata(),
       getBlockDoneOverrides(),
@@ -90,6 +91,7 @@ export async function runBoardRollover(opts: {
     workingDays,
     scheduledAsanaTasks,
     adHocTasks,
+    prepBlocks,
     states,
     portalDoneGids,
     blockDoneEventIds,
@@ -111,6 +113,15 @@ export async function runBoardRollover(opts: {
       rolls: entry.rolls,
     });
   }
+  // Prep blocks: move the block's own date forward (the Google Calendar event is
+  // NOT touched — the block keeps its start time, only its date changes).
+  for (const entry of plan.prep) {
+    await updatePrepBlock(entry.id, {
+      date: entry.date,
+      originallyPlannedFor: entry.originallyPlannedFor,
+      rolls: entry.rolls,
+    });
+  }
 
   // Delete the duplicate overdue records the dedupe collapsed (mirrors the
   // single-record removal path: unscheduleAsanaTask / deleteAdHocTask).
@@ -124,7 +135,7 @@ export async function runBoardRollover(opts: {
   await setBoardRolloverLastDay(day);
 
   return {
-    rolledCount: plan.scheduled.length + plan.adhoc.length,
+    rolledCount: plan.scheduled.length + plan.adhoc.length + plan.prep.length,
     removedCount: plan.removeScheduledIds.length + plan.removeAdhocIds.length,
     logicalDay: day,
     alreadyRan: false,

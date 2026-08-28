@@ -5,6 +5,7 @@ import {
   type RolloverInput,
 } from '@/lib/board-rollover';
 import type { AdHocTask, ScheduledAsanaTask } from '@/types';
+import type { PrepBlock } from '@/lib/storage/core';
 
 // Mon 24 – Sun 30 Aug 2026. Wed 26 is a working day; Sat 29 is not.
 const WED = '2026-08-26';
@@ -35,11 +36,30 @@ function adhoc(over: Partial<AdHocTask> = {}): AdHocTask {
   };
 }
 
+function prep(over: Partial<PrepBlock> = {}): PrepBlock {
+  const n = seq++;
+  return {
+    id: `p-${n}`,
+    googleEventId: `ev-${n}`,
+    googleIntegrationId: 'gi',
+    meetingEventId: `m-${n}`,
+    meetingTitle: 'Meeting',
+    meetingStart: '2026-08-28T12:00:00.000Z',
+    date: '2026-08-24',
+    start: '09:00',
+    durationMinutes: 30,
+    done: false,
+    createdAt: '',
+    ...over,
+  };
+}
+
 function input(over: Partial<RolloverInput> = {}): RolloverInput {
   return {
     logicalToday: WED,
     scheduledAsanaTasks: [],
     adHocTasks: [],
+    prepBlocks: [],
     states: {},
     portalDoneGids: new Set(),
     blockDoneEventIds: new Set(),
@@ -76,9 +96,9 @@ describe('decideTaskRollover', () => {
   it('rolls the latest overdue record and removes the rest', () => {
     const d = decideTaskRollover(
       [
-        { id: 'r1', date: '2026-08-20' },
-        { id: 'r2', date: '2026-08-24' },
-        { id: 'r3', date: '2026-08-18' },
+        { id: 'r1', date: '2026-08-24' },
+        { id: 'r2', date: '2026-08-25' },
+        { id: 'r3', date: '2026-08-24' },
       ],
       WED
     );
@@ -90,8 +110,8 @@ describe('decideTaskRollover', () => {
   it('with a record on/after today, drops only stale ROLLED overdue records and keeps genuine ones', () => {
     const d = decideTaskRollover(
       [
-        { id: 'genuine-past', date: '2026-08-20' }, // genuine overdue → kept as history
-        { id: 'rolled-past', date: '2026-08-24', rolls: 1 }, // stale rolled → removed
+        { id: 'genuine-past', date: '2026-08-24' }, // genuine overdue → kept as history
+        { id: 'rolled-past', date: '2026-08-25', rolls: 1 }, // stale rolled → removed
         { id: 'today', date: WED }, // anchor on/after today
       ],
       WED
@@ -105,12 +125,37 @@ describe('decideTaskRollover', () => {
       [
         { id: 'thu', date: '2026-08-27' }, // genuine future
         { id: 'fri', date: '2026-08-28' }, // genuine future
-        { id: 'stale', date: '2026-08-20', originallyPlannedFor: '2026-08-18', rolls: 2 },
+        { id: 'stale', date: '2026-08-24', originallyPlannedFor: '2026-08-24', rolls: 2 },
       ],
       WED
     );
     expect(d.keep).toBeNull();
     expect(d.remove).toEqual(['stale']);
+  });
+
+  it('ignores a record dated before this week\'s Monday: not rolled, not removed', () => {
+    // weekStart for WED (26 Aug) is Mon 24 Aug; 17 Aug is the prior week and out
+    // of scope for the daily rollover even with nothing scheduled today or later.
+    const d = decideTaskRollover([{ id: 'preweek', date: '2026-08-17' }], WED);
+    expect(d).toEqual({ keep: null, remove: [] });
+  });
+
+  it('still rolls a record from earlier in the SAME week', () => {
+    // Mon 24 Aug is in this week (weekStart) and before WED → a rollover candidate.
+    const d = decideTaskRollover([{ id: 'mon', date: '2026-08-24' }], WED);
+    expect(d).toMatchObject({ keep: 'mon', remove: [], rollTarget: WED });
+  });
+
+  it('leaves a pre-week rolled duplicate alone (out of scope, never removed)', () => {
+    const d = decideTaskRollover(
+      [
+        { id: 'today', date: WED }, // anchor on/after today
+        { id: 'preweek-rolled', date: '2026-08-17', originallyPlannedFor: '2026-08-10', rolls: 2 },
+      ],
+      WED
+    );
+    expect(d.keep).toBeNull();
+    expect(d.remove).toEqual([]); // the pre-week rolled record is not swept up
   });
 
   it('leaves a single overdue record rolling as before', () => {
@@ -234,21 +279,21 @@ describe('planBoardRollover', () => {
   });
 
   it('dedupes several overdue records for ONE task: rolls the latest, removes the rest', () => {
-    const r1 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-20' });
-    const r2 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-24' });
-    const r3 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-18' });
+    const r1 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-24' });
+    const r2 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-25' });
+    const r3 = scheduled({ asanaTaskId: 'dup', scheduledDate: '2026-08-24' });
     const plan = planBoardRollover(input({ scheduledAsanaTasks: [r1, r2, r3] }));
     expect(plan.scheduled).toEqual([
-      { id: r2.id, date: WED, originallyPlannedFor: '2026-08-24', rolls: 1 },
+      { id: r2.id, date: WED, originallyPlannedFor: '2026-08-25', rolls: 1 },
     ]);
     expect(plan.removeScheduledIds.sort()).toEqual([r1.id, r3.id].sort());
   });
 
   it('with a future record, removes stale ROLLED overdue records but keeps genuine ones (rolls none)', () => {
-    const genuinePast = scheduled({ asanaTaskId: 'here', scheduledDate: '2026-08-20' });
+    const genuinePast = scheduled({ asanaTaskId: 'here', scheduledDate: '2026-08-24' });
     const rolledPast = scheduled({
       asanaTaskId: 'here',
-      scheduledDate: '2026-08-24',
+      scheduledDate: '2026-08-25',
       originallyPlannedFor: '2026-08-19',
       rolls: 1,
     });
@@ -263,7 +308,7 @@ describe('planBoardRollover', () => {
     const fri = scheduled({ asanaTaskId: 'multi', scheduledDate: '2026-08-28' }); // genuine future
     const stale = scheduled({
       asanaTaskId: 'multi',
-      scheduledDate: '2026-08-20',
+      scheduledDate: '2026-08-24',
       originallyPlannedFor: '2026-08-18',
       rolls: 2,
     });
@@ -274,9 +319,23 @@ describe('planBoardRollover', () => {
 
   it('dedupes overdue ad-hoc-equivalent: distinct tasks each still roll once', () => {
     const a = adhoc({ dueDate: '2026-08-24' });
-    const b = adhoc({ dueDate: '2026-08-23' });
+    const b = adhoc({ dueDate: '2026-08-25' });
     const plan = planBoardRollover(input({ adHocTasks: [a, b] }));
     expect(plan.adhoc.map(r => r.id).sort()).toEqual([a.id, b.id].sort());
+    expect(plan.removeAdhocIds).toEqual([]);
+  });
+
+  it('ignores a task dated before this week\'s Monday: not rolled, not removed', () => {
+    // 17 Aug is last week; the daily rollover leaves it entirely for the
+    // end-of-week review, even with nothing scheduled today or later.
+    const preweek = scheduled({ scheduledDate: '2026-08-17' });
+    const preweekAdhoc = adhoc({ dueDate: '2026-08-17' });
+    const plan = planBoardRollover(
+      input({ scheduledAsanaTasks: [preweek], adHocTasks: [preweekAdhoc] })
+    );
+    expect(plan.scheduled).toEqual([]);
+    expect(plan.adhoc).toEqual([]);
+    expect(plan.removeScheduledIds).toEqual([]);
     expect(plan.removeAdhocIds).toEqual([]);
   });
 
@@ -285,5 +344,68 @@ describe('planBoardRollover', () => {
     const rolled = scheduled({ scheduledDate: WED, originallyPlannedFor: '2026-08-24', rolls: 1 });
     const plan = planBoardRollover(input({ scheduledAsanaTasks: [rolled] }));
     expect(plan.scheduled).toEqual([]);
+  });
+});
+
+describe('planBoardRollover — prep blocks', () => {
+  it('rolls an unfinished, in-week overdue prep block whose meeting is still to come', () => {
+    // Prepped Mon 24 (in-week, overdue), meeting Fri 28 → rolls to WED.
+    const pb = prep({ date: '2026-08-24', meetingStart: '2026-08-28T12:00:00.000Z' });
+    const plan = planBoardRollover(input({ prepBlocks: [pb] }));
+    expect(plan.prep).toEqual([
+      { id: pb.id, date: WED, originallyPlannedFor: '2026-08-24', rolls: 1 },
+    ]);
+  });
+
+  it('rolls when the target lands exactly on the meeting\'s local date (boundary)', () => {
+    const pb = prep({ date: '2026-08-24', meetingStart: '2026-08-26T12:00:00.000Z' }); // meeting WED
+    const plan = planBoardRollover(input({ prepBlocks: [pb] }));
+    expect(plan.prep).toEqual([
+      { id: pb.id, date: WED, originallyPlannedFor: '2026-08-24', rolls: 1 },
+    ]);
+  });
+
+  it('preserves originallyPlannedFor and increments rolls on a re-rolled prep block', () => {
+    const pb = prep({
+      date: '2026-08-25',
+      meetingStart: '2026-08-28T12:00:00.000Z',
+      originallyPlannedFor: '2026-08-20',
+      rolls: 2,
+    });
+    const plan = planBoardRollover(input({ prepBlocks: [pb] }));
+    expect(plan.prep).toEqual([
+      { id: pb.id, date: WED, originallyPlannedFor: '2026-08-20', rolls: 3 },
+    ]);
+  });
+
+  it('does NOT roll a prep block whose meeting date has already passed', () => {
+    // Prepped Mon 24, meeting Tue 25 — already behind us; prep is pointless now.
+    const pb = prep({ date: '2026-08-24', meetingStart: '2026-08-25T12:00:00.000Z' });
+    const plan = planBoardRollover(input({ prepBlocks: [pb] }));
+    expect(plan.prep).toEqual([]);
+  });
+
+  it('does NOT roll a done prep block (own flag or block-done facts)', () => {
+    const byFlag = prep({ date: '2026-08-24', done: true });
+    const byFacts = prep({ date: '2026-08-24', googleEventId: 'ev-done' });
+    const plan = planBoardRollover(
+      input({ prepBlocks: [byFlag, byFacts], blockDoneEventIds: new Set(['ev-done']) })
+    );
+    expect(plan.prep).toEqual([]);
+  });
+
+  it('does NOT roll a prep block dated before this week\'s Monday', () => {
+    // 17 Aug is last week — out of scope for the daily rollover even though the
+    // meeting is still to come.
+    const pb = prep({ date: '2026-08-17', meetingStart: '2026-08-28T12:00:00.000Z' });
+    const plan = planBoardRollover(input({ prepBlocks: [pb] }));
+    expect(plan.prep).toEqual([]);
+  });
+
+  it('leaves a prep block dated today or in the future untouched', () => {
+    const today = prep({ date: WED, meetingStart: '2026-08-28T12:00:00.000Z' });
+    const future = prep({ date: '2026-08-27', meetingStart: '2026-08-28T12:00:00.000Z' });
+    const plan = planBoardRollover(input({ prepBlocks: [today, future] }));
+    expect(plan.prep).toEqual([]);
   });
 });

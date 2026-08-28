@@ -486,6 +486,7 @@ export function buildBoardCards(input: BuildBoardCardsInput): BoardCard[] {
       durationMinutes: pb.durationMinutes,
       googleEventId: pb.googleEventId,
       members: [],
+      ...rolloverFields(pb.date, pb),
     });
   }
 
