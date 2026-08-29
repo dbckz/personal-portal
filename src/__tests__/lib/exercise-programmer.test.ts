@@ -100,19 +100,38 @@ describe('buildProgrammerInput', () => {
     expect(run!.lastSummary).toBe('no history');
   });
 
-  it('does not inject a run stub when the vocabulary already has a run', () => {
+  it('injects the planned run name even when the vocabulary already has another run', () => {
+    // The prompt tells the model to name the cardio row exactly "Parkrun";
+    // validateProgramme drops unknown names. So the planned name must be in the
+    // vocabulary even though a treadmill run is — otherwise the model's parkrun
+    // is dropped and a treadmill backfilled (the 29 Aug 2026 bug).
     const built = buildProgrammerInput(
       [
         progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }], 4),
         progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
       ],
-      { label: 'Run + core', components: ['Run (4 km)', 'core'] },
+      { label: 'Parkrun + core', components: ['Parkrun', 'core'] },
       '2026-08-06',
       6
     );
-    // The existing treadmill run satisfies the run — no second run name added.
-    expect(built.exercises.some(e => e.key === exerciseKey('Outdoor run'))).toBe(false);
-    expect(built.exercises.filter(e => e.name.toLowerCase().includes('run'))).toHaveLength(1);
+    const parkrun = built.exercises.find(e => e.key === exerciseKey('Parkrun'));
+    expect(parkrun).toBeDefined();
+    expect(parkrun!.lastSummary).toBe('no history');
+    // The treadmill history stays available alongside it.
+    expect(built.exercises.some(e => e.key === exerciseKey('Treadmill run'))).toBe(true);
+  });
+
+  it('does not inject a duplicate when the planned run name is already in the vocabulary', () => {
+    const built = buildProgrammerInput(
+      [
+        progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }], 4),
+        progression('Dead bug', [{ date: '2026-08-02', sets: 3, reps: 12 }], 3),
+      ],
+      { label: 'Treadmill run + core', components: ['Treadmill run', 'core'] },
+      '2026-08-06',
+      6
+    );
+    expect(built.exercises.filter(e => e.key === exerciseKey('Treadmill run'))).toHaveLength(1);
   });
 
   it('the injected run stub moves the programme hash so a stale cached programme regenerates', () => {
@@ -386,6 +405,54 @@ describe('cardio rules in validateProgramme', () => {
     // Last was 25 min; 18 is below the +5 cap, so it is left as the model set it.
     expect(rows[0].target.durationMinutes).toBe(18);
     expect(rows[0].target.distanceKm).toBe(4);
+  });
+});
+
+// The 29 Aug 2026 bug end-to-end: a "Parkrun + core" day whose history holds
+// only a treadmill run showed "Treadmill run" instead of parkrun — the model's
+// "Parkrun" row was dropped as an unknown name (the stub was only injected when
+// NO cardio was in the vocabulary) and the run-group floor backfilled the
+// most-trained run.
+describe('a parkrun day with a treadmill in the history', () => {
+  function parkrunDayInput(): ProgrammerInput {
+    return buildProgrammerInput(
+      [
+        progression('Treadmill run', [{ date: '2026-08-28', durationMinutes: 10 }], 7),
+        progression('Dead bug', [{ date: '2026-08-24', sets: 3, reps: 12 }], 3),
+      ],
+      {
+        label: 'Parkrun + core',
+        components: ['Parkrun', 'core'],
+        routineDay: { title: 'Parkrun + core', anchors: [], staples: ['Dead bug'] },
+      },
+      '2026-08-29',
+      8
+    );
+  }
+
+  it("keeps the model's Parkrun row and adds no treadmill", () => {
+    const rows = validateProgramme(
+      [
+        { name: 'Parkrun', kind: 'cardio', toFailure: false, target: { distanceKm: 5 } },
+        { name: 'Dead bug', kind: 'core', toFailure: false, target: { sets: 3, reps: 12, perSide: true } },
+      ],
+      parkrunDayInput()
+    );
+    const cardio = rows.filter(r => r.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Parkrun');
+    expect(rows.some(r => r.name === 'Treadmill run')).toBe(false);
+  });
+
+  it('backfills the run with Parkrun, not the most-trained treadmill, when the model omits it', () => {
+    const rows = validateProgramme(
+      [{ name: 'Dead bug', kind: 'core', toFailure: false, target: { sets: 3, reps: 12, perSide: true } }],
+      parkrunDayInput()
+    );
+    const cardio = rows.filter(r => r.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Parkrun');
+    expect(rows.some(r => r.name === 'Treadmill run')).toBe(false);
   });
 });
 

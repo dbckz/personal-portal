@@ -559,6 +559,20 @@ describe('buildSessionTargets', () => {
     expect(targets.filter(t => t.kind === 'cardio')).toHaveLength(1);
   });
 
+  it('replaces a differently-named run with the parkrun on a parkrun day', () => {
+    // Every past run was logged "Treadmill run", but a treadmill cannot stand in
+    // for a parkrun: the planned event replaces it (the 29 Aug 2026 bug).
+    const targets = buildSessionTargets(
+      [cardioProg('Treadmill run', 7), prog('Pallof press')],
+      ['Parkrun', 'core']
+    );
+    const cardio = targets.filter(t => t.kind === 'cardio');
+    expect(cardio).toHaveLength(1);
+    expect(cardio[0].name).toBe('Parkrun');
+    expect(targets.some(t => t.name === 'Treadmill run')).toBe(false);
+    expect(targets[0].name).toBe('Parkrun');
+  });
+
   it('does not add a guaranteed run when a run is already present', () => {
     // The history already carries a run, so no no-history row is conjured.
     const targets = buildSessionTargets(

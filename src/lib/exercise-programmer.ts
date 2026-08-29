@@ -180,16 +180,17 @@ export function buildProgrammerInput(
     extra.push(toProgrammerExerciseFor(name, progressions, totalSessions));
   }
 
-  // A planned run must always have a name in the vocabulary, even when no run is
-  // in the history and none of the routine's anchors/staples is a run (a Saturday
-  // "Parkrun + core" or "Run (4 km) + core" day). When the plan activates the run
-  // group and no cardio-classified name is present yet, inject the run
-  // component's exercise name as a no-history stub, so the model has a run to
-  // programme and guaranteeGroupCoverage can append one if the model omits it.
-  // This adds a key to the hash, so a stale cached programme without a run
-  // regenerates — intended.
+  // The planned run's NAME must always be in the vocabulary, even when it has
+  // never been logged under that name (a Saturday "Parkrun + core" day when
+  // every past run was logged "Treadmill run"). The prompt instructs the model
+  // to name the cardio row exactly this, and validateProgramme drops rows with
+  // unknown keys — so an uninjected name means the model's run is dropped and
+  // guaranteeGroupCoverage backfills a differently-named run (a treadmill on a
+  // parkrun day, 29 Aug 2026). Inject whenever the key is absent, however much
+  // other cardio the history holds. This adds a key to the hash, so a stale
+  // cached programme without the named run regenerates — intended.
   const cardioName = planCardioName(plan.components, plan.venue);
-  if (cardioName && ![...vocab, ...extra].some(e => isCardioName(e.name))) {
+  if (cardioName) {
     const cardioKey = exerciseKey(cardioName);
     if (cardioKey && !have.has(cardioKey)) {
       have.add(cardioKey);
@@ -818,11 +819,23 @@ function guaranteeGroupCoverage(
   // stubs so the model can substitute for them, but they must not be appended.
   const home = input.plan.venue === 'home';
 
+  // A day whose plan names its run (a parkrun, a planned outdoor run) must be
+  // padded with THAT exercise, never the most-trained run — otherwise a model
+  // that omits the run gets a treadmill backfilled on a parkrun day. The named
+  // stub is guaranteed to be in the vocabulary (buildProgrammerInput injects
+  // it), but it is frequency-0 so most-trained-first iteration would never
+  // reach it before a historied treadmill.
+  const plannedRunKey = exerciseKey(planCardioName(input.plan.components, input.plan.venue) ?? '');
+
   for (const group of groups) {
     const min = groupMinimum(group);
     if (min === 0) continue;
     let count = out.filter(r => classifyExercise(r.name) === group).length;
-    for (const known of input.exercises) {
+    const candidates =
+      group === 'run' && plannedRunKey
+        ? input.exercises.filter(e => e.key === plannedRunKey)
+        : input.exercises;
+    for (const known of candidates) {
       if (count >= min) break;
       if (seen.has(known.key) || classifyExercise(known.name) !== group) continue;
       if (home && !isHomeExercise(known)) continue;

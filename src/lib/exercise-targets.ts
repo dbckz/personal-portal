@@ -510,25 +510,35 @@ export function planCardioName(components: string[], venue?: 'home'): string | n
   return null;
 }
 
-// Guarantee a cardio row when the plan calls for a run the history can't fill.
+// Guarantee the cardio row the plan calls for, under the plan's own NAME.
 // The deterministic fallback builds targets only from LOGGED exercises, so a
-// planned run with no run in the history (a first parkrun, a Saturday run never
-// logged) yields no cardio row at all. When a component activates the run group
-// and no cardio target is present, append a no-history cardio row named from the
-// component; orderTargets then leads the session with it.
+// planned run never logged under its name (a first parkrun — or every parkrun
+// logged as "Treadmill run") either yields no cardio row at all or yields the
+// history's differently-named run. When a component activates the run group and
+// no cardio row is present, append a no-history row named from the component;
+// orderTargets then leads the session with it.
+//
+// A parkrun is its own event: a differently-named run from the history (a
+// treadmill) cannot stand in for it, so on a parkrun day a mismatched cardio
+// row is REPLACED by the parkrun row (29 Aug 2026: a "Parkrun + core + Legs"
+// day showed "Treadmill run"). A generic planned run ("Run (4 km)") keeps the
+// history's run — the treadmill genuinely can be that run.
 function guaranteeCardioComponent(
   targets: ExerciseTarget[],
   components: string[],
   venue?: 'home'
 ): ExerciseTarget[] {
-  if (targets.some(t => t.kind === 'cardio')) return targets;
   const name = planCardioName(components, venue);
   if (!name) return targets;
+  const key = exerciseKey(name);
+  const cardio = targets.filter(t => t.kind === 'cardio');
+  if (cardio.some(t => t.key === key)) return targets;
+  if (cardio.length > 0 && name !== 'Parkrun') return targets;
   return [
-    ...targets,
+    ...targets.filter(t => t.kind !== 'cardio'),
     {
       name,
-      key: exerciseKey(name),
+      key,
       action: 'no-history',
       kind: 'cardio',
       rationale: 'No history for this run yet — record the distance and time today.',
