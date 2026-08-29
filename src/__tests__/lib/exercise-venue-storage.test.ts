@@ -148,6 +148,23 @@ describe('pruneUntouchedSeededEntries', () => {
     expect((session.exercises ?? []).map(e => e.name)).toEqual(['Band overhead press']);
   });
 
+  it('with keepNames, drops only untouched rows the new programme no longer has', async () => {
+    // The 29 Aug 2026 duplicate: a session seeded before the programme
+    // regenerated carries a treadmill run; the new programme has a parkrun
+    // instead but still contains the press. Only the treadmill goes.
+    await seededSession();
+    const { removed } = await pruneUntouchedSeededEntries('2026-08-21', [
+      'Parkrun',
+      'Band overhead press',
+    ]);
+    expect(removed).toBe(1);
+
+    const [session] = await getAllSessions();
+    const names = (session.exercises ?? []).map(e => e.name);
+    expect(names).toEqual(['Band overhead press', 'Press-ups']);
+    expect(names).not.toContain('Treadmill run');
+  });
+
   it('is a no-op when there is no in-progress manual session for the date', async () => {
     await createSession({
       date: '2026-08-21',

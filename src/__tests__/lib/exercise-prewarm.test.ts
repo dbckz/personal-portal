@@ -15,6 +15,7 @@ import { exerciseKey } from '@/lib/exercise-progression';
 
 jest.mock('@/lib/storage/exercise', () => ({
   getAllSessions: jest.fn(),
+  pruneUntouchedSeededEntries: jest.fn().mockResolvedValue({ removed: 0 }),
 }));
 
 jest.mock('@/lib/storage/exercise-programmes', () => ({
@@ -44,12 +45,13 @@ jest.mock('@/lib/exercise-programmer', () => ({
 }));
 
 import { prewarmProgramme } from '@/lib/exercise-prewarm';
-import { getAllSessions } from '@/lib/storage/exercise';
+import { getAllSessions, pruneUntouchedSeededEntries } from '@/lib/storage/exercise';
 import { getCachedProgramme, saveCachedProgramme } from '@/lib/storage/exercise-programmes';
 
 const mockGetAll = getAllSessions as jest.Mock;
 const mockGetCached = getCachedProgramme as jest.Mock;
 const mockSaveCached = saveCachedProgramme as jest.Mock;
+const mockPrune = pruneUntouchedSeededEntries as jest.Mock;
 
 // A previous, logged workout — the history the next session's programme is built
 // from, so the resolved input has exercises to program.
@@ -118,6 +120,25 @@ describe('prewarmProgramme', () => {
 
     expect(mockGenerate).toHaveBeenCalledTimes(1);
     expect(mockSaveCached).not.toHaveBeenCalled();
+    expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  it('prunes stale seeded rows against the freshly cached programme', async () => {
+    // A session started before the programme regenerated may carry rows seeded
+    // from the OLD one (a treadmill on a parkrun day, 29 Aug 2026). After
+    // caching, the prune runs with the new rows' names so only untouched rows
+    // the new programme no longer contains are dropped.
+    mockGetCached.mockReturnValue(null);
+    const rows = programme();
+    mockGenerate.mockResolvedValue(rows);
+
+    await prewarmProgramme(DATE);
+
+    expect(mockPrune).toHaveBeenCalledTimes(1);
+    expect(mockPrune).toHaveBeenCalledWith(
+      DATE,
+      rows.map(r => r.name)
+    );
   });
 
   it('dedups concurrent prewarms for the same day into one generation', async () => {

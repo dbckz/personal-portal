@@ -10,6 +10,7 @@
 import { randomUUID } from 'crypto';
 import { readAllDomains, writeAllDomains } from './db';
 import { normalizeExerciseName } from '../exercise-names';
+import { exerciseKey } from '../exercise-progression';
 import { deriveCompletedLabel } from '../exercise-label';
 import type { ExerciseEntry, ExerciseSession, ExerciseSource } from '@/types/life';
 
@@ -374,20 +375,30 @@ export function isUntouchedSeededEntry(e: ExerciseEntry): boolean {
 }
 
 // Drop untouched seeded entries from the date's in-progress logged session, so a
-// venue swap (which regenerates the programme) doesn't leave stale rows seeded
-// from the OLD programme on the board — e.g. a treadmill run on a home day. The
-// merge path then re-seeds the live rows from the new targets. Entries the user
-// has ticked, noted, rated or swapped are kept. A no-op when there is no
-// in-progress session for the date, or nothing is prunable.
+// regenerated programme (a venue swap, a moved hash) doesn't leave stale rows
+// seeded from the OLD programme on the board — e.g. a treadmill run on a parkrun
+// day (29 Aug 2026). The merge path then re-seeds the live rows from the new
+// targets. Entries the user has ticked, noted, rated or swapped are kept. A
+// no-op when there is no in-progress session for the date, or nothing is
+// prunable.
+//
+// `keepNames`, when given, limits the prune to untouched rows NOT in the new
+// programme (matched by canonical name), so a mid-session regeneration that
+// keeps most rows leaves the board stable. Without it every untouched seeded
+// row goes — the venue swap's full re-seed.
 export async function pruneUntouchedSeededEntries(
   date: string,
+  keepNames?: Iterable<string>,
   now = new Date().toISOString()
 ): Promise<{ removed: number }> {
   const sessions = await getAllSessions();
   const session = sessions.find(s => s.date === date && s.completed && s.source === 'manual');
   if (!session?.exercises?.length) return { removed: 0 };
 
-  const kept = session.exercises.filter(e => !isUntouchedSeededEntry(e));
+  const keep = keepNames ? new Set([...keepNames].map(exerciseKey)) : null;
+  const kept = session.exercises.filter(
+    e => !isUntouchedSeededEntry(e) || (keep !== null && keep.has(exerciseKey(e.name)))
+  );
   const removed = session.exercises.length - kept.length;
   if (removed === 0) return { removed: 0 };
 

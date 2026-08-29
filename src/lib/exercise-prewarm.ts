@@ -17,7 +17,7 @@ import { format } from 'date-fns';
 
 import { generateProgramme, type ProgrammerInput } from '@/lib/exercise-programmer';
 import { saveCachedProgramme } from '@/lib/storage/exercise-programmes';
-import { getAllSessions } from '@/lib/storage/exercise';
+import { getAllSessions, pruneUntouchedSeededEntries } from '@/lib/storage/exercise';
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 
 // In-flight generations, keyed by date+hash, so overlapping kickoffs (a page load
@@ -42,8 +42,15 @@ export function kickOffGeneration(
   // Fire-and-forget: the response has already gone; the long-running server
   // finishes this and caches the result for the next fetch.
   const run = generateProgramme(input)
-    .then(rows => {
-      if (rows) saveCachedProgramme(date, hash, rows);
+    .then(async rows => {
+      if (!rows) return;
+      saveCachedProgramme(date, hash, rows);
+      // The board may already hold rows seeded from the programme this one
+      // replaces. Drop the untouched ones the new programme no longer contains
+      // (a treadmill run seeded before a parkrun day's programme regenerated,
+      // 29 Aug 2026); anything ticked, noted, rated or swapped is kept, and
+      // rows the new programme still has stay put so the board doesn't jump.
+      await pruneUntouchedSeededEntries(date, rows.map(r => r.name));
     })
     .catch(error => {
       console.error('Background exercise programme generation failed:', error);
