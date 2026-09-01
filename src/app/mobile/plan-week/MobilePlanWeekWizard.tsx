@@ -6,6 +6,7 @@ import { X, Loader2, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-rea
 import type { CalendarEvent } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import { usePlanWeek } from '@/components/dashboard/plan-week/usePlanWeek';
+import { CalendarStep } from '@/components/dashboard/plan-week/CalendarStep';
 import { TypeStep } from '@/components/dashboard/plan-week/TypeStep';
 import { PrepStep } from '@/components/dashboard/plan-week/PrepStep';
 import { ReviewStep } from '@/components/dashboard/plan-week/ReviewStep';
@@ -56,6 +57,10 @@ export function MobilePlanWeekWizard({
     weekLabel,
     screenOrder,
     activeIndex,
+    pendingInvites,
+    invitesLoading,
+    invitesError,
+    refreshPendingInvites,
     dayLocations,
     setDayLocation,
     locationWorkingDays,
@@ -215,6 +220,14 @@ export function MobilePlanWeekWizard({
           </div>
         ) : (
           <>
+            {step === 'calendar' && (
+              <CalendarStep
+                invites={pendingInvites}
+                loading={invitesLoading}
+                error={invitesError}
+                onRefresh={refreshPendingInvites}
+              />
+            )}
             {step === 'type' && (
               <TypeStep
                 untypedTasks={untypedTasks}

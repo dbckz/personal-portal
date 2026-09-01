@@ -13,6 +13,8 @@ jest.mock('@/lib/api', () => ({
   api: {
     classifyTaskTypes: jest.fn(),
     updateAsanaTask: jest.fn(),
+    // The wizard's first step (calendar review) fetches pending invites on open.
+    getPendingInvites: jest.fn().mockResolvedValue({ invites: [] }),
     getPrepCandidates: jest.fn(),
     setPrepDecision: jest.fn(),
     getWeekCandidates: jest.fn(),
@@ -38,9 +40,14 @@ import { api } from '@/lib/api';
 
 const WEEK = '2026-07-20'; // Monday
 
-// The wizard now opens on the Location step; advance past it (all days at home)
-// to reach the priorities step the older assertions target.
+// The wizard now opens on the Calendar-review step, then Location; advance past
+// both (calendar → location → priorities) to reach the priorities step the older
+// assertions target.
 async function advancePastLocation() {
+  // Calendar step: only a Next button.
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+  });
   const next = screen.queryByRole('button', { name: /^Next/i });
   if (next) {
     await act(async () => {
@@ -92,20 +99,20 @@ describe('MobilePlanWeekWizard — rendering & progress', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('opens on the location step, then reaches priorities (step 2 of 6, no type/reminders steps)', async () => {
+  it('opens on the calendar step, then reaches priorities (step 3 of 7, no type/reminders steps)', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
     expect(screen.getByRole('heading', { name: 'Plan my week' })).toBeInTheDocument();
-    // Screens paged through: location, priorities-input, priorities-review, prep, tasks, review.
-    expect(screen.getByText(/Step 1 of 6/)).toBeInTheDocument();
-    // Footer nav.
-    expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
+    // Screens paged through: calendar, location, priorities-input, priorities-review,
+    // prep, tasks, review.
+    expect(screen.getByText(/Step 1 of 7/)).toBeInTheDocument();
+    // Calendar step has Next (no Skip) and Close.
     expect(screen.getByRole('button', { name: /^Next/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
 
     await advancePastLocation();
     expect(screen.getByPlaceholderText(/One priority per line/i)).toBeInTheDocument();
-    expect(screen.getByText(/Step 2 of 6/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 7/)).toBeInTheDocument();
   });
 });
 
@@ -115,7 +122,11 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
   it('skips priorities → prep → tasks, firing each step fetch in order', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
-    // Skip location → priorities, then skip priorities → prep (candidates fetch).
+    // Calendar step (Next), then skip location → priorities, then skip priorities
+    // → prep (candidates fetch).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
@@ -123,7 +134,12 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
     await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
-    expect(api.getPrepCandidates).toHaveBeenCalledWith(WEEK, expect.anything(), expect.anything());
+    expect(api.getPrepCandidates).toHaveBeenCalledWith(
+      WEEK,
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
 
     // Skip/Next off prep → tasks (candidates fetch fires).
     await act(async () => {

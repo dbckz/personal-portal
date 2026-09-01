@@ -59,12 +59,6 @@ export interface PrepMeeting {
   // anywhere in that walk leaves the meeting unplaced. When absent, default
   // behaviour applies.
   preferredDate?: string;
-  // True for a meeting that lands EARLY NEXT WEEK (its day-before / day-of fall
-  // outside this week's working days). Its prep is placed into THIS week's
-  // remaining working days, LATEST day first — prep closest to the meeting is
-  // freshest — rather than the default day-before → day-of search. A preferredDate
-  // (a this-week day the user picks) still wins.
-  preferLatest?: boolean;
 }
 
 export interface ProposePrepInput {
@@ -147,13 +141,6 @@ export function proposePrepBlocks(
       for (const day of daysBackToToday) {
         slot = attempt(day, endCapFor(day.dateStr));
         if (slot) break;
-      }
-    } else if (meeting.preferLatest) {
-      // Early-next-week meeting: its day-before / day-of aren't this week, so
-      // place prep on THIS week's LATEST working day that has room (freshest prep
-      // sits closest to the meeting), walking backwards to earlier days.
-      for (let i = workingDays.length - 1; i >= 0 && !slot; i--) {
-        slot = attempt(workingDays[i], endCapFor(workingDays[i].dateStr));
       }
     } else {
       // (a) Day before, anywhere in working hours.

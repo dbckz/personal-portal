@@ -157,6 +157,22 @@ export interface CreatePriorityTasksResponse {
   errors: Array<{ text: string; error: string }>;
 }
 
+// One meeting this week awaiting the user's own RSVP, listed on the wizard's
+// first "Review your calendar" step so invites are accepted/declined before
+// planning.
+export interface PendingInvite {
+  eventId: string;
+  title: string;
+  date: string; // yyyy-MM-dd
+  start: string; // HH:mm
+  responseStatus: string; // 'needsAction' | 'tentative'
+  calendar?: string;
+}
+
+export interface PendingInvitesResponse {
+  invites: PendingInvite[];
+}
+
 export interface PrepMeetingRow {
   key: string;
   eventId: string;
@@ -166,10 +182,6 @@ export interface PrepMeetingRow {
   needsPrep: boolean;
   decidedBy: 'user' | 'ai';
   reason: string;
-  // True when the meeting is on an early day of NEXT week (its prep block is
-  // scheduled into this week). The UI labels these "next Mon"/"next Tue". Absent
-  // on older responses — treat as false.
-  nextWeek?: boolean;
   block?: ProposedBlock;
 }
 
@@ -1542,11 +1554,29 @@ export const api = {
     );
   },
 
+  // Wizard step 0: this week's meetings still awaiting the user's RSVP, so they
+  // can be accepted/declined before planning.
+  async getPendingInvites(weekStart?: string): Promise<PendingInvitesResponse> {
+    return fetchWithRetry<PendingInvitesResponse>(
+      '/api/scheduling/pending-invites',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // Wizard step 2: which meetings need prep, with proposed slots.
   async getPrepCandidates(
     weekStart?: string,
     prepDurations?: Record<string, number>,
-    prepDays?: Record<string, string>
+    prepDays?: Record<string, string>,
+    // Per-day work location from the wizard's Location step (which runs before the
+    // prep step). Threaded through so prep slots are proposed against the SAME busy
+    // timeline the final plan uses (office get-ready/commute + daily rituals).
+    dayLocations?: Record<string, WizardDayLocation>
   ): Promise<PrepCandidatesResponse> {
     return fetchWithRetry<PrepCandidatesResponse>(
       '/api/scheduling/prep/candidates',
@@ -1557,6 +1587,7 @@ export const api = {
           ...(weekStart ? { weekStart } : {}),
           ...(prepDurations && Object.keys(prepDurations).length ? { prepDurations } : {}),
           ...(prepDays && Object.keys(prepDays).length ? { prepDays } : {}),
+          ...(dayLocations && Object.keys(dayLocations).length ? { dayLocations } : {}),
         }),
       },
       { maxRetries: 0 }

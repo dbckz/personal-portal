@@ -14,6 +14,7 @@ import { TaskPeekModal } from './plan-week/TaskPeekModal';
 import type { CalendarEvent } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 
+import { CalendarStep } from './plan-week/CalendarStep';
 import { TypeStep } from './plan-week/TypeStep';
 import { LocationStep } from './plan-week/LocationStep';
 import { PrioritiesStep } from './plan-week/PrioritiesStep';
@@ -66,6 +67,10 @@ export function PlanWeekModal({
     weekLabel,
     screenOrder,
     activeIndex,
+    pendingInvites,
+    invitesLoading,
+    invitesError,
+    refreshPendingInvites,
     dayLocations,
     setDayLocation,
     locationWorkingDays,
@@ -203,6 +208,14 @@ export function PlanWeekModal({
             </div>
           ) : (
             <>
+              {step === 'calendar' && (
+                <CalendarStep
+                  invites={pendingInvites}
+                  loading={invitesLoading}
+                  error={invitesError}
+                  onRefresh={refreshPendingInvites}
+                />
+              )}
               {step === 'type' && (
                 <TypeStep
                   untypedTasks={untypedTasks}

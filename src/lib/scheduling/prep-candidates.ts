@@ -26,9 +26,8 @@ import { isPrepTitle, prepMeetingTitleFromEvent } from '@/lib/scheduling/event-t
 import { localDateStr, timeStr } from '@/lib/scheduling/engine';
 import type { CalendarEvent, MeetingPrepDecision } from '@/types';
 
-// One resolved prep candidate: a future, attended meeting that has no prep block
-// yet, with its prep verdict decided. `nextWeek` marks a meeting on an early day
-// of next week (offered so this week can prep it).
+// One resolved prep candidate: a future, attended meeting THIS week that has no
+// prep block yet, with its prep verdict decided.
 export interface PrepCandidate {
   key: string;
   eventId: string;
@@ -39,24 +38,12 @@ export interface PrepCandidate {
   needsPrep: boolean;
   decidedBy: 'user' | 'ai';
   reason: string;
-  nextWeek: boolean;
 }
 
-// A next-week meeting warrants prep this week only when it starts before this
-// hour (local) on the first working day of next week: a morning meeting can't
-// realistically be prepped that same morning. A later meeting that day — or any
-// meeting on a later day — is left for next week's own planning.
-const NEXT_WEEK_PREP_CUTOFF_HOUR = 12;
-
 export interface ResolvePrepInput {
-  // This week's events (for candidates + the "Prep:" title dedupe).
+  // This week's events (for candidates + the "Prep:" title dedupe). Prep is
+  // confined to the current week — meetings from today onwards only.
   weekEvents: CalendarEvent[];
-  // Meetings on the first working day of next week (offered for prep this week).
-  nextWeekEarlyEvents: CalendarEvent[];
-  // The first working day of next week (yyyy-MM-dd). A next-week meeting only
-  // qualifies for prep when it lands on this day and starts before noon; null
-  // (next week has no working days) means no next-week candidates.
-  nextWeekFirstWorkingDay: string | null;
   nowMs: number;
   prepBlocks: PrepBlock[];
 }
@@ -65,7 +52,7 @@ export interface ResolvePrepInput {
 // prep verdict. AI verdicts for newly-classified meetings are persisted as a
 // side effect (mirrors the previous inline logic in the prep-candidates route).
 export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<PrepCandidate[]> {
-  const { weekEvents, nextWeekEarlyEvents, nextWeekFirstWorkingDay, nowMs, prepBlocks } = input;
+  const { weekEvents, nowMs, prepBlocks } = input;
 
   // Meetings already prepped, from two angles:
   //  * preppedTitles — a "Prep:" event on the calendar (covers preps made outside
@@ -81,25 +68,20 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
   //    has usually already purged such a record before we run).
   const preppedTitles = new Set<string>();
   const preppedMeetingEventIds = new Set<string>();
-  // A prep for a next-week meeting may itself sit in next week (a per-meeting
-  // day override can place it on the meeting's own day), so the dedupe must
-  // scan the lookahead events too — otherwise a wizard re-run can't see that
-  // prep and schedules a duplicate this week.
-  for (const e of [...weekEvents, ...nextWeekEarlyEvents]) {
+  for (const e of weekEvents) {
     if (isPrepTitle(e.title)) {
       preppedTitles.add(normalizePrepKey(prepMeetingTitleFromEvent(e.title)));
     }
   }
-  const presentEventIds = new Set([...weekEvents, ...nextWeekEarlyEvents].map(e => e.id));
+  const presentEventIds = new Set(weekEvents.map(e => e.id));
   for (const p of prepBlocks) {
     const present = presentEventIds.has(p.googleEventId);
     if (present) preppedTitles.add(normalizePrepKey(p.meetingTitle));
     if (present || p.done) preppedMeetingEventIds.add(p.meetingEventId);
   }
 
-  // Candidate meetings: future, timed, not declined, not a prep block, not
-  // already prepped. Next-week early meetings are flagged so callers place their
-  // prep latest-first in this week and label them in the UI.
+  // Candidate meetings: future (from now onwards, this week only), timed, not
+  // declined, not a prep block, not already prepped.
   const isCandidate = (e: CalendarEvent): boolean => {
     if (e.allDay) return false;
     if (e.selfResponseStatus === 'declined') return false;
@@ -108,19 +90,8 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
     if (preppedMeetingEventIds.has(e.id)) return false;
     return !preppedTitles.has(normalizePrepKey(e.title));
   };
-  // A next-week meeting also has to sit on the first working day of next week and
-  // start before noon to be offered (see NEXT_WEEK_PREP_CUTOFF_HOUR) — otherwise
-  // next week's own planning preps it on the day.
-  const qualifiesNextWeek = (e: CalendarEvent): boolean =>
-    !!nextWeekFirstWorkingDay &&
-    localDateStr(e.startTime) === nextWeekFirstWorkingDay &&
-    e.startTime.getHours() < NEXT_WEEK_PREP_CUTOFF_HOUR;
 
-  const thisWeek = weekEvents.filter(isCandidate).map(e => ({ event: e, nextWeek: false }));
-  const nextWeek = nextWeekEarlyEvents
-    .filter(e => isCandidate(e) && qualifiesNextWeek(e))
-    .map(e => ({ event: e, nextWeek: true }));
-  const candidates = [...thisWeek, ...nextWeek];
+  const candidates = weekEvents.filter(isCandidate).map(e => ({ event: e }));
 
   const decisions = await getMeetingPrepDecisions();
 
@@ -196,7 +167,7 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
     }
   }
 
-  return candidates.map(({ event: e, nextWeek: isNext }) => {
+  return candidates.map(({ event: e }) => {
     const key = normalizePrepKey(e.title);
     const verdict = verdicts.get(key) ?? { needsPrep: false, decidedBy: 'ai' as const, reason: '' };
     return {
@@ -209,7 +180,6 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
       needsPrep: verdict.needsPrep,
       decidedBy: verdict.decidedBy,
       reason: verdict.reason,
-      nextWeek: isNext,
     };
   });
 }

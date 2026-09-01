@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { gatherWeekContext } from '@/lib/scheduling/gather';
-import { resolveWorkingWindow } from '@/lib/scheduling/engine';
+import { resolveWorkingWindow, localDateStr } from '@/lib/scheduling/engine';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
-import { placeWeekRituals, proposedBlockToBusyInterval } from '@/lib/scheduling/rituals';
+import {
+  placeWeekRituals,
+  placeOfficeAndTravelBlocks,
+  sanitizeDayLocations,
+  existingRitualTitlesByDateFromEvents,
+  isTravelTitle,
+  proposedBlockToBusyInterval,
+} from '@/lib/scheduling/rituals';
 import { getPrepBlocks } from '@/lib/user-data-storage';
 
 // POST {
@@ -49,28 +56,23 @@ export async function POST(request: NextRequest) {
     }
     const nowMs = ctx.now.getTime();
 
-    // Resolve which meetings (this week + early next week) warrant prep, deduped
+    // Resolve which of this week's remaining meetings warrant prep, deduped
     // against existing prep blocks (see resolvePrepCandidates).
     const prepBlocks = await getPrepBlocks();
     const candidates = await resolvePrepCandidates({
       weekEvents: ctx.weekEvents,
-      nextWeekEarlyEvents: ctx.nextWeekEarlyEvents,
-      nextWeekFirstWorkingDay: ctx.nextWeekFirstWorkingDay,
       nowMs,
       prepBlocks,
     });
 
-    // A per-meeting preferred day is valid only when it is a working day THIS
-    // week — prep for a next-week meeting is always placed this week, so a day
-    // override pointing into next week is dropped (default placement then applies).
+    // A per-meeting preferred day is valid only when it is a working day THIS week.
     const preferredDateFor = (c: (typeof candidates)[number]): string | undefined => {
       const raw = rawPrepDays[c.eventId];
       if (!raw) return undefined;
       return workingDaySet.has(raw) ? raw : undefined;
     };
 
-    // Meetings needing prep → propose a slot for each event instance. Next-week
-    // early meetings place their prep into this week's LATEST working days.
+    // Meetings needing prep → propose a slot for each event instance.
     const prepMeetings: PrepMeeting[] = [];
     for (const c of candidates) {
       if (!c.needsPrep) continue;
@@ -80,28 +82,64 @@ export async function POST(request: NextRequest) {
         title: c.title,
         startMs: c.startMs,
         date: c.date,
-        ...(c.nextWeek ? { preferLatest: true } : {}),
         ...(prepDurations[c.eventId] ? { durationMinutes: prepDurations[c.eventId] } : {}),
         ...(preferredDate ? { preferredDate } : {}),
       });
     }
 
-    // Rituals are the NUMBER ONE priority and are placed FIRST — before prep
-    // slots — so prep never steals the 15:00 exercise slot. This uses the same
-    // helper + inputs as the propose route (calendar busy only, no prep yet), so
-    // the exercise/lunch/emails slots reserved here match the ones the propose
-    // route re-derives later (the accepted prep it adds to busy never overlaps
-    // them). Rituals then join the busy set before prep is proposed.
-    const ritualBlocks = placeWeekRituals({
+    // Build the SAME busy timeline the propose route uses before it schedules
+    // (office/travel blocks, then the daily rituals), so prep slots are proposed
+    // against the identical picture the final plan will see — otherwise prep can
+    // land where the get-ready/commute pair or a ritual will go and crowd the
+    // mornings. The office/travel + daily-ritual placement mirrors propose/route.
+    // (Weekly rituals are placed AFTER tasks in the propose route, so they are
+    // deliberately excluded here — deep work claims the mornings first.)
+    //
+    // Per-day work location comes from the wizard's Location step (which runs
+    // before the prep step); office days get a get-ready + commute pair (and cap
+    // deep work), travel days a fixed travel block.
+    const weekDateStrs = new Set<string>();
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(ctx.weekStart);
+      day.setDate(day.getDate() + d);
+      weekDateStrs.add(localDateStr(day));
+    }
+    const dayLocations = sanitizeDayLocations(body?.dayLocations, weekDateStrs);
+    const existingRitualTitlesByDate = existingRitualTitlesByDateFromEvents(ctx.weekEvents);
+    const existingTravelDates = new Set<string>();
+    for (const e of ctx.weekEvents) {
+      if (!e.allDay && e.title && isTravelTitle(e.title)) {
+        existingTravelDates.add(localDateStr(e.startTime));
+      }
+    }
+    const { blocks: officeTravelBlocks } = placeOfficeAndTravelBlocks({
       config: ctx.config,
-      weekEvents: ctx.weekEvents,
       busyIntervals: ctx.busyIntervals,
       weekStart: ctx.weekStart,
       now: ctx.now,
+      dayLocations,
+      existingRitualTitlesByDate,
+      existingTravelDates,
       outOfOfficeDates: ctx.outOfOfficeDates,
+    });
+    const officeTravelIntervals = officeTravelBlocks.map(proposedBlockToBusyInterval);
+
+    // Daily rituals (exercise is the NUMBER ONE priority) are placed FIRST — before
+    // prep slots — so prep never steals the 15:00 exercise slot. Same helper +
+    // inputs as the propose route, so the exercise/lunch/emails slots reserved here
+    // match the ones the propose route re-derives later.
+    const ritualBlocks = placeWeekRituals({
+      config: ctx.config,
+      weekEvents: ctx.weekEvents,
+      busyIntervals: [...ctx.busyIntervals, ...officeTravelIntervals],
+      weekStart: ctx.weekStart,
+      now: ctx.now,
+      outOfOfficeDates: ctx.outOfOfficeDates,
+      phase: 'daily',
     });
     const prepBusyIntervals = [
       ...ctx.busyIntervals,
+      ...officeTravelIntervals,
       ...ritualBlocks.map(proposedBlockToBusyInterval),
     ];
 
@@ -117,8 +155,7 @@ export async function POST(request: NextRequest) {
     const reasonByEventId = new Map(unplaced.map(u => [u.meeting.eventId, u.reason]));
 
     // One row per candidate event: needsPrep rows carry a proposed block (unless
-    // unplaced); needsPrep:false rows are toggleable in the UI. `nextWeek` flags a
-    // meeting on an early day of next week so the UI can label it ("next Mon").
+    // unplaced); needsPrep:false rows are toggleable in the UI.
     const meetings = candidates.map(c => {
       const block = blockByEventId.get(c.eventId);
       return {
@@ -130,7 +167,6 @@ export async function POST(request: NextRequest) {
         needsPrep: c.needsPrep,
         decidedBy: c.decidedBy,
         reason: c.reason,
-        nextWeek: c.nextWeek,
         ...(block ? { block } : {}),
       };
     });

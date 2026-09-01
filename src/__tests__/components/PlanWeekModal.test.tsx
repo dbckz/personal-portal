@@ -12,6 +12,8 @@ jest.mock('@/lib/api', () => ({
   api: {
     classifyTaskTypes: jest.fn(),
     updateAsanaTask: jest.fn(),
+    // The wizard's first step (calendar review) fetches pending invites on open.
+    getPendingInvites: jest.fn().mockResolvedValue({ invites: [] }),
     getPrepCandidates: jest.fn(),
     setPrepDecision: jest.fn(),
     getWeekCandidates: jest.fn(),
@@ -36,9 +38,15 @@ jest.mock('@/lib/api', () => ({
 
 import { api } from '@/lib/api';
 
-// The wizard now opens on the Location step; advance past it (all days at home)
-// to reach the priorities step the older assertions target.
+// The wizard now opens on the Calendar-review step, then Location; advance past
+// both (calendar → location → priorities) to reach the priorities step the older
+// assertions target.
 async function advancePastLocation() {
+  // Calendar step: only a Next button.
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+  });
+  // Location step: Next (all days at home) → priorities.
   const next = screen.queryByRole('button', { name: /^Next/i });
   if (next) {
     await act(async () => {
@@ -105,6 +113,7 @@ describe('PlanWeekModal — next-week targeting', () => {
     expect(api.matchPriorities).toHaveBeenCalledWith(expect.anything(), NEXT_MONDAY);
     expect(api.getPrepCandidates).toHaveBeenCalledWith(
       NEXT_MONDAY,
+      expect.anything(),
       expect.anything(),
       expect.anything()
     );
@@ -173,7 +182,11 @@ describe('PlanWeekModal — walks (opt-in per day)', () => {
   // Skip priorities (→ prep) then skip prep (→ tasks), where the Walks row shows.
   async function reachTasksStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
-    // Location step first (skip = all home), then priorities (skip → prep).
+    // Calendar step first (Next), then Location (skip = all home), then priorities
+    // (skip → prep).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
@@ -238,9 +251,10 @@ describe('PlanWeekModal', () => {
     await advancePastLocation();
 
     // With no untyped tasks and no reminders, the screens the user pages through
-    // are: location, priorities-input, priorities-review, prep, tasks, review = 6 dots.
+    // are: calendar, location, priorities-input, priorities-review, prep, tasks,
+    // review = 7 dots.
     const dots = container.querySelectorAll('span.rounded-full');
-    expect(dots).toHaveLength(6);
+    expect(dots).toHaveLength(7);
 
     // The two priorities screens each get their own labelled dot.
     expect(screen.getByTitle('Priorities')).toBeInTheDocument();
@@ -317,7 +331,11 @@ describe('PlanWeekModal — prep step optimistic toggling', () => {
   // the prep step, then wait for its candidates to render.
   async function reachPrepStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
-    // Location step first (skip = all home), then priorities (skip → prep).
+    // Calendar step first (Next), then Location (skip = all home), then priorities
+    // (skip → prep).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });

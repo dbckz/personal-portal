@@ -14,6 +14,7 @@ import {
   type WeekCandidate,
   type SpareCapacity,
   type UnplaceableTaskRow,
+  type PendingInvite,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { AsanaProject, CalendarEvent, Reminder } from '@/types';
@@ -103,9 +104,16 @@ export function usePlanWeek({
   typeFieldInfoByIntegration,
   asanaIntegrations,
 }: UsePlanWeekOptions) {
-  const [step, setStep] = useState<Step>('location');
+  const [step, setStep] = useState<Step>('calendar');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Step 0 — calendar review. This week's meetings still awaiting the user's RSVP,
+  // fetched on entering the step. null = not loaded yet; a fetch failure sets
+  // invitesError and the step degrades to a static instruction (never blocks).
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[] | null>(null);
+  const [invitesLoading, setInvitesLoading] = useState(false);
+  const [invitesError, setInvitesError] = useState<string | null>(null);
 
   // Location step — per-day work location (Home / Office / Travelling). Missing
   // entry = home. The step lists the target week's working days; a light config
@@ -161,6 +169,7 @@ export function usePlanWeek({
   // priorities only when there are reminders.
   const screenOrder = useMemo<Array<{ key: string; title: string }>>(
     () => [
+      { key: 'calendar', title: STEP_LABELS.calendar },
       ...(hasTypeStep ? [{ key: 'type', title: STEP_LABELS.type }] : []),
       { key: 'location', title: STEP_LABELS.location },
       { key: 'priorities-input', title: STEP_LABELS.priorities },
@@ -276,7 +285,10 @@ export function usePlanWeek({
     if (!isOpen) return;
     // Invalidate any reminder-classification run started for a previous open.
     remindersRunRef.current += 1;
-    setStep(hasTypeStep ? 'type' : 'location');
+    setStep('calendar');
+    setPendingInvites(null);
+    setInvitesLoading(false);
+    setInvitesError(null);
     setDayLocations({});
     // Resolve the week's working-day dates for the Location step from a light
     // config read (no Google/Asana round trip). A failure just leaves the step
@@ -605,18 +617,36 @@ export function usePlanWeek({
 
   // --- Data fetching per step ---
 
+  // Calendar review: this week's meetings still awaiting an RSVP. Degrades to a
+  // static instruction on failure (invitesError) — planning is never blocked.
+  const fetchPendingInvites = useCallback(async () => {
+    setInvitesLoading(true);
+    setInvitesError(null);
+    try {
+      const { invites } = await api.getPendingInvites(weekStart);
+      setPendingInvites(invites);
+    } catch (err) {
+      setPendingInvites([]);
+      setInvitesError(err instanceof Error ? err.message : 'Failed to load invites');
+    } finally {
+      setInvitesLoading(false);
+    }
+  }, [weekStart]);
+
   const fetchPrep = useCallback(async (durations = prepDurations, days = prepDays) => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await api.getPrepCandidates(weekStart, durations, days);
+      // Thread the Location step's picks so prep is proposed against the same busy
+      // timeline (office get-ready/commute + daily rituals) the final plan uses.
+      const data = await api.getPrepCandidates(weekStart, durations, days, dayLocations);
       setPrepData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meeting prep');
     } finally {
       setIsLoading(false);
     }
-  }, [prepDurations, prepDays, weekStart]);
+  }, [prepDurations, prepDays, dayLocations, weekStart]);
 
   // Changing a prep row's length/day updates LOCAL state only — no refetch on
   // every change (that felt like a page reload). The proposed slots are
@@ -730,7 +760,8 @@ export function usePlanWeek({
   // re-proposes each entry since it depends on prior steps' choices.
   useEffect(() => {
     if (!isOpen) return;
-    if (step === 'type' && typeRows === null && !typeLoading) runTypeClassifier();
+    if (step === 'calendar' && pendingInvites === null && !invitesLoading) fetchPendingInvites();
+    else if (step === 'type' && typeRows === null && !typeLoading) runTypeClassifier();
     else if (step === 'reminders' && reminderRows === null && !remindersLoading) runReminderSuggest();
     else if (step === 'prep' && prepData === null) fetchPrep();
     else if (step === 'tasks' && taskCats === null) fetchTasks();
@@ -1198,6 +1229,9 @@ export function usePlanWeek({
 
   const handleNext = useCallback(() => {
     switch (step) {
+      case 'calendar':
+        setStep(hasTypeStep ? 'type' : 'location');
+        break;
       case 'type':
         applyTypes();
         break;
@@ -1222,7 +1256,7 @@ export function usePlanWeek({
         confirm();
         break;
     }
-  }, [step, matchRows, runMatch, confirmPriorities, confirm, applyTypes, advancePrep]);
+  }, [step, hasTypeStep, matchRows, runMatch, confirmPriorities, confirm, applyTypes, advancePrep]);
 
   const handleSkip = useCallback(() => {
     switch (step) {
@@ -1258,8 +1292,11 @@ export function usePlanWeek({
 
   const handleBack = useCallback(() => {
     switch (step) {
+      case 'type':
+        setStep('calendar');
+        break;
       case 'location':
-        setStep('type');
+        setStep(hasTypeStep ? 'type' : 'calendar');
         break;
       case 'priorities':
         if (matchRows !== null) setMatchRows(null); // matched → input phase
@@ -1277,7 +1314,7 @@ export function usePlanWeek({
         setStep('tasks');
         break;
     }
-  }, [step, matchRows, afterPriorities]);
+  }, [step, hasTypeStep, matchRows, afterPriorities]);
 
   // Map the current step (and, for priorities, its input/review phase) onto the
   // screen the active dot should mark. 'done' fills every dot (index = length).
@@ -1286,7 +1323,8 @@ export function usePlanWeek({
   const activeIndex =
     step === 'done' ? screenOrder.length : screenOrder.findIndex(s => s.key === activeScreenKey);
   const canBack =
-    (step === 'location' && hasTypeStep) ||
+    step === 'type' ||
+    step === 'location' ||
     (step === 'priorities' && matchRows !== null) ||
     step === 'reminders' ||
     step === 'prep' ||
@@ -1329,6 +1367,11 @@ export function usePlanWeek({
     screenOrder,
     activeScreenKey,
     activeIndex,
+    // calendar step
+    pendingInvites,
+    invitesLoading,
+    invitesError,
+    refreshPendingInvites: fetchPendingInvites,
     // location step
     dayLocations,
     setDayLocation,

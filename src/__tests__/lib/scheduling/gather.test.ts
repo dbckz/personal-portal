@@ -5,7 +5,7 @@
  * can be selected again; a task scheduled IN the current week is excluded. All
  * I/O (config, storage, Asana, Google) is mocked so the test is deterministic.
  */
-import { gatherWeekContext, firstWorkingDaysOfNextWeek } from '@/lib/scheduling/gather';
+import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks, getTaskDeferrals, removeTaskDeferrals, getCarryOvers, removeCarryOvers } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { getMyTasks } from '@/lib/asana';
@@ -343,30 +343,3 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
   });
 });
 
-describe('firstWorkingDaysOfNextWeek', () => {
-  const MONDAY = new Date(2026, 6, 13, 0, 0, 0, 0); // Monday 2026-07-13
-  const iso = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-  it('returns next Monday + Tuesday for a Mon–Fri schedule', () => {
-    const days = firstWorkingDaysOfNextWeek(
-      { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] } as never,
-      MONDAY,
-      2
-    );
-    expect(days.map(iso)).toEqual(['2026-07-20', '2026-07-21']); // next Mon, Tue
-  });
-
-  it('skips non-working days: a Tue–Sat schedule yields next Tue + Wed', () => {
-    const days = firstWorkingDaysOfNextWeek(
-      { workingDays: ['Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] } as never,
-      MONDAY,
-      2
-    );
-    expect(days.map(iso)).toEqual(['2026-07-21', '2026-07-22']); // next Tue, Wed
-  });
-
-  it('returns [] when no working days are configured', () => {
-    expect(firstWorkingDaysOfNextWeek({ workingDays: [] } as never, MONDAY, 2)).toEqual([]);
-  });
-});

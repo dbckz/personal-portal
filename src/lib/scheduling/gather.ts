@@ -83,16 +83,6 @@ export interface WeekContext {
   asanaNameByGid: Map<string, string>;
   busyIntervals: BusyInterval[];
   weekEvents: CalendarEvent[]; // full events (for the prep step + "Prep:" dedupe)
-  // Meetings on the FIRST working day of NEXT week (e.g. next Mon). These fall
-  // OUTSIDE this week, so they never enter busyIntervals, quota counting or
-  // reconcile — they exist solely so the prep step can offer a prep block THIS
-  // week for a meeting that lands early next week (a Monday-morning meeting can
-  // only realistically be prepped the week before). Candidacy (before noon on
-  // that day) is decided in resolvePrepCandidates against nextWeekFirstWorkingDay.
-  nextWeekEarlyEvents: CalendarEvent[];
-  // The first working day of NEXT week (yyyy-MM-dd), or null when next week has no
-  // working days. resolvePrepCandidates uses it to gate next-week prep candidacy.
-  nextWeekFirstWorkingDay: string | null;
   existingScheduledCounts: Record<string, number>;
   existingCategoryCountsByDate: Record<string, Record<string, number>>;
   // Dates (yyyy-MM-dd) the user is out of office this week (a full-day OOO event
@@ -196,36 +186,6 @@ async function fetchAsanaData(completedSince: string): Promise<{
 
 const DEFAULT_CALENDAR = { id: 'primary', backgroundColor: '#4285f4', summary: 'Primary', selected: true as const };
 
-const WEEKDAY_NAMES = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-];
-
-// The first `count` working days of the week AFTER `weekStart`, derived from the
-// configured working-day names (so "first two working days of next week" honours
-// a Mon–Fri or a custom schedule rather than hardcoding Mon/Tue).
-export function firstWorkingDaysOfNextWeek(
-  scheduling: WorkflowConfig['scheduling'],
-  weekStart: Date,
-  count: number
-): Date[] {
-  const names = new Set(
-    (scheduling?.workingDays ?? []).map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
-  );
-  const nextWeekStart = addDays(weekStart, 7);
-  const days: Date[] = [];
-  for (let i = 0; i < 7 && days.length < count; i++) {
-    const day = addDays(nextWeekStart, i);
-    if (names.has(WEEKDAY_NAMES[day.getDay()])) days.push(day);
-  }
-  return days;
-}
-
 // Fetch all timed/all-day events across enabled Google calendars for the given
 // days, tagging each with the integration it came from. Returns the events plus
 // the set of integration ids whose fetch FULLY succeeded — every day/calendar
@@ -285,21 +245,6 @@ export async function fetchWeekEvents(
   const integrations = await getEnabledGoogleIntegrations();
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   return fetchEventsForDays(integrations, days);
-}
-
-// Fetch meetings on the FIRST working day of NEXT week. Used only to offer prep
-// blocks this week; these events never enter this week's busy set, quotas or
-// reconcile. Which of them actually warrant prep (a before-noon meeting on that
-// day) is decided in resolvePrepCandidates.
-export async function fetchNextWeekEarlyEvents(
-  weekStart: Date,
-  scheduling: WorkflowConfig['scheduling']
-): Promise<CalendarEvent[]> {
-  const [firstDay] = firstWorkingDaysOfNextWeek(scheduling, weekStart, 1);
-  if (!firstDay) return [];
-  const integrations = await getEnabledGoogleIntegrations();
-  const { events } = await fetchEventsForDays(integrations, [firstDay]);
-  return events;
 }
 
 // Purge stored records whose backing Google event has been deleted off the
@@ -567,10 +512,8 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     : startOfWeek(logicalTodayDate(now, rolloverHour), { weekStartsOn: 1 });
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
-  const [nextWeekFirstDay] = firstWorkingDaysOfNextWeek(config.scheduling, weekStart, 1);
-  const nextWeekFirstWorkingDay = nextWeekFirstDay ? format(nextWeekFirstDay, 'yyyy-MM-dd') : null;
 
-  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, nextWeekEarlyEvents, prepBlocksRaw, ritualBlocksRaw, deferralsRaw, carryOversRaw] =
+  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw, carryOversRaw] =
     await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
@@ -581,7 +524,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       // local 00:00–01:00 Monday window.
       fetchAsanaData(weekStart.toISOString()),
       fetchWeekEvents(weekStart),
-      fetchNextWeekEarlyEvents(weekStart, config.scheduling),
       getPrepBlocks(),
       getRitualBlocks(),
       getTaskDeferrals(),
@@ -838,8 +780,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     asanaNameByGid: asanaData.nameByGid,
     busyIntervals,
     weekEvents,
-    nextWeekEarlyEvents,
-    nextWeekFirstWorkingDay,
     existingScheduledCounts,
     existingCategoryCountsByDate,
     outOfOfficeDates: oooDates,

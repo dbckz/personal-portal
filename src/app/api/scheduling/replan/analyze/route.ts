@@ -7,9 +7,7 @@ import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import { mergeCarryBlocks, planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
 import { isEndOfWeekReview, countMissedWorkingDays } from '@/lib/scheduling/end-of-week';
-import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
-import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
-import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
+import type { CandidateTask } from '@/lib/scheduling/types';
 import {
   getScheduledAsanaTasks,
   getAdHocTasks,
@@ -573,52 +571,6 @@ export async function POST(request: NextRequest) {
       existingCategoryCountsByDate: ctx.existingCategoryCountsByDate,
     });
 
-    // --- Prep additions for early-next-week meetings ------------------------
-    // A meeting early next week (e.g. next Mon/Tue) can only realistically be
-    // prepped THIS week. Discover those that warrant prep and have no prep block
-    // yet, then place them into this week's remaining days AFTER the replan has
-    // settled — the busy set is the final post-replan timeline (meetings + kept
-    // blocks + moved blocks + ritual additions), so prep never collides with them
-    // and never steals a ritual slot. Placed latest-first (freshest prep sits
-    // closest to the meeting) by proposePrepBlocks' preferLatest path.
-    const toBusy = (date: string, start: string, durationMinutes: number): BusyInterval => {
-      const [y, mo, d] = date.split('-').map(Number);
-      const [h, m] = start.split(':').map(Number);
-      const s = new Date(y, mo - 1, d, h, m, 0, 0);
-      return { start: s, end: new Date(s.getTime() + durationMinutes * MS_PER_MINUTE) };
-    };
-    const nextWeekEarlyEvents = ctx.nextWeekEarlyEvents ?? [];
-    let prepAdditions: typeof result.additions = [];
-    // Only consult the prep classifier when there IS an early-next-week meeting to
-    // consider — the common replan (mid-week, nothing next week yet) does no extra
-    // work or AI call.
-    if (nextWeekEarlyEvents.length > 0) {
-      const prepCandidates = await resolvePrepCandidates({
-        weekEvents: ctx.weekEvents,
-        nextWeekEarlyEvents,
-        nextWeekFirstWorkingDay: ctx.nextWeekFirstWorkingDay,
-        nowMs,
-        prepBlocks,
-      });
-      const nextWeekPrepMeetings: PrepMeeting[] = prepCandidates
-        .filter(c => c.nextWeek && c.needsPrep)
-        .map(c => ({ eventId: c.eventId, title: c.title, startMs: c.startMs, date: c.date, preferLatest: true }));
-      const prepBusy: BusyInterval[] = [
-        ...otherBusy,
-        ...result.kept.map(k => toBusy(k.date, k.start, k.durationMinutes)),
-        ...result.moves.map(m => toBusy(m.newDate, m.newStart, m.durationMinutes)),
-        ...result.additions.map(a => toBusy(a.date, a.start, a.durationMinutes)),
-        ...result.backfill.map(b => toBusy(b.date, b.start, b.durationMinutes)),
-      ];
-      prepAdditions = proposePrepBlocks({
-        meetings: nextWeekPrepMeetings,
-        config: ctx.config,
-        busyIntervals: prepBusy,
-        weekStart: ctx.weekStart,
-        now: ctx.now,
-      }).placed;
-    }
-
     // Earliest-first so the review reads chronologically.
     reviewBlocks.sort((a, b) => a.endMs - b.endMs);
 
@@ -798,9 +750,9 @@ export async function POST(request: NextRequest) {
       // Only present in end-of-week mode; the rest of the payload is byte-for-byte
       // what a mid-week analyze has always returned.
       ...(endOfWeek ? { carryBlocks, waiting } : {}),
-      // Ritual additions (from planReplan) plus prep additions for early-next-week
-      // meetings. Both are ProposedBlocks; the confirm route creates each by kind.
-      additions: [...result.additions, ...prepAdditions],
+      // Ritual additions (from planReplan). Prep is confined to the current week,
+      // so there are no early-next-week prep additions.
+      additions: result.additions,
       unplaceable,
       stale,
       tomorrowBlocks,

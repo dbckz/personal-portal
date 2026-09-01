@@ -65,12 +65,6 @@ export function PrepStep({
       }));
   };
 
-  // The meeting's day, prefixed "next" for an early-next-week meeting.
-  const meetingDayLabel = (m: (typeof prepData.meetings)[number]): string => {
-    const eee = format(parseISO(m.date), 'EEE');
-    return m.nextWeek ? `next ${eee}` : eee;
-  };
-
   return (
     <div className="space-y-5">
       <div>
@@ -99,11 +93,6 @@ export function PrepStep({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 flex items-center gap-1.5">
                       <span className="truncate">{m.title}</span>
-                      {m.nextWeek && (
-                        <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700">
-                          {meetingDayLabel(m)} {m.start}
-                        </span>
-                      )}
                     </p>
                     {b ? (
                       <p className="text-xs text-gray-500 mt-0.5">
@@ -185,7 +174,7 @@ export function PrepStep({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-700">{m.title}</p>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      {meetingDayLabel(m)} {m.start} · add a prep block
+                      {format(parseISO(m.date), 'EEE')} {m.start} · add a prep block
                     </p>
                   </div>
                 </li>
