@@ -929,13 +929,29 @@ describe('proposeBlocks - daily categories (one block per working day)', () => {
     expect(deep.every(p => p.task === undefined && /reserved/i.test(p.reason))).toBe(true);
   });
 
-  it('skips a day whose morning is genuinely full, placing deep work on the others', () => {
+  it('falls back to the afternoon when a day\'s morning is full (a late block beats none)', () => {
     const proposals = proposeBlocks(
       makeInput({
         config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
         candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
-        // Tuesday's whole morning (08:30–12:00) is booked solid → no 60-min gap.
+        // Tuesday's whole morning (08:30–12:00) is booked solid → no 60-min morning gap.
         busyIntervals: [{ start: new Date(2026, 6, 14, 8, 30), end: new Date(2026, 6, 14, 12, 0) }],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(5); // every day gets deep work now — Tuesday in the afternoon
+    const tue = deep.find(p => p.date === '2026-07-14')!;
+    expect(tue.start >= '12:00').toBe(true); // afternoon fallback
+    expect(tue.reason).toMatch(/afternoon/i);
+  });
+
+  it('skips a day only when there is no free slot at all (morning AND afternoon full)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+        // Tuesday's whole working day (08:30–17:00) is booked solid → nowhere to go.
+        busyIntervals: [{ start: new Date(2026, 6, 14, 8, 30), end: new Date(2026, 6, 14, 17, 0) }],
       })
     );
     const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
@@ -1994,9 +2010,10 @@ describe('proposeBlocks - office-day deep-work cap (perDayDeepWorkEndMs)', () =>
     expect(deep.trimmedFromMinutes).toBe(90);
   });
 
-  it('skips deep work when fewer than 60 min remain before the get-ready block', () => {
-    // Cap at 09:15 → only 45 min of morning, under the 60-min floor, so the daily
-    // deep-work placement skips the day entirely (no afternoon fallback).
+  it('falls back to the afternoon when the get-ready cap squeezes deep work out of the morning', () => {
+    // Cap at 09:15 → only 45 min of morning, under the 60-min floor. The cap is a
+    // MORNING-only constraint (Dave is at the office all afternoon), so deep work
+    // takes an afternoon slot rather than being dropped.
     const proposals = proposeBlocks(
       makeInput({
         config: deepDailyConfig(),
@@ -2004,6 +2021,66 @@ describe('proposeBlocks - office-day deep-work cap (perDayDeepWorkEndMs)', () =>
         perDayDeepWorkEndMs: { [MON]: monMs(9, 15) },
       })
     );
-    expect(proposals.some(p => p.category === 'Writing/Deep Work')).toBe(false);
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
+    expect(deep).toBeDefined();
+    expect(deep!.start >= '12:00').toBe(true); // afternoon, past the get-ready cap
+    expect(deep!.durationMinutes).toBe(90); // full length — the afternoon is open
+  });
+});
+
+describe('findSlot - quarter-hour snapping', () => {
+  // Raw busy edges can land a block at an ugly off-grid time (a meeting ending
+  // 10:19 plus a 15-min buffer = 10:34). findSlot snaps proposed starts to
+  // :00/:15/:30/:45, trying snapped starts first and only falling back to the
+  // off-grid edge when no snapped start fits.
+  const WR: WorkRun = { maxMinutes: 120, bufferMinutes: 15 };
+  const MON = new Date(2026, 6, 13);
+  const at = (h: number, m = 0) => new Date(2026, 6, 13, h, m).getTime();
+  const timeAt = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const win = (): Window => ({
+    date: MON,
+    dateStr: dateStr(MON),
+    startMs: at(9, 0),
+    endMs: at(17, 0),
+    preferred: false,
+    bestTimeMatch: false,
+  });
+
+  it('snaps to :30 (bufferless) after a meeting ending 10:19, not 10:34', () => {
+    // Meeting 09:00–10:19. A 30-min block at 10:30 keeps the joined run at exactly
+    // 120 min (the cap), so the clean :30 start is valid and wins over the 10:34
+    // raw edge.
+    const busy: BusyMs[] = [{ start: at(9, 0), end: new Date(2026, 6, 13, 10, 19).getTime() }];
+    const slot = findSlot([win()], 30, WR, busy, at(9, 0));
+    expect(slot).not.toBeNull();
+    expect(timeAt(slot!.startMs)).toBe('10:30');
+  });
+
+  it('snaps to :45 (buffered) when the :30 start would break the run rule', () => {
+    // Meeting 08:30–10:19 (109 min). A 10:30 start bridges into a 150-min run
+    // (over the 120 cap), so the block snaps to 10:45 — a clean full buffer after
+    // the meeting — never the 10:34 raw edge.
+    const busy: BusyMs[] = [
+      { start: new Date(2026, 6, 13, 8, 30).getTime(), end: new Date(2026, 6, 13, 10, 19).getTime() },
+    ];
+    const slot = findSlot([win()], 30, WR, busy, at(9, 0));
+    expect(slot).not.toBeNull();
+    expect(timeAt(slot!.startMs)).toBe('10:45');
+  });
+
+  it('still uses an off-grid offset when no snapped start fits the gap', () => {
+    // The only free slot is the off-grid 11:05–11:35 window between two 100-min
+    // runs; every :00/:15/:30/:45 start breaks the run rule, so the raw edge wins.
+    const busy: BusyMs[] = [
+      { start: at(9, 10), end: at(10, 50) },
+      { start: at(11, 50), end: at(13, 30) },
+    ];
+    const narrow: Window = { ...win(), startMs: at(10, 50), endMs: at(11, 50) };
+    const slot = findSlot([narrow], 30, WR, busy, at(9, 0));
+    expect(slot).not.toBeNull();
+    expect(timeAt(slot!.startMs)).toBe('11:05');
   });
 });

@@ -307,10 +307,61 @@ function candidateStarts(
   return [...starts].sort((a, z) => a - z);
 }
 
+// Quarter-hour grid snapping. 15 minutes divides an hour and every timezone
+// offset is a whole/half/quarter-hour, so an epoch ms whose LOCAL wall-clock time
+// is :00/:15/:30/:45 is exactly a multiple of QUARTER_MS.
+const QUARTER_MS = 15 * MS_PER_MINUTE;
+function snapUpToQuarter(ms: number): number {
+  return Math.ceil(ms / QUARTER_MS) * QUARTER_MS;
+}
+function snapDownToQuarter(ms: number): number {
+  return Math.floor(ms / QUARTER_MS) * QUARTER_MS;
+}
+
+// Candidate starts that PREFER a quarter-hour-aligned time (:00/:15/:30/:45).
+// The raw busy edges (candidateStarts) can land a block at an ugly time like
+// 10:34 (a meeting ending 10:19 plus a 15-min buffer); users expect clean start
+// times. So for each candidate we also add a snapped variant: a lower-bound edge
+// (`b.end`, `b.end + buffer`, the window start `lo`) snaps UP to the next quarter,
+// and an end-abutting upper-bound edge (`b.start - duration[- buffer]`, the top
+// bound `hi`) snaps DOWN so the block still fits before the meeting. Snapped
+// candidates are returned FIRST (earliest wins), so findSlot tries them before
+// any off-grid raw edge; the raw edges follow as the fallback for a gap whose
+// only run-rule-valid offset is genuinely off-grid.
+function candidateStartsPreferQuarter(
+  lo: number,
+  hi: number,
+  durationMs: number,
+  bufferMs: number,
+  busy: BusyMs[]
+): number[] {
+  const snapped = new Set<number>();
+  const addLower = (c: number) => {
+    const s = snapUpToQuarter(c);
+    if (s >= lo && s <= hi) snapped.add(s);
+  };
+  const addUpper = (c: number) => {
+    const s = snapDownToQuarter(c);
+    if (s >= lo && s <= hi) snapped.add(s);
+  };
+  addLower(lo);
+  addUpper(hi);
+  for (const b of busy) {
+    addLower(b.end);
+    addLower(b.end + bufferMs);
+    addUpper(b.start - durationMs);
+    addUpper(b.start - durationMs - bufferMs);
+  }
+  const raw = candidateStarts(lo, hi, durationMs, bufferMs, busy);
+  return [...[...snapped].sort((a, z) => a - z), ...raw];
+}
+
 // Find the earliest valid slot for a block of `duration` minutes across the
-// given windows, respecting the work-run rule and the now-cutoff. The slot may
-// start at any minute (edge-derived, not step-aligned) so a gap whose only
-// run-rule-valid offset is off-grid is still used.
+// given windows, respecting the work-run rule and the now-cutoff. Quarter-hour
+// (:00/:15/:30/:45) starts are tried first (see candidateStartsPreferQuarter), so
+// a proposal lands on a clean time whenever one fits; only when no snapped start
+// works does it fall back to an off-grid busy-edge offset (a gap whose only
+// run-rule-valid offset is off-grid is still used).
 export function findSlot(
   windows: Window[],
   duration: number,
@@ -327,7 +378,7 @@ export function findSlot(
     const lo = Math.max(win.startMs, nowMs);
     const hi = win.endMs - durationMs; // latest start that still fits the window
     if (hi < lo) continue;
-    for (const start of candidateStarts(lo, hi, durationMs, bufferMs, busy)) {
+    for (const start of candidateStartsPreferQuarter(lo, hi, durationMs, bufferMs, busy)) {
       const end = start + durationMs;
       if (start >= nowMs && slotIsValid(start, end, busy, workRun)) {
         return { startMs: start, endMs: end, dateStr: win.dateStr, preferred: win.preferred };
@@ -1079,38 +1130,70 @@ export function proposeBlocks(
     const deepWorkEndCap = input.perDayDeepWorkEndMs;
     for (const wd of workingDays) {
       if ((catCount[wd.dateStr] ?? 0) > 0) continue; // this morning already has deep work
+      const noonMs = new Date(
+        wd.date.getFullYear(), wd.date.getMonth(), wd.date.getDate(), 12, 0, 0, 0
+      ).getTime();
       let morningWindows = deepWorkMorningWindows(preferredWindows, [wd], deepWorkEndCap);
       if (morningWindows.length === 0) {
         // No configured morning preferred window: fall back to the day's morning
         // working hours (start → noon, clamped to the day's cap on office days) so
         // deep work still leads the morning.
-        let noonMs = new Date(
-          wd.date.getFullYear(), wd.date.getMonth(), wd.date.getDate(), 12, 0, 0, 0
-        ).getTime();
+        let morningEndMs = noonMs;
         const cap = deepWorkEndCap?.[wd.dateStr];
-        if (cap !== undefined) noonMs = Math.min(noonMs, cap);
-        if (noonMs > wd.whStartMs) {
+        if (cap !== undefined) morningEndMs = Math.min(morningEndMs, cap);
+        if (morningEndMs > wd.whStartMs) {
           morningWindows = [{
             date: wd.date,
             dateStr: wd.dateStr,
             startMs: wd.whStartMs,
-            endMs: noonMs,
+            endMs: morningEndMs,
             preferred: false,
             bestTimeMatch: false,
           }];
         }
       }
-      if (morningWindows.length === 0) continue;
-      const placement = findDeepWorkMorningPlacement(
-        (dur, wr) => findSlot(morningWindows, dur, wr, busy, nowMs),
-        categoryDuration,
-        workRun
-      );
-      if (!placement) continue; // even a 60-min block won't fit this morning → skip
+      let placement = morningWindows.length
+        ? findDeepWorkMorningPlacement(
+            (dur, wr) => findSlot(morningWindows, dur, wr, busy, nowMs),
+            categoryDuration,
+            workRun
+          )
+        : null;
+      // Afternoon fallback: a late deep-work block beats no deep-work block. When
+      // the morning can't hold even a 60-min block (a busy morning, or an
+      // office-day get-ready cap that squeezes it out), retry over the rest of the
+      // working day. The get-ready/commute cap is a MORNING-only constraint (Dave
+      // is at the office all afternoon), so it does not apply here: search from
+      // noon (or the morning window's end, whichever is later) to working-hours
+      // end, with the same shrink-to-60-min-floor logic.
+      let afternoon = false;
+      if (!placement) {
+        const morningEndMs = morningWindows.reduce((m, w) => Math.max(m, w.endMs), noonMs);
+        const afternoonStartMs = Math.max(noonMs, morningEndMs);
+        if (afternoonStartMs < wd.whEndMs) {
+          const afternoonWindows: Window[] = [{
+            date: wd.date,
+            dateStr: wd.dateStr,
+            startMs: afternoonStartMs,
+            endMs: wd.whEndMs,
+            preferred: false,
+            bestTimeMatch: false,
+          }];
+          placement = findDeepWorkMorningPlacement(
+            (dur, wr) => findSlot(afternoonWindows, dur, wr, busy, nowMs),
+            categoryDuration,
+            workRun
+          );
+          if (placement) afternoon = true;
+        }
+      }
+      if (!placement) continue; // no ≥60-min slot fits the morning OR the afternoon → skip
       const { slot, duration: placedDuration, trimmedMinutes } = placement;
       const start = timeStr(slot.startMs);
       const trimNote =
-        trimmedMinutes > 0 ? ` Shortened ${trimmedMinutes} min to fit the morning.` : '';
+        trimmedMinutes > 0
+          ? ` Shortened ${trimmedMinutes} min to fit the ${afternoon ? 'afternoon' : 'morning'}.`
+          : '';
       const trimField =
         trimmedMinutes > 0 ? { trimmedFromMinutes: placedDuration + trimmedMinutes } : {};
       if (agenda.length > 0) {
@@ -1124,7 +1207,9 @@ export function proposeBlocks(
           start,
           durationMinutes: placedDuration,
           reason:
-            `Deep work leads the morning — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda for the week.` +
+            (afternoon
+              ? `Deep work — the morning was full, so it takes an afternoon slot; ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda for the week.`
+              : `Deep work leads the morning — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda for the week.`) +
             trimNote,
           ...trimField,
         });
@@ -1136,7 +1221,9 @@ export function proposeBlocks(
           start,
           durationMinutes: placedDuration,
           reason:
-            `Reserved ${category} time — deep work leads the morning; no task assigned to this block.` +
+            (afternoon
+              ? `Reserved ${category} time — the morning was full, so it takes an afternoon slot; no task assigned to this block.`
+              : `Reserved ${category} time — deep work leads the morning; no task assigned to this block.`) +
             trimNote,
           ...trimField,
         });
