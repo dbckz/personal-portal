@@ -287,13 +287,57 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
     expect(ctx.existingScheduledCounts.Batch).toBe(1);
   });
 
-  it('still counts ad-hoc tasks with no event id as separate blocks', async () => {
+  it('counts ad-hoc tasks placed as their own (event-bearing) blocks separately', async () => {
+    // Two ad-hoc tasks, each on its OWN calendar event -> 2 distinct blocks.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1', 'evt-1'), adhoc('ad2', 'evt-2')]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(2);
+  });
+
+  it('does NOT count a bare in-week ad-hoc task (rolled due date, no event) as a block', async () => {
+    // The daily-board rollover bumps an unfinished task's dueDate to today every
+    // day WITHOUT giving it a calendar event. Such a task is not placed, so it
+    // must not inflate existing counts. It also stays a candidate.
     (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
     (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1'), adhoc('ad2')]);
     (getMyTasks as jest.Mock).mockResolvedValue([]);
 
     const ctx = await gatherWeekContext();
-    expect(ctx.existingScheduledCounts.Batch).toBe(2);
+    expect(ctx.existingScheduledCounts.Batch).toBeUndefined();
+    expect(ctx.candidateTasks.map(t => t.adhocId)).toEqual(expect.arrayContaining(['ad1', 'ad2']));
+  });
+
+  it('places a bare-due-date task in the candidate pool but excludes a placed one', async () => {
+    // Regression for the rolling-task bug: an ad-hoc task whose dueDate keeps
+    // rolling to today (no googleEventId) must remain schedulable, while one with
+    // an actual calendar block is treated as already scheduled this week.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([
+      adhoc('rolled'), // bare in-week due date, no event -> candidate, uncounted
+      adhoc('placed', 'evt-placed'), // real calendar block -> excluded, counted
+    ]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    const adhocIds = ctx.candidateTasks.map(t => t.adhocId);
+    expect(adhocIds).toContain('rolled');
+    expect(adhocIds).not.toContain('placed');
+    expect(ctx.existingScheduledCounts.Batch).toBe(1); // only the placed block counts
+  });
+
+  it('keeps a task with a dueTime but no event as a candidate (dueTime is not placement)', async () => {
+    // adhoc() carries a dueTime of 13:00 but no googleEventId; a bare time without
+    // a calendar event is a rolled/annotated task, not a placed one.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('timed')]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.candidateTasks.map(t => t.adhocId)).toContain('timed');
+    expect(ctx.existingScheduledCounts.Batch).toBeUndefined();
   });
 
   it('classifies a grouped Asana block whose only member task is completed', async () => {
@@ -331,11 +375,12 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
     expect(ctx.existingScheduledCounts.Batch).toBe(1);
   });
 
-  it('counts a completed ad-hoc block toward existing blocks', async () => {
-    // A completed ad-hoc block still consumed its slot this week, so it counts —
-    // matching the dashboard capacity route (which counts completed blocks too).
+  it('counts a completed, placed ad-hoc block toward existing blocks', async () => {
+    // A completed ad-hoc block that was actually placed (has a calendar event)
+    // still consumed its slot this week, so it counts — matching the dashboard
+    // capacity route (which counts completed blocks too).
     (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
-    (getAdHocTasks as jest.Mock).mockResolvedValue([{ ...adhoc('ad1'), completed: true }]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([{ ...adhoc('ad1', 'evt-done'), completed: true }]);
     (getMyTasks as jest.Mock).mockResolvedValue([]);
 
     const ctx = await gatherWeekContext();

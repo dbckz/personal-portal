@@ -635,8 +635,14 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const inWeekAsana = scheduledAsana.filter(s => inWeek(s.scheduledDate));
   for (const s of inWeekAsana) scheduledGids.add(s.asanaTaskId);
 
+  // An ad-hoc task counts as scheduled-this-week only when it is actually PLACED
+  // — i.e. it carries a googleEventId, so a calendar block exists. The daily-board
+  // rollover bumps an unfinished task's dueDate to today every day WITHOUT giving
+  // it an event, so a bare in-week dueDate (no googleEventId) is a rolled task, not
+  // a scheduled one: it must stay a candidate and must not inflate existing counts.
+  // The calendar event is the placement signal; a bare dueTime alone is not.
   const scheduledAdhocIds = new Set<string>();
-  const inWeekAdhoc = adHocTasks.filter(t => inWeek(t.dueDate));
+  const inWeekAdhoc = adHocTasks.filter(t => inWeek(t.dueDate) && !!t.googleEventId);
   for (const t of inWeekAdhoc) if (!t.completed) scheduledAdhocIds.add(t.id);
 
   // Count existing BLOCKS this week. Grouped blocks (e.g. Engagement / Outreach,
