@@ -213,7 +213,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     'Writing/Deep Work': {
       weeklyCount: 3,
       targetLength: '2h',
-      preferredTimes: ['08:30-11:00'],
+      preferredTimes: ['08:00-11:00'],
     },
     Blogs: {
       weeklyCount: 2,
