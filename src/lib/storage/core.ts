@@ -3,7 +3,7 @@
 // external contract — a UserData object with all fields defaulted — is unchanged.
 
 import { AsanaFilterState } from '@/types';
-import type { WeeklyRoutineDay } from '@/types/life';
+import type { WeeklyRoutineDay, RoutineOverride } from '@/types/life';
 import { readAllDomains, writeAllDomains } from './db';
 import type {
   AdHocTask,
@@ -173,6 +173,10 @@ export interface UserData {
   // Dave's standing weekly training routine — the repeating shape of the week the
   // plan is built from. Seeded and read/written through lib/storage/weekly-routine.
   weeklyRoutine?: WeeklyRoutineDay[];
+  // Per-date deviations from the standing weekly routine, keyed by yyyy-MM-dd.
+  // A one-off week shape (a shifted plan) that outlives the calendar sync. See
+  // lib/storage/routine-overrides.
+  routineOverrides?: Record<string, RoutineOverride>;
   // Per-task status for the weekly task board, keyed by BoardTaskState.key (the
   // week-suffixed key for rituals, the plain card key for asana/adhoc). See
   // lib/storage/board and lib/board.
@@ -257,6 +261,7 @@ const DEFAULT_USER_DATA: UserData = {
   exerciseSyncState: {},
   dailyReviewState: {},
   weeklyRoutine: [],
+  routineOverrides: {},
   boardTasks: {},
   boardRollover: {},
 };
@@ -331,6 +336,7 @@ export async function getUserData(): Promise<UserData> {
       exerciseSyncState: parsed.exerciseSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
       weeklyRoutine: parsed.weeklyRoutine || [],
+      routineOverrides: parsed.routineOverrides || {},
       // Tolerant load: keep only well-formed { status } entries keyed by string.
       boardTasks: Object.fromEntries(
         Object.entries(parsed.boardTasks || {}).filter(

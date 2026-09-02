@@ -37,6 +37,8 @@ import {
   type ProgrammerRoutineDay,
 } from '@/lib/exercise-programmer';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
+import { getRoutineOverrides } from '@/lib/storage/routine-overrides';
+import { routineDayForDate } from '@/lib/exercise-routine-day';
 import { getCachedProgramme } from '@/lib/storage/exercise-programmes';
 import { queryGoals } from '@/lib/storage/goals';
 import { resolveEvidenceForGoals } from '@/lib/goal-evidence';
@@ -188,14 +190,14 @@ async function resolveRoutineDay(
 ): Promise<ProgrammerRoutineDay | undefined> {
   try {
     const routine = await getWeeklyRoutine();
-    const dayOfWeek = new Date(`${date}T12:00:00`).getDay();
+    const overrides = await getRoutineOverrides();
 
     // A plan moved to another day should be programmed as THAT routine day, not
     // as the weekday it happens to land on. If there is a planned session today
     // whose label matches a routine day's title, use that routine day — so the
     // moved session carries its routine's anchors/staples (and doesn't get
     // programmed as, say, a Rest day just because it was dropped on a Friday).
-    // An exact title match wins over the weekday.
+    // An exact title match wins over the override/weekday.
     const plan = sessions.find(s => s.date === date && s.planned);
     const planTitle = (parsePlannedTitle(`🏋️ ${plan?.label ?? ''}`)?.title ?? plan?.label ?? '')
       .trim()
@@ -204,7 +206,9 @@ async function resolveRoutineDay(
       ? routine.find(d => d.title.trim().toLowerCase() === planTitle)
       : undefined;
 
-    const day = byLabel ?? routine.find(d => d.dayOfWeek === dayOfWeek);
+    // No title match — fall back to the override for the date (a shifted plan or
+    // a rest day), then the plain weekday routine entry.
+    const day = byLabel ?? routineDayForDate(routine, overrides, date);
     return day ? distillRoutineDay(day, sessions, date) : undefined;
   } catch (error) {
     console.error('Failed to load the weekly routine for the programmer:', error);

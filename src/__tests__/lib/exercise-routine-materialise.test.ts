@@ -210,3 +210,70 @@ describe('planRoutineMaterialisation — idempotency', () => {
     expect(second.remove).toEqual([]);
   });
 });
+
+// A one-off shifted week: this week's plan is pushed a day later, so Wed's
+// "Pull + Legs" now sits on Thu and Thu's push day on Fri, with Wed itself made a
+// rest day. Per-date overrides re-map each shifted date to the routine day it now
+// carries. The planner must then leave the shifted sessions alone — no create on
+// the vacated Wednesday, no update dragging the moved sessions back to their new
+// weekday's shape. Without the overrides the same input proves the bug the
+// overrides fix: a create on Wed and an update on Thu.
+describe('planRoutineMaterialisation — a shifted week with overrides', () => {
+  const SHIFT_TODAY = '2026-09-02'; // Wednesday
+  const HORIZON = 3; // Wed, Thu, Fri — the shifted window
+
+  // Derive the shifted sessions' content straight from the routine so a matching
+  // session genuinely matches (no hand-typed component guesses). The Wed routine
+  // day (Pull + Legs) rides on Thursday; the Thu routine day rides on Friday.
+  const seed = planRoutineMaterialisation(ROUTINE, [], SHIFT_TODAY, HORIZON).create;
+  const wedShape = seed.find(s => s.date === '2026-09-02')!; // Pull + Legs
+  const thuShape = seed.find(s => s.date === '2026-09-03')!; // Push (shoulders) + Run
+
+  function shifted(): ExerciseSession[] {
+    return [
+      // Wednesday's Pull + Legs, re-dated onto Thursday.
+      session({
+        id: 'wed-on-thu',
+        date: '2026-09-03',
+        source: 'calendar',
+        type: wedShape.type,
+        label: wedShape.label,
+        components: wedShape.components,
+      }),
+      // Thursday's push day, re-dated onto Friday.
+      session({
+        id: 'thu-on-fri',
+        date: '2026-09-04',
+        source: 'calendar',
+        type: thuShape.type,
+        label: thuShape.label,
+        components: thuShape.components,
+      }),
+    ];
+  }
+
+  const OVERRIDES = {
+    '2026-09-02': { rest: true } as const,
+    '2026-09-03': { dayOfWeek: 3 } as const,
+    '2026-09-04': { dayOfWeek: 4 } as const,
+  };
+
+  it('leaves the shifted sessions untouched under the overrides', () => {
+    const plan = planRoutineMaterialisation(ROUTINE, shifted(), SHIFT_TODAY, HORIZON, OVERRIDES);
+    expect(plan.create).toEqual([]);
+    expect(plan.update).toEqual([]);
+    expect(plan.remove).toEqual([]);
+  });
+
+  it('without the overrides, re-creates Wednesday and updates the moved Thursday session', () => {
+    const plan = planRoutineMaterialisation(ROUTINE, shifted(), SHIFT_TODAY, HORIZON);
+    // The vacated Wednesday looks unoccupied, so its routine day is re-created.
+    expect(plan.create).toHaveLength(1);
+    expect(plan.create[0].date).toBe('2026-09-02');
+    expect(plan.create[0].label).toBe(wedShape.label);
+    // The session moved onto Thursday is dragged back to Thursday's routine shape.
+    expect(plan.update).toHaveLength(1);
+    expect(plan.update[0].sessionId).toBe('wed-on-thu');
+    expect(plan.update[0].shape.label).toBe(thuShape.label);
+  });
+});

@@ -321,6 +321,15 @@ export interface WeeklyRoutineDay {
   rest?: boolean;
 }
 
+// A per-DATE deviation from the standing weekly routine (see lib/storage/routine-
+// overrides). One week's plan can diverge from the repeating shape without the
+// calendar sync fighting it:
+//   { dayOfWeek } -> on this date, follow the routine entry for THAT weekday
+//                    (e.g. a Wednesday plan pushed onto Thursday).
+//   { rest: true } -> treat this date as a rest day regardless of its weekday.
+// Stored keyed by yyyy-MM-dd. Absent means the ordinary weekday routine applies.
+export type RoutineOverride = { dayOfWeek: number } | { rest: true };
+
 // One movement in Dave's daily back-rehab block — a deliberately separate,
 // tickable home routine (tight hip flexors / anterior pelvic tilt from running),
 // tracked apart from the gym programme. `prescription` is the plain target text

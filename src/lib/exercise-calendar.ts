@@ -38,6 +38,7 @@ import {
   type CreateSessionInput,
 } from './storage/exercise';
 import { getWeeklyRoutine } from './storage/weekly-routine';
+import { getRoutineOverrides } from './storage/routine-overrides';
 import type { ExerciseSession, ParsedPlannedSession } from '@/types/life';
 
 const IMPORT_PREFIX = 'gcal:';
@@ -398,9 +399,10 @@ export async function materialiseRoutineSessions(
   horizonDays: number = DEFAULT_HORIZON_DAYS
 ): Promise<MaterialiseResult> {
   const routine = await getWeeklyRoutine();
+  const overrides = await getRoutineOverrides();
   const sessions = await getAllSessions();
   const today = format(new Date(), 'yyyy-MM-dd');
-  const plan = planRoutineMaterialisation(routine, sessions, today, horizonDays);
+  const plan = planRoutineMaterialisation(routine, sessions, today, horizonDays, overrides);
 
   let created = 0;
   for (const shape of plan.create) {

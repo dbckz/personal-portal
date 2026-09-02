@@ -16,7 +16,8 @@
 import { addDays, format, parseISO } from 'date-fns';
 
 import { parsePlannedTitle } from './exercise-parse';
-import type { ExerciseSession, WeeklyRoutineDay } from '@/types/life';
+import { routineDayForDate } from './exercise-routine-day';
+import type { ExerciseSession, RoutineOverride, WeeklyRoutineDay } from '@/types/life';
 
 // How many days ahead to materialise, counting today. Today through +13 is the
 // fortnight the calendar sync already covers forward.
@@ -96,17 +97,20 @@ function shapeMatchesSession(shape: RoutineSessionShape, session: ExerciseSessio
 //     today, and never auto-deletes a calendar-sourced event.
 //   Sessions that are 'manual', 'sheet' or 'freeform', completed, started, or
 //   dated earlier than today are never touched.
+//
+// A per-date override (see lib/storage/routine-overrides) is consulted through
+// routineDayForDate: it makes a date follow another weekday's routine entry, or
+// rest, so a shifted week's shape holds against every resync. With no overrides
+// the behaviour is exactly the weekday lookup.
 export function planRoutineMaterialisation(
   routine: WeeklyRoutineDay[],
   existingSessions: ExerciseSession[],
   today: string,
-  horizonDays: number = DEFAULT_HORIZON_DAYS
+  horizonDays: number = DEFAULT_HORIZON_DAYS,
+  overrides: Record<string, RoutineOverride> = {}
 ): RoutineMaterialisationPlan {
-  const byDayOfWeek = new Map<number, WeeklyRoutineDay>();
-  for (const day of routine) byDayOfWeek.set(day.dayOfWeek, day);
-
   const routineShapeFor = (date: string): RoutineSessionShape | null => {
-    const day = byDayOfWeek.get(parseISO(date).getDay());
+    const day = routineDayForDate(routine, overrides, date);
     if (!day || day.rest) return null;
     return shapeFromRoutineDay(day, date);
   };

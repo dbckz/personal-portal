@@ -17,6 +17,10 @@ jest.mock('@/lib/storage/weekly-routine', () => ({
   getWeeklyRoutine: jest.fn(),
 }));
 
+jest.mock('@/lib/storage/routine-overrides', () => ({
+  getRoutineOverrides: jest.fn().mockResolvedValue({}),
+}));
+
 jest.mock('@/lib/storage/exercise-programmes', () => ({
   getCachedProgramme: jest.fn(),
   saveCachedProgramme: jest.fn(),
@@ -28,11 +32,13 @@ jest.mock('@/lib/storage/goals', () => ({
 
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
+import { getRoutineOverrides } from '@/lib/storage/routine-overrides';
 import { getCachedProgramme } from '@/lib/storage/exercise-programmes';
 import type { ProgrammeRow } from '@/lib/exercise-programmer';
 import { exerciseKey } from '@/lib/exercise-progression';
 
 const mockRoutine = getWeeklyRoutine as jest.Mock;
+const mockOverrides = getRoutineOverrides as jest.Mock;
 const mockGetCached = getCachedProgramme as jest.Mock;
 
 // A minimal weekly routine: Friday (5) is Rest, Thursday (4) is the push+run day
@@ -186,5 +192,26 @@ describe('resolveSessionTargets — a cached programme with two calf-raise varia
     const failing = resolved.targets.filter(t => t.toFailure);
     expect(failing).toHaveLength(1);
     expect(failing[0].name).toBe(resolved.targets[resolved.targets.length - 1].name);
+  });
+});
+
+// A rest override on a date with no plan: the resolver must treat the date as a
+// Rest day (from the override) rather than programming its ordinary weekday. With
+// no matching plan title, the override is what decides the routine day.
+describe('resolveSessionTargets — a rest override on a date with no plan', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Wednesday 2026-09-02 is normally a training day (dayOfWeek 3).
+    mockRoutine.mockResolvedValue([
+      { dayOfWeek: 3, title: 'Pull + Legs', anchors: ['Leg press'], staples: [] },
+    ]);
+    mockOverrides.mockResolvedValue({ '2026-09-02': { rest: true } });
+    mockGetCached.mockReturnValue(null);
+  });
+
+  it('resolves the date as Rest, not its weekday training day', async () => {
+    const resolved = await resolveSessionTargets('2026-09-02', []);
+    expect(resolved.input.plan.routineDay?.rest).toBe(true);
+    expect(resolved.input.plan.routineDay?.title).toBe('Rest');
   });
 });

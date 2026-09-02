@@ -8,6 +8,8 @@ import {
   setSessionVenue,
 } from '@/lib/storage/exercise';
 import { getWeeklyRoutine } from '@/lib/storage/weekly-routine';
+import { getRoutineOverrides } from '@/lib/storage/routine-overrides';
+import { routineDayForDate } from '@/lib/exercise-routine-day';
 import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { resolveSessionTargets } from '@/lib/exercise-session-targets';
 import { kickOffGeneration } from '@/lib/exercise-prewarm';
@@ -86,16 +88,17 @@ export async function POST(request: NextRequest) {
 }
 
 // The routine day's parsed shape (type, label, components) for a date, read off
-// the standing weekly routine by weekday. Null when there is no routine, the day
-// is a rest day, or its title carries no training word. Best-effort: a routine
-// read failure just yields a bare plan.
+// the standing weekly routine — honouring any per-date override (a shifted plan
+// or a rest day). Null when there is no routine, the day is a rest day, or its
+// title carries no training word. Best-effort: a routine read failure just yields
+// a bare plan.
 async function routineShapeForDate(
   date: string
 ): Promise<{ type: string; label: string; components: string[] } | null> {
   try {
     const routine = await getWeeklyRoutine();
-    const dayOfWeek = new Date(`${date}T12:00:00`).getDay();
-    const day = routine.find(d => d.dayOfWeek === dayOfWeek);
+    const overrides = await getRoutineOverrides();
+    const day = routineDayForDate(routine, overrides, date);
     if (!day || day.rest) return null;
     const parsed = parsePlannedTitle(`🏋️ ${day.title}`);
     if (!parsed) return null;

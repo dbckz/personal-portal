@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { removePlannedEvent } from '@/lib/exercise-calendar';
+import { removePlannedEvent, pushPlannedSession } from '@/lib/exercise-calendar';
 import { getAllSessions, deleteSession, updateSession } from '@/lib/storage/exercise';
 import { prewarmProgramme } from '@/lib/exercise-prewarm';
 
@@ -13,6 +13,8 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
+    // Remember the stored date so a date change can push the calendar event.
+    const before = (await getAllSessions()).find(s => s.id === id);
     const session = await updateSession(id, {
       date: body.date,
       type: body.type,
@@ -25,6 +27,23 @@ export async function PATCH(
       venue: body.venue,
     });
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    // A moved planned session must drag its calendar event with it: if the date
+    // changed on a planned session that owns a Google event, push it so the
+    // all-day event follows to the new date (otherwise the plan and its event
+    // drift apart). Best-effort — a calendar failure must not fail the edit.
+    if (
+      before &&
+      body.date &&
+      body.date !== before.date &&
+      session.planned &&
+      session.googleEventId
+    ) {
+      try {
+        await pushPlannedSession(session);
+      } catch (error) {
+        console.error('Failed to push moved planned session to the calendar:', error);
+      }
+    }
     // A session edit (completing a plan, correcting a date) changes today's
     // history — pre-generate so the next Today open doesn't wait on Claude.
     void prewarmProgramme().catch(error =>
