@@ -297,7 +297,10 @@ const TRAINING_WORDS = [
   'track',
 ];
 
-const PLANNED_PREFIXES = ['🏋️', '🏋', '🏃', '🚴', '🏊', '🧘'];
+// '⚽' is here because the nightly emoji prefixer retitles football plans with
+// it; without it a "⚽ Football + core" event would go unrecognised and the plan
+// would be deleted and recreated on every sync.
+const PLANNED_PREFIXES = ['🏋️', '🏋', '🏃', '🚴', '🏊', '🧘', '⚽'];
 
 function stripPrefix(title: string): { body: string; hadPrefix: boolean } {
   let body = title.trim();
@@ -332,7 +335,7 @@ export function parsePlannedTitle(title: string): ParsedPlannedSession | null {
 
   // "Push (shoulders) + Run" is a strength session with a run bolted on, not a
   // run — so both halves are tested rather than letting the word "run" win.
-  const hasCardio = /\b(run|parkrun|track|cycle|bike|swim)\b/i.test(body);
+  const hasCardio = /\b(run|parkrun|track|cycle|bike|swim|football|footy)\b/i.test(body);
   const hasStrength = /\b(push|pull|legs?|core|chest|back|arms|shoulders|glutes|abs)\b/i.test(body);
 
   return {

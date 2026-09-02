@@ -14,6 +14,7 @@ import {
   parsePlannedTitle,
   parseSheetDate,
   parseSheetMarkdown,
+  parseTimedExerciseTitle,
   parseVolume,
 } from '@/lib/exercise-parse';
 import { exerciseKey } from '@/lib/exercise-progression';
@@ -194,6 +195,26 @@ describe('parsePlannedTitle', () => {
     expect(parsePlannedTitle('Water Plants')).toBeNull();
     expect(parsePlannedTitle('🌿 Water Plants')).toBeNull();
     expect(parsePlannedTitle('💰 Transfer salary')).toBeNull();
+  });
+
+  it('reads a ⚽-prefixed football session as strength + cardio', () => {
+    // The nightly emoji prefixer retitles "🏋️ Football + core" to "⚽ Football +
+    // core"; without ⚽ recognised, the plan is deleted and recreated each sync.
+    expect(parsePlannedTitle('⚽ Football + core')).toEqual({
+      title: 'Football + core',
+      components: ['Football', 'core'],
+      type: 'strength + cardio',
+    });
+  });
+
+  it('reads a bare ⚽ football plan as cardio', () => {
+    expect(parsePlannedTitle('⚽ Football')?.type).toBe('run');
+  });
+});
+
+describe('parseTimedExerciseTitle', () => {
+  it('recognises a ⚽ football slot as a timed exercise event', () => {
+    expect(parseTimedExerciseTitle('⚽ Football')).not.toBeNull();
   });
 });
 

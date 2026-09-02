@@ -46,6 +46,10 @@ const IMPORT_PREFIX = 'gcal:';
 // like the ones already there.
 const STRENGTH_PREFIX = '🏋️';
 const RUN_PREFIX = '🏃';
+// Football plans are written with ⚽ so the event matches what the nightly emoji
+// prefixer would produce — otherwise it retitles the event and the next sync no
+// longer recognises it, deleting and recreating the session each cycle.
+export const FOOTBALL_PREFIX = '⚽';
 
 export interface ExerciseCalendarTarget {
   integrationId: string;
@@ -79,10 +83,19 @@ export function plannedEventTitle(session: {
   components?: string[];
   title?: string;
 }): string {
-  const prefix = /run|parkrun|track|cardio/i.test(session.type) ? RUN_PREFIX : STRENGTH_PREFIX;
   const body = session.components?.length
     ? session.components.join(' + ')
     : (session.title ?? session.type);
+  // Football wins the prefix regardless of type, so it matches the emoji the
+  // nightly prefixer applies (⚽ before 🏋️/🏃) and the event is never retitled.
+  const mentionsFootball = /football|footy/i.test(
+    `${session.type} ${session.title ?? ''} ${session.components?.join(' ') ?? ''}`
+  );
+  const prefix = mentionsFootball
+    ? FOOTBALL_PREFIX
+    : /run|parkrun|track|cardio/i.test(session.type)
+      ? RUN_PREFIX
+      : STRENGTH_PREFIX;
   return `${prefix} ${body}`;
 }
 

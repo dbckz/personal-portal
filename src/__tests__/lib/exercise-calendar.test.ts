@@ -7,6 +7,7 @@
  */
 import {
   buildPlannedUpsert,
+  plannedEventTitle,
   planTimedEnrichments,
   type TimedExerciseEvent,
 } from '@/lib/exercise-calendar';
@@ -26,6 +27,20 @@ function timed(over: Partial<TimedExerciseEvent> & Pick<TimedExerciseEvent, 'sum
     ...over,
   };
 }
+
+describe('plannedEventTitle', () => {
+  it('gives a football session the ⚽ prefix so the emoji prefixer never retitles it', () => {
+    expect(plannedEventTitle({ type: 'strength', components: ['Football', 'core'] })).toBe(
+      '⚽ Football + core'
+    );
+  });
+
+  it('leaves a non-football strength session on 🏋️', () => {
+    expect(plannedEventTitle({ type: 'strength', components: ['Push', 'core'] })).toBe(
+      '🏋️ Push + core'
+    );
+  });
+});
 
 describe('parseTimedExerciseTitle', () => {
   it('recognises a bare gym slot a plan title would be too vague to trust', () => {
