@@ -34,12 +34,15 @@ export async function GET(request: NextRequest) {
       ? { plan: { label: plan.label, components, ...(plan.venue ? { venue: plan.venue } : {}) } }
       : {};
 
-    if (resolved.source === 'ai') {
+    // Only the deterministic fallback triggers a background generation. 'ai' is
+    // already programmed, and 'rest' is a rest day with nothing to train (empty
+    // targets) — both return as-is, echoing their source, with no Claude kick.
+    if (resolved.source !== 'fallback') {
       return NextResponse.json({
         date,
         ...planPayload,
         targets,
-        source: 'ai',
+        source: resolved.source,
         generating: false,
       });
     }

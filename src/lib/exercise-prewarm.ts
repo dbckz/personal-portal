@@ -64,16 +64,17 @@ export function kickOffGeneration(
 
 // Pre-generate and cache the AI programme for a date (default today), if one is
 // not already cached for its current inputs. A no-op when the programme is
-// already cached (source 'ai') or when there is nothing to program from (a rest
-// day / empty vocabulary — input.exercises is empty), so callers can fire it
-// unconditionally after any mutation; the hash dedup and the cache hit make it
-// cheap when nothing actually changed.
+// already cached (source 'ai'), when the date is a rest day with nothing to
+// train (source 'rest'), or when there is nothing to program from (empty
+// vocabulary — input.exercises is empty), so callers can fire it unconditionally
+// after any mutation; the hash dedup and the cache hit make it cheap when nothing
+// actually changed.
 export async function prewarmProgramme(
   date: string = format(new Date(), 'yyyy-MM-dd')
 ): Promise<void> {
   const sessions = await getAllSessions();
   const resolved = await resolveSessionTargets(date, sessions);
-  if (resolved.source === 'ai') return;
+  if (resolved.source === 'ai' || resolved.source === 'rest') return;
   if (resolved.input.exercises.length === 0) return;
   await kickOffGeneration(date, resolved.hash, resolved.input);
 }

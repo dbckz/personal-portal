@@ -214,4 +214,31 @@ describe('resolveSessionTargets — a rest override on a date with no plan', () 
     expect(resolved.input.plan.routineDay?.rest).toBe(true);
     expect(resolved.input.plan.routineDay?.title).toBe('Rest');
   });
+
+  it('returns an empty rest result — no targets, no fallback list to generate', async () => {
+    const resolved = await resolveSessionTargets('2026-09-02', []);
+    expect(resolved.source).toBe('rest');
+    expect(resolved.targets).toEqual([]);
+    expect(resolved.components).toEqual([]);
+  });
+
+  it('still resolves normally when a plan sits on the rest date (a moved session)', async () => {
+    // A session dropped onto the rest date has a plan of its own, so it is
+    // programmed rather than short-circuited to an empty rest result.
+    const movedOntoRest: ExerciseSession = {
+      id: 'moved',
+      date: '2026-09-02',
+      type: 'gym',
+      planned: true,
+      completed: false,
+      source: 'manual',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+      label: 'Pull + Legs',
+      components: ['Pull', 'Legs'],
+    };
+    const resolved = await resolveSessionTargets('2026-09-02', [movedOntoRest]);
+    expect(resolved.source).not.toBe('rest');
+    expect(resolved.plan?.id).toBe('moved');
+  });
 });

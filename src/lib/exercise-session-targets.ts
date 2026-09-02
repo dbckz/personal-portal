@@ -53,7 +53,7 @@ export interface ResolvedSessionTargets {
   components: string[];
   // The targets to show and to seed from, whichever source they came from.
   targets: ExerciseTarget[];
-  source: 'ai' | 'fallback';
+  source: 'ai' | 'fallback' | 'rest';
   // The programmer input and its hash. The targets route uses these to kick off a
   // background generation when serving the fallback; the start route ignores them.
   input: ProgrammerInput;
@@ -125,6 +125,16 @@ export async function resolveSessionTargets(
     goals
   );
   const hash = programmeHash(input);
+
+  // A rest day with no plan of its own has nothing to train: return an empty
+  // 'rest' result so the checklist shows nothing and the targets route neither
+  // serves the deterministic fallback list nor kicks off a Claude generation. A
+  // MOVED plan (a session dropped onto a rest weekday) has a plan and falls
+  // through to normal resolution.
+  if (!plan && routineDay?.rest) {
+    return { plan, components: [], targets: [], source: 'rest', input, hash };
+  }
+
   const cached = getCachedProgramme(date, hash);
 
   if (cached) {

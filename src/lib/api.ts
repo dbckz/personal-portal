@@ -2206,8 +2206,9 @@ export const api = {
     plan?: { label?: string; components: string[]; venue?: 'home' };
     targets: ExerciseTarget[];
     // 'ai' once the Claude programme is cached, 'fallback' while it generates or
-    // when Claude is unavailable. `generating` flags that a refetch will upgrade.
-    source?: 'ai' | 'fallback';
+    // when Claude is unavailable, 'rest' for a rest day with nothing to train
+    // (empty targets). `generating` flags that a refetch will upgrade.
+    source?: 'ai' | 'fallback' | 'rest';
     generating?: boolean;
   }> {
     const params = new URLSearchParams();
