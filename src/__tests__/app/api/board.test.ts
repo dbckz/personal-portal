@@ -17,6 +17,9 @@ jest.mock('@/lib/user-data-storage', () => ({
   getBoardRolloverState: jest.fn(),
   runBoardRollover: jest.fn(),
   upsertBoardTaskState: jest.fn(),
+  updateScheduledAsanaTask: jest.fn(),
+  updateAdHocTask: jest.fn(),
+  updatePrepBlock: jest.fn(),
 }));
 jest.mock('@/lib/workflow-config-storage', () => ({
   getWorkflowConfig: jest.fn(),
@@ -25,6 +28,7 @@ jest.mock('@/lib/workflow-config-storage', () => ({
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/board/route';
 import { PATCH } from '@/app/api/board/status/route';
+import { PATCH as PATCH_DATE } from '@/app/api/board/date/route';
 import { POST } from '@/app/api/board/rollover/route';
 import {
   getBoardTaskStates,
@@ -38,6 +42,9 @@ import {
   getBoardRolloverState,
   runBoardRollover,
   upsertBoardTaskState,
+  updateScheduledAsanaTask,
+  updateAdHocTask,
+  updatePrepBlock,
 } from '@/lib/user-data-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { logicalToday } from '@/lib/date-utils';
@@ -196,5 +203,72 @@ describe('POST /api/board/rollover', () => {
     (runBoardRollover as jest.Mock).mockRejectedValue(new Error('boom'));
     const res = await POST();
     expect(res.status).toBe(500);
+  });
+});
+
+function dateReq(body: unknown) {
+  return new NextRequest(
+    new Request('http://localhost/api/board/date', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  );
+}
+
+describe('PATCH /api/board/date', () => {
+  it('moves a grouped block: every member record, clearing the roll fields', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's1', asanaTaskId: 'g1', integrationId: 'om', scheduledDate: '2026-08-17', googleEventId: 'evg' },
+      { id: 's2', asanaTaskId: 'g2', integrationId: 'om', scheduledDate: '2026-08-17', googleEventId: 'evg' },
+    ]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([
+      { id: 'a1', title: 'T', completed: false, googleEventId: 'evg' },
+    ]);
+
+    const res = await PATCH_DATE(dateReq({ key: 'block:evg', date: '2026-08-19' }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ moved: 3, date: '2026-08-19' });
+    expect(updateScheduledAsanaTask).toHaveBeenCalledWith('s1', {
+      scheduledDate: '2026-08-19',
+      originallyPlannedFor: undefined,
+      rolls: undefined,
+    });
+    expect(updateScheduledAsanaTask).toHaveBeenCalledWith('s2', expect.objectContaining({ scheduledDate: '2026-08-19' }));
+    expect(updateAdHocTask).toHaveBeenCalledWith('a1', {
+      dueDate: '2026-08-19',
+      originallyPlannedFor: undefined,
+      rolls: undefined,
+    });
+  });
+
+  it('moves a prep block by its event id', async () => {
+    (getPrepBlocks as jest.Mock).mockResolvedValue([
+      { id: 'p1', googleEventId: 'evp', date: '2026-08-17' },
+    ]);
+    const res = await PATCH_DATE(dateReq({ key: 'block:evp', date: '2026-08-20' }));
+    expect(res.status).toBe(200);
+    expect(updatePrepBlock).toHaveBeenCalledWith('p1', {
+      date: '2026-08-20',
+      originallyPlannedFor: undefined,
+      rolls: undefined,
+    });
+  });
+
+  it('rejects an un-movable card (nothing to move) with 400', async () => {
+    const res = await PATCH_DATE(dateReq({ key: 'asana:g9', date: '2026-08-20' }));
+    expect(res.status).toBe(400);
+    expect(updateScheduledAsanaTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed date', async () => {
+    const res = await PATCH_DATE(dateReq({ key: 'sched:s1', date: 'soon' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a missing key', async () => {
+    const res = await PATCH_DATE(dateReq({ date: '2026-08-20' }));
+    expect(res.status).toBe(400);
   });
 });

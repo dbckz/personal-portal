@@ -14,6 +14,7 @@ import type { AdHocTask, CalendarEvent, ScheduledAsanaTask } from '@/types';
 const setBoardStatus = jest.fn().mockResolvedValue({
   state: { key: 'asana:g1', status: 'in_progress', updatedAt: '2026-01-01T00:00:00Z' },
 });
+const changeBoardCardDate = jest.fn().mockResolvedValue({ moved: 1, date: '2026-08-17' });
 
 jest.mock('@/lib/api', () => ({
   api: {
@@ -30,6 +31,7 @@ jest.mock('@/lib/api', () => ({
     }),
     getCustomTaskTypes: jest.fn().mockResolvedValue({ customTypes: [] }),
     setBoardStatus: (...args: unknown[]) => setBoardStatus(...args),
+    changeBoardCardDate: (...args: unknown[]) => changeBoardCardDate(...args),
   },
 }));
 
@@ -90,7 +92,10 @@ function renderBoard() {
 beforeEach(() => sessionStorage.clear());
 
 describe('BoardTab', () => {
-  beforeEach(() => setBoardStatus.mockClear());
+  beforeEach(() => {
+    setBoardStatus.mockClear();
+    changeBoardCardDate.mockClear();
+  });
 
   it('renders the five status columns in order', async () => {
     renderBoard();
@@ -147,6 +152,22 @@ describe('BoardTab', () => {
       key: 'sched:s1',
       status: 'in_progress',
     });
+  });
+
+  it('changing the day from the detail modal moves the backing record', async () => {
+    renderBoard();
+    const card = (await screen.findByText('Write report')).closest(
+      '[data-testid="board-card"]'
+    )! as HTMLElement;
+    fireEvent.doubleClick(card);
+    const modal = await screen.findByTestId('board-card-detail');
+
+    // Pick a different day via the "other date" input (deterministic vs a chip label).
+    const wed = addDaysStr(MONDAY, 2);
+    const dateInput = within(modal).getByLabelText('Move to another date');
+    fireEvent.change(dateInput, { target: { value: wed } });
+
+    await waitFor(() => expect(changeBoardCardDate).toHaveBeenCalledWith('sched:s1', wed));
   });
 });
 

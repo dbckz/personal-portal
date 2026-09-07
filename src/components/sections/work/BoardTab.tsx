@@ -110,7 +110,7 @@ export function BoardTab({
     [updateTask]
   );
 
-  const { cards, isLoading, error, moveCard, toggleMember, pinToWeek, busyKeys } = useBoard({
+  const { cards, isLoading, error, moveCard, changeCardDate, toggleMember, pinToWeek, busyKeys } = useBoard({
     weekStart,
     asanaTasks,
     adHocTasks,
@@ -240,9 +240,11 @@ export function BoardTab({
               key={col.id}
               label={col.label}
               status={col.id}
+              weekStart={weekStart}
               cards={cardsByStatus[col.id]}
               busyKeys={busyKeys}
               onMove={moveCard}
+              onChangeDate={changeCardDate}
               onToggleMember={toggleMember}
               onCardDragStart={setDraggingCard}
               onCardDragEnd={() => setDraggingCard(null)}

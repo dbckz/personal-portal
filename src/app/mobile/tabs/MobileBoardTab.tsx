@@ -90,7 +90,7 @@ export function MobileBoardTab({
     }
   }, []);
 
-  const { cards, isLoading, error, moveCard, toggleMember, pinToWeek, busyKeys } = useBoard({
+  const { cards, isLoading, error, moveCard, changeCardDate, toggleMember, pinToWeek, busyKeys } = useBoard({
     weekStart,
     asanaTasks,
     adHocTasks,
@@ -281,10 +281,12 @@ export function MobileBoardTab({
       {openCard && (
         <MobileBoardCardSheet
           card={openCard}
+          weekStart={weekStart}
           busy={busyKeys.has(openCard.key)}
           busyKeys={busyKeys}
           moveError={error}
           onMove={moveCard}
+          onChangeDate={changeCardDate}
           onToggleMember={toggleMember}
           onClose={() => setOpenStateKey(null)}
         />

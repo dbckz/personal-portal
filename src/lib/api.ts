@@ -1502,6 +1502,21 @@ export const api = {
     });
   },
 
+  // Weekly task board: change the day a card sits on. Dispatches server-side by
+  // card key to move its backing ScheduledAsanaTask / AdHocTask / PrepBlock(s) —
+  // a group moves all its members. The Google Calendar event is not touched.
+  async changeBoardCardDate(key: string, date: string): Promise<{ moved: number; date: string }> {
+    return fetchWithRetry<{ moved: number; date: string }>(
+      '/api/board/date',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, date }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // Backlog grooming: one-off bootstrap that marks already-in-flight tasks groomed.
   async bootstrapGrooming(): Promise<{ total: number; groomed: number; backlog: number; marked: number }> {
     return fetchWithRetry('/api/grooming/bootstrap', { method: 'POST' }, { maxRetries: 0 });

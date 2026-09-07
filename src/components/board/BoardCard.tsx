@@ -21,8 +21,10 @@ const PRIORITY_DOT: Record<'low' | 'medium' | 'high', string> = {
 
 interface BoardCardProps {
   card: BoardCardModel;
+  weekStart: string;
   busyKeys: Set<string>;
   onMove: (card: BoardCardModel, status: BoardStatus) => void;
+  onChangeDate: (card: BoardCardModel, date: string) => void;
   onToggleMember: (card: BoardCardModel, member: BoardCardMember) => void;
   onDragStart: (card: BoardCardModel) => void;
   onDragEnd: () => void;
@@ -40,8 +42,10 @@ function sourceHint(card: BoardCardModel): string {
 
 export function BoardCard({
   card,
+  weekStart,
   busyKeys,
   onMove,
+  onChangeDate,
   onToggleMember,
   onDragStart,
   onDragEnd,
@@ -184,8 +188,10 @@ export function BoardCard({
     {showDetail && (
       <BoardCardDetailModal
         card={card}
+        weekStart={weekStart}
         busyKeys={busyKeys}
         onMove={onMove}
+        onChangeDate={onChangeDate}
         onToggleMember={onToggleMember}
         onClose={() => setShowDetail(false)}
       />

@@ -11,6 +11,8 @@ import {
 } from '@/types';
 import { asanaTaskUrl } from '@/lib/asana-url';
 import { boardWhenLabel, formatDuration, rolledDetailLabel } from '@/lib/board-format';
+import { canChangeCardDate } from '@/lib/board-move';
+import { MoveToDayRow } from './MoveToDayRow';
 
 const PRIORITY_DOT: Record<'low' | 'medium' | 'high', string> = {
   low: 'bg-gray-300',
@@ -30,8 +32,10 @@ function sourceHint(card: BoardCardModel): string {
 
 interface BoardCardDetailModalProps {
   card: BoardCardModel;
+  weekStart: string;
   busyKeys: Set<string>;
   onMove: (card: BoardCardModel, status: BoardStatus) => void;
+  onChangeDate: (card: BoardCardModel, date: string) => void;
   onToggleMember: (card: BoardCardModel, member: BoardCardMember) => void;
   onClose: () => void;
 }
@@ -41,8 +45,10 @@ interface BoardCardDetailModalProps {
 // Escape + close button match AddBoardTaskModal.
 export function BoardCardDetailModal({
   card,
+  weekStart,
   busyKeys,
   onMove,
+  onChangeDate,
   onToggleMember,
   onClose,
 }: BoardCardDetailModalProps) {
@@ -233,6 +239,16 @@ export function BoardCardDetailModal({
               })}
             </div>
           </div>
+
+          {/* Move to day */}
+          {canChangeCardDate(card) && (
+            <MoveToDayRow
+              card={card}
+              weekStart={weekStart}
+              disabled={busy}
+              onChangeDate={onChangeDate}
+            />
+          )}
 
           {/* Single-task Asana link */}
           {card.gid && card.source !== 'group' && (

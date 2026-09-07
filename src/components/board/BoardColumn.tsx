@@ -8,9 +8,11 @@ import { BoardCard } from './BoardCard';
 interface BoardColumnProps {
   label: string;
   status: BoardStatus;
+  weekStart: string;
   cards: BoardCardModel[];
   busyKeys: Set<string>;
   onMove: (card: BoardCardModel, status: BoardStatus) => void;
+  onChangeDate: (card: BoardCardModel, date: string) => void;
   onToggleMember: (card: BoardCardModel, member: BoardCardMember) => void;
   onCardDragStart: (card: BoardCardModel) => void;
   onCardDragEnd: () => void;
@@ -22,9 +24,11 @@ interface BoardColumnProps {
 export function BoardColumn({
   label,
   status,
+  weekStart,
   cards,
   busyKeys,
   onMove,
+  onChangeDate,
   onToggleMember,
   onCardDragStart,
   onCardDragEnd,
@@ -81,8 +85,10 @@ export function BoardColumn({
             <BoardCard
               key={card.stateKey}
               card={card}
+              weekStart={weekStart}
               busyKeys={busyKeys}
               onMove={onMove}
+              onChangeDate={onChangeDate}
               onToggleMember={onToggleMember}
               onDragStart={onCardDragStart}
               onDragEnd={onCardDragEnd}

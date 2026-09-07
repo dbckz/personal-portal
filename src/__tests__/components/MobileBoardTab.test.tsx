@@ -4,11 +4,13 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { BoardCard } from '@/types';
 import { weekStartFor } from '@/lib/board';
+import { addDaysStr } from '@/lib/board-format';
 import { MobileBoardTab } from '@/app/mobile/tabs/MobileBoardTab';
 
 // Control the board contents by mocking the hook; buildBoardCards is covered by
 // its own lib tests.
 const moveCard = jest.fn().mockResolvedValue(undefined);
+const changeCardDate = jest.fn().mockResolvedValue(undefined);
 const toggleMember = jest.fn().mockResolvedValue(undefined);
 const pinToWeek = jest.fn().mockResolvedValue(undefined);
 let mockCards: BoardCard[] = [];
@@ -20,6 +22,7 @@ jest.mock('@/hooks/useBoard', () => ({
     error: null,
     reload: jest.fn(),
     moveCard,
+    changeCardDate,
     toggleMember,
     pinToWeek,
     busyKeys: new Set<string>(),
@@ -60,6 +63,7 @@ function renderTab() {
 describe('MobileBoardTab', () => {
   beforeEach(() => {
     moveCard.mockClear();
+    changeCardDate.mockClear();
     toggleMember.mockClear();
     pinToWeek.mockClear();
     // The day filter now persists in sessionStorage; clear it so a filter
@@ -160,5 +164,40 @@ describe('MobileBoardTab', () => {
     // Tapping a member ticks it done through toggleMember.
     fireEvent.click(screen.getByRole('button', { name: /Email the funder/ }));
     await waitFor(() => expect(toggleMember).toHaveBeenCalledWith(card, card.members[0]));
+  });
+
+  it('changes the day from the card sheet', async () => {
+    const card = makeCard({
+      key: 'sched:s1',
+      stateKey: 'sched:s1',
+      source: 'task',
+      title: 'Draft the report',
+      status: 'todo',
+      date: weekStart,
+    });
+    mockCards = [card];
+    renderTab();
+
+    // Open the sheet, then pick another day via the date input.
+    fireEvent.click(screen.getByRole('button', { name: /Draft the report/ }));
+    const wed = addDaysStr(weekStart, 2);
+    fireEvent.change(screen.getByLabelText('Move to another date'), { target: { value: wed } });
+
+    await waitFor(() => expect(changeCardDate).toHaveBeenCalledWith(card, wed));
+  });
+
+  it('hides the move-to-day action for a ritual card', () => {
+    const card = makeCard({
+      key: 'block:evr',
+      stateKey: 'block:evr',
+      source: 'ritual',
+      title: 'Emails',
+      status: 'todo',
+      date: weekStart,
+    });
+    mockCards = [card];
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: /Emails/ }));
+    expect(screen.queryByText('Move to day')).not.toBeInTheDocument();
   });
 });

@@ -56,6 +56,9 @@ export interface UseBoardReturn {
   error: string | null;
   reload: () => Promise<void>;
   moveCard: (card: BoardCard, status: BoardStatus) => Promise<void>;
+  // Change the day a card sits on (moves its backing dated record(s), optimistic
+  // with rollback). A no-op when the target equals the card's current date.
+  changeCardDate: (card: BoardCard, date: string) => Promise<void>;
   // Tick a single member of a card done/undone (optimistic, per-row busy).
   toggleMember: (card: BoardCard, member: BoardCardMember) => Promise<void>;
   // Put a card on the week's board (Add task: new ad-hoc, or an existing Asana
@@ -93,6 +96,10 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
   // Optimistic per-member done overrides, keyed by member.key. Pruned once the
   // rebuilt card reflects the same value (the page's props catch up).
   const [memberOverrides, setMemberOverrides] = useState<Record<string, boolean>>({});
+  // Optimistic per-card date overrides, keyed by stateKey. A manual move clears
+  // the roll bookkeeping, so the override also drops originallyPlannedFor/rolls.
+  // Pruned once the rebuilt card reflects the same date.
+  const [dateOverrides, setDateOverrides] = useState<Record<string, string>>({});
 
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -214,10 +221,13 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     ]
   );
 
-  // Apply optimistic member overrides, recomputing derived status from the
-  // overridden members so a group flips to Done as its last member is ticked.
+  // Apply optimistic member + date overrides. A member override recomputes the
+  // derived status (so a group flips to Done as its last member is ticked); a
+  // date override moves the card to the new day and clears the roll badge.
   const cards = useMemo(() => {
-    if (Object.keys(memberOverrides).length === 0) return rawCards;
+    const hasMemberOv = Object.keys(memberOverrides).length > 0;
+    const hasDateOv = Object.keys(dateOverrides).length > 0;
+    if (!hasMemberOv && !hasDateOv) return rawCards;
     const blockDoneSet = new Set(blockDoneEventIds);
     const startedTaskIds = new Set(
       Object.entries(weeklyOutcomes)
@@ -225,27 +235,38 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
         .map(([taskId]) => taskId)
     );
     return rawCards.map(card => {
-      if (card.members.length === 0) return card;
-      let changed = false;
-      const members = card.members.map(m => {
-        const ov = memberOverrides[m.key];
-        if (ov !== undefined && ov !== m.done) {
-          changed = true;
-          return { ...m, done: ov };
+      let next = card;
+
+      if (card.members.length > 0) {
+        let changed = false;
+        const members = card.members.map(m => {
+          const ov = memberOverrides[m.key];
+          if (ov !== undefined && ov !== m.done) {
+            changed = true;
+            return { ...m, done: ov };
+          }
+          return m;
+        });
+        if (changed) {
+          const status =
+            card.statusSource === 'explicit'
+              ? card.status
+              : deriveBoardCardStatus(
+                  { source: card.source, members, googleEventId: card.googleEventId },
+                  { blockDoneEventIds: blockDoneSet, startedTaskIds }
+                );
+          next = { ...next, members, status };
         }
-        return m;
-      });
-      if (!changed) return card;
-      const status =
-        card.statusSource === 'explicit'
-          ? card.status
-          : deriveBoardCardStatus(
-              { source: card.source, members, googleEventId: card.googleEventId },
-              { blockDoneEventIds: blockDoneSet, startedTaskIds }
-            );
-      return { ...card, members, status };
+      }
+
+      const dateOv = dateOverrides[card.stateKey];
+      if (dateOv !== undefined && dateOv !== card.date) {
+        next = { ...next, date: dateOv, originallyPlannedFor: undefined, rolls: undefined };
+      }
+
+      return next;
     });
-  }, [rawCards, memberOverrides, blockDoneEventIds, weeklyOutcomes]);
+  }, [rawCards, memberOverrides, dateOverrides, blockDoneEventIds, weeklyOutcomes]);
 
   // Prune an override once the rebuilt card already reflects it.
   useEffect(() => {
@@ -264,6 +285,26 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
       return changed ? next : prev;
     });
   }, [rawCards, memberOverrides]);
+
+  // Prune a date override once the rebuilt card already sits on that day. For
+  // page-owned records (ad-hoc tasks) whose prop hasn't refreshed yet the
+  // override lingers holding the correct date, so the card doesn't flash back.
+  useEffect(() => {
+    if (Object.keys(dateOverrides).length === 0) return;
+    const rawDate = new Map<string, string | undefined>();
+    for (const c of rawCards) rawDate.set(c.stateKey, c.date);
+    setDateOverrides(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(prev)) {
+        if (rawDate.has(k) && rawDate.get(k) === v) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [rawCards, dateOverrides]);
 
   const setBusy = useCallback((key: string, busy: boolean) => {
     setBusyKeys(prev => {
@@ -409,6 +450,36 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     [states, weekStart, runSideEffects, setBusy]
   );
 
+  const changeCardDate = useCallback(
+    async (card: BoardCard, date: string) => {
+      if (date === card.date) return;
+      const { stateKey } = card;
+      // Optimistic: override the built card's date immediately.
+      setDateOverrides(prev => ({ ...prev, [stateKey]: date }));
+      setBusy(card.key, true);
+      setError(null);
+      try {
+        await api.changeBoardCardDate(card.key, date);
+        // Reload so the authoritative dates (and cleared roll fields) land; the
+        // prune effect then drops the override once the rebuilt card matches.
+        if (isMountedRef.current) await reload();
+      } catch (err) {
+        console.error('Board date change failed:', err);
+        if (isMountedRef.current) {
+          setError('Could not move that card — check your connection.');
+          setDateOverrides(prev => {
+            const next = { ...prev };
+            delete next[stateKey];
+            return next;
+          });
+        }
+      } finally {
+        if (isMountedRef.current) setBusy(card.key, false);
+      }
+    },
+    [reload, setBusy]
+  );
+
   const toggleMember = useCallback(
     async (card: BoardCard, member: BoardCardMember) => {
       const next = !member.done;
@@ -483,5 +554,5 @@ export function useBoard(options: UseBoardOptions): UseBoardReturn {
     [states, weekStart, setBusy]
   );
 
-  return { cards, isLoading, error, reload, moveCard, toggleMember, pinToWeek, busyKeys };
+  return { cards, isLoading, error, reload, moveCard, changeCardDate, toggleMember, pinToWeek, busyKeys };
 }

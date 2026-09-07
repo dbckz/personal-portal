@@ -6,6 +6,8 @@ import { BOARD_COLUMNS, type BoardCard, type BoardCardMember, type BoardStatus }
 import { asanaTaskUrl } from '@/lib/asana-url';
 import { MobileSheet } from './MobileSheet';
 import { boardWhenLabel, rolledDetailLabel } from '@/lib/board-format';
+import { canChangeCardDate } from '@/lib/board-move';
+import { MoveToDayRow } from '@/components/board/MoveToDayRow';
 
 // Card detail bottom sheet: title, type, the date/time chip, the member list
 // (tap to tick each done, for grouped blocks), four big status buttons (the
@@ -13,20 +15,24 @@ import { boardWhenLabel, rolledDetailLabel } from '@/lib/board-format';
 // card is optimistic in useBoard; a failure surfaces a friendly error.
 export function MobileBoardCardSheet({
   card,
+  weekStart,
   busy,
   busyKeys,
   moveError,
   onMove,
+  onChangeDate,
   onToggleMember,
   onClose,
 }: {
   card: BoardCard;
+  weekStart: string;
   busy: boolean;
   busyKeys: Set<string>;
   // Surfaced from useBoard: moveCard rolls back and sets this rather than
   // throwing, so the sheet reads it instead of catching.
   moveError: string | null;
   onMove: (card: BoardCard, status: BoardStatus) => Promise<void>;
+  onChangeDate: (card: BoardCard, date: string) => Promise<void>;
   onToggleMember: (card: BoardCard, member: BoardCardMember) => Promise<void>;
   onClose: () => void;
 }) {
@@ -41,6 +47,15 @@ export function MobileBoardCardSheet({
     setLocalError(null);
     try {
       await onMove(card, status);
+    } catch {
+      setLocalError('Could not move that card — check your connection and try again.');
+    }
+  };
+
+  const handleChangeDate = async (c: BoardCard, date: string) => {
+    setLocalError(null);
+    try {
+      await onChangeDate(c, date);
     } catch {
       setLocalError('Could not move that card — check your connection and try again.');
     }
@@ -165,6 +180,16 @@ export function MobileBoardCardSheet({
             })}
           </div>
         </div>
+
+        {canChangeCardDate(card) && (
+          <MoveToDayRow
+            card={card}
+            weekStart={weekStart}
+            disabled={busy}
+            size="mobile"
+            onChangeDate={handleChangeDate}
+          />
+        )}
 
         {card.gid && card.source !== 'group' && (
           <a
