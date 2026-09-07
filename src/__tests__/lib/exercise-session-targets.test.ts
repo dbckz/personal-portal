@@ -241,4 +241,27 @@ describe('resolveSessionTargets — a rest override on a date with no plan', () 
     expect(resolved.source).not.toBe('rest');
     expect(resolved.plan?.id).toBe('moved');
   });
+
+  it('programs a hand-made plan on the rest date as an ad-hoc plan, not as Rest', async () => {
+    // The plan's label matches no routine day (football replaced by a run, 7 Sep
+    // 2026). The Rest routine day must not govern it: the programmer would
+    // short-circuit a rest day to no exercises, so the day is programmed from
+    // the plan's own components with no routine day at all.
+    const replacement: ExerciseSession = {
+      id: 'replacement',
+      date: '2026-09-02',
+      type: 'strength + cardio',
+      planned: true,
+      completed: false,
+      source: 'manual',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+      label: 'Run + core',
+      components: ['Run', 'core'],
+    };
+    const resolved = await resolveSessionTargets('2026-09-02', [replacement]);
+    expect(resolved.source).toBe('fallback');
+    expect(resolved.input.plan.routineDay).toBeUndefined();
+    expect(resolved.components).toEqual(['Run', 'core']);
+  });
 });

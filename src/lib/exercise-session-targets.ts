@@ -71,7 +71,14 @@ export async function resolveSessionTargets(
 
   // The routine day for this date, distilled with rotation context. Drives the
   // AI programme (anchors/staples fixed, accessories rotated) and the hash.
-  const routineDay = await resolveRoutineDay(date, sessions);
+  const resolvedDay = await resolveRoutineDay(date, sessions);
+  // A plan sitting on a Rest day — a rest override (a hand-made replacement for
+  // that day's routine session, 7 Sep 2026) or a manual plan on the routine's
+  // rest weekday — whose label matches no routine day is programmed as an
+  // AD-HOC plan from its own components. Keeping the Rest routine day would
+  // hand buildProgrammerInput a rest day, which short-circuits to an empty
+  // vocabulary and leaves the plan with no programme at all.
+  const routineDay = plan && resolvedDay?.rest ? undefined : resolvedDay;
 
   // When a routine day governs this date, the routine's CURRENT title is the
   // source of truth for the session's components — not the stored plan session,
