@@ -9,9 +9,11 @@
 import {
   buildProgrammerInput,
   buildProgrammerPrompt,
+  capSets,
   exclusiveGroup,
   generateProgramme,
   HOME_EQUIPMENT,
+  MAX_SETS,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -267,6 +269,46 @@ describe('buildProgrammerPrompt', () => {
   it('says nothing about a cardio name on a day with no run', () => {
     expect(buildProgrammerPrompt(input())).not.toContain('name the cardio row');
   });
+
+  it('fixes sets at three and never tells the model to add a set', () => {
+    const prompt = buildProgrammerPrompt(input());
+    expect(prompt).not.toContain('add a set');
+    expect(prompt).not.toContain('extra set');
+    expect(prompt).toContain('Sets are FIXED at 3');
+  });
+});
+
+describe('capSets — the three-set cap on the cached read path', () => {
+  function row(name: string, sets?: number): ProgrammeRow {
+    return {
+      name,
+      key: exerciseKey(name),
+      kind: 'core',
+      toFailure: false,
+      target: sets === undefined ? { reps: 12 } : { sets, reps: 12, weightKg: 30 },
+      rationale: '',
+      lastSummary: 'no history',
+    };
+  }
+
+  it('clamps a fourth set to three', () => {
+    const [capped] = capSets([row('Flat DB press', 4)]);
+    expect(capped.target.sets).toBe(3);
+  });
+
+  it('leaves three and undefined set counts alone', () => {
+    const rows = [row('Flat DB press', 3), row('Treadmill run')];
+    const capped = capSets(rows);
+    expect(capped[0].target.sets).toBe(3);
+    expect(capped[1].target.sets).toBeUndefined();
+    // Untouched rows come back by reference.
+    expect(capped[0]).toBe(rows[0]);
+    expect(capped[1]).toBe(rows[1]);
+  });
+
+  it('caps at MAX_SETS', () => {
+    expect(MAX_SETS).toBe(3);
+  });
 });
 
 describe('validateProgramme', () => {
@@ -340,6 +382,14 @@ describe('validateProgramme', () => {
     const failing = rows.filter(r => r.toFailure);
     expect(failing).toHaveLength(1);
     expect(failing[0].name).toBe('Cable tricep pushdown');
+  });
+
+  it('clamps a fourth set down to three (Dave never wants more than 3)', () => {
+    const rows = validateProgramme(
+      [{ name: 'Converging chest press machine', kind: 'core', toFailure: false, target: { sets: 4, reps: 12, weightKg: 35 } }],
+      input()
+    );
+    expect(rows[0].target.sets).toBe(3);
   });
 });
 

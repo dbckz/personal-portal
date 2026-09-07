@@ -334,8 +334,8 @@ const PROMPT_HEADER = `You are programming one strength-and-cardio session for s
 Program the session as a coach would. Apply this judgement:
 
 - Core vs rotation. Some exercises are kept identical session to session so they can be driven up progressively; others are accessories that rotate in and out. Infer which is which from how often each exercise appears in these sessions — one present in most of them is a core lift; an occasional one is rotation. Tag each row "core", "rotation", "cardio" or "hold".
-- Progressive loading, balancing weight AND volume. Do not only add weight. For a loaded lift decide whether to add weight, add reps, or add a set; for a timed hold add seconds per set or an extra set; for cardio add distance, duration or pace. Aim over time at a sensible mix that builds balanced fitness. Use the person's last effort notes: room to spare means room to progress; "at limit" or "struggled" means consolidate. Trust your judgement on the mix.
-- How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set or an added set, and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
+- Progressive loading by reps then weight, never by sets. Sets are FIXED at 3 for every lift, bodyweight movement and timed hold — never 4, and never grow the set count to make progress. A loaded lift progresses by REPS first: add reps at the current weight, and only when reps are comfortably high (roughly 12) or the note shows room to spare, step to the next weight the equipment actually offers and RESET reps to about 8, then build reps back up from there. A rep-based bodyweight movement progresses the same way by reps. A timed HOLD progresses by seconds per set only. Cardio adds distance, duration or pace. Use the person's last effort notes: room to spare means room to progress; "at limit" or "struggled" means consolidate. Trust your judgement on the mix.
+- How each kind progresses and reads. A loaded lift or rep-based bodyweight movement progresses by reps and weight, and its effort reads as reps in reserve. A timed HOLD (plank, hang, wall sit) progresses by seconds held per set (sets stay 3), and its effort reads as "could have held it longer" — never in reps or weight. CARDIO progresses by distance, duration or pace, and its effort reads as perceived exertion (RPE), never as reps in reserve.
 - Each side. Where a movement is worked one side at a time (side plank, single-arm/leg work, Pallof press, step-ups, split squats, lunges), set "perSide": true so the target reads "each side".
 - Equipment practicality. Only suggest a load the equipment can actually make. Dumbbells and fixed weights jump in whole steps, not 0.5kg; machine stacks move about 2.5-5kg; barbells/plates change in 1.25 or 2.5kg. Consider the practicalities of typical gym equipment rather than a fine mathematical increment.
 - Some exercises are variants of the same movement — in particular calf raises with and without a step ("Standing calf raise", "Standing calf raise (step)", "Standing calf raise (no step)"), pull-up variants ("Pull-ups", "Neutral-grip pull-up", "Band-assisted pull-ups"), and single-leg knee-dominant movements (lunges and split squats — a reverse lunge next to a Bulgarian split squat is the same pattern twice). A session must include at most one variant of a movement: pick one, never both.
@@ -349,7 +349,7 @@ Program the session as a coach would. Apply this judgement:
 Return ONLY a JSON array, in the order the exercises should be done, no prose, no code fences:
 [{"name":"<exact exercise name from the input>","kind":"core|rotation|cardio|hold","toFailure":true|false,"target":{"sets":N,"reps":N,"holdSeconds":N,"perSide":true,"weightKg":N,"durationMinutes":N,"distanceKm":N},"standsInFor":"<the exact routine anchor/staple name this is a HOME stand-in for, only on a home session>","rationale":"<one sentence, cites last time's numbers>"}]
 
-Include in "target" only the measures that fit the exercise: sets/reps/weightKg for a loaded lift, sets/reps for rep-based bodyweight, sets/holdSeconds for a timed hold (plank, hang, wall sit), durationMinutes/distanceKm for cardio. Add "perSide": true for anything worked one side at a time. Omit the rest.
+Include in "target" only the measures that fit the exercise: sets/reps/weightKg for a loaded lift, sets/reps for rep-based bodyweight, sets/holdSeconds for a timed hold (plank, hang, wall sit), durationMinutes/distanceKm for cardio. Wherever "sets" applies it is always 3 — never emit a higher number. Add "perSide": true for anything worked one side at a time. Omit the rest.
 
 `;
 
@@ -569,6 +569,12 @@ function lastLoggedDurationMinutes(recent: ProgressionPoint[]): number | undefin
 // history), and any cardio duration is capped at +5 minutes over the last one
 // logged so the model can't back-solve a wild jump. The cap is upward-only, so a
 // deliberate deload survives.
+// Dave never wants more than three sets of any strength exercise: progression
+// comes from reps then weight, never from adding a set (Dave, 7 Sep 2026). A
+// hard cap enforced wherever a target is built or read, so the model can't slip
+// a fourth set through.
+export const MAX_SETS = 3;
+
 function cleanTarget(raw: unknown, cardio?: { name: string; recent: ProgressionPoint[] }): ProgrammeTarget {
   const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const num = (v: unknown): number | undefined =>
@@ -580,7 +586,8 @@ function cleanTarget(raw: unknown, cardio?: { name: string; recent: ProgressionP
   const weightKg = num(t.weightKg);
   const durationMinutes = num(t.durationMinutes);
   const distanceKm = num(t.distanceKm);
-  if (sets !== undefined) out.sets = Math.round(sets);
+  // Clamp to the three-set cap: a model that asks for a fourth set gets three.
+  if (sets !== undefined) out.sets = Math.min(Math.round(sets), MAX_SETS);
   if (reps !== undefined) out.reps = Math.round(reps);
   if (holdSeconds !== undefined) out.holdSeconds = Math.round(holdSeconds);
   if (weightKg !== undefined) out.weightKg = weightKg;
@@ -657,6 +664,18 @@ function claimVariantGroup(name: string, seenVariantGroups: Set<string>): boolea
 export function dropExclusiveDuplicates<T extends { name: string }>(rows: T[]): T[] {
   const seenVariantGroups = new Set<string>();
   return rows.filter(row => claimVariantGroup(row.name, seenVariantGroups));
+}
+
+// Clamp every row's set count to the three-set cap (Dave, 7 Sep 2026). A pure
+// pass over already-built rows, run on the cached read path so programmes cached
+// before the cap gain it without regeneration. Rows already at three or below
+// (and ones with no set count, like cardio) are returned untouched.
+export function capSets(rows: ProgrammeRow[]): ProgrammeRow[] {
+  return rows.map(row => {
+    const sets = row.target.sets;
+    if (sets === undefined || sets <= MAX_SETS) return row;
+    return { ...row, target: { ...row.target, sets: MAX_SETS } };
+  });
 }
 
 // Turn the model's raw records into validated rows. Drops anything malformed or

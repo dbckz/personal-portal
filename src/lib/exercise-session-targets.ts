@@ -26,6 +26,7 @@ import { normalizeExerciseName } from '@/lib/exercise-names';
 import { entryWasPerformed } from '@/lib/exercise-entry';
 import {
   buildProgrammerInput,
+  capSets,
   dropExclusiveDuplicates,
   enforceToFailure,
   markFixed,
@@ -157,8 +158,10 @@ export async function resolveSessionTargets(
     // before the one-variant-per-session rule (a second calf-raise the legs-
     // balance padding appended) loses the duplicate here — and if the dropped row
     // carried the to-failure marker, enforceToFailure re-marks a valid finisher.
+    // capSets clamps any row to three sets so programmes cached before the
+    // three-set cap (Dave, 7 Sep 2026) are fixed on read too.
     const ordered = enforceToFailure(
-      orderProgrammeRows(dropExclusiveDuplicates(markFixed(cached, routineDay)), routineDay)
+      orderProgrammeRows(capSets(dropExclusiveDuplicates(markFixed(cached, routineDay))), routineDay)
     );
     return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
   }
