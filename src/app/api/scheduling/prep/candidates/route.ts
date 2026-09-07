@@ -8,6 +8,7 @@ import {
   placeWeekRituals,
   placeOfficeAndTravelBlocks,
   sanitizeDayLocations,
+  sanitizeRitualWeekSettings,
   existingRitualTitlesByDateFromEvents,
   isTravelTitle,
   proposedBlockToBusyInterval,
@@ -128,6 +129,10 @@ export async function POST(request: NextRequest) {
     // prep slots — so prep never steals the 15:00 exercise slot. Same helper +
     // inputs as the propose route, so the exercise/lunch/emails slots reserved here
     // match the ones the propose route re-derives later.
+    // Same ritual choices the propose route uses, so the reserved daily-ritual
+    // slots the prep step sees match the ones the final plan re-derives (a ritual
+    // switched off here frees its slot for prep, exactly as it will for tasks).
+    const ritualSettings = sanitizeRitualWeekSettings(body?.ritualSettings);
     const ritualBlocks = placeWeekRituals({
       config: ctx.config,
       weekEvents: ctx.weekEvents,
@@ -136,6 +141,7 @@ export async function POST(request: NextRequest) {
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
       phase: 'daily',
+      ritualSettings,
     });
     const prepBusyIntervals = [
       ...ctx.busyIntervals,

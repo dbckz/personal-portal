@@ -158,6 +158,77 @@ export function ritualCadenceForTitle(title: string): RitualCadence {
 // How many times a WEEKLY ritual is placed across the week (on distinct days).
 export const KINDLE_WEEKLY_COUNT = 2;
 export const DELEGATION_REVIEW_WEEKLY_COUNT = 2;
+// Default weekly counts for the once-a-week rituals (grooming / retro / new
+// bookies / reading), matching the historical single-placement behaviour.
+export const GROOMING_WEEKLY_COUNT = 1;
+export const RETRO_WEEKLY_COUNT = 1;
+export const NEW_BOOKIES_WEEKLY_COUNT = 1;
+export const READING_WEEKLY_COUNT = 1;
+
+// Per-week ritual choices from the wizard's Rituals step. Daily rituals are
+// on/off for the week; weekly rituals carry a per-week count. The 🚶 Walk is NOT
+// here — it is opt-in per day via `walkDays`. Retro is capped at 1 (it always
+// takes the last working day); the others place `count` blocks on distinct days
+// where feasible, and 0 skips the ritual entirely.
+export interface RitualWeekSettings {
+  daily: { lunch: boolean; exercise: boolean; emails: boolean; breaks: boolean };
+  weekly: {
+    kindleNotes: number;
+    delegationReview: number;
+    grooming: number;
+    retro: number;
+    newBookies: number;
+    reading: number;
+  };
+}
+
+// All rituals ON with their default counts — the state each week starts from.
+export const DEFAULT_RITUAL_WEEK_SETTINGS: RitualWeekSettings = {
+  daily: { lunch: true, exercise: true, emails: true, breaks: true },
+  weekly: {
+    kindleNotes: KINDLE_WEEKLY_COUNT,
+    delegationReview: DELEGATION_REVIEW_WEEKLY_COUNT,
+    grooming: GROOMING_WEEKLY_COUNT,
+    retro: RETRO_WEEKLY_COUNT,
+    newBookies: NEW_BOOKIES_WEEKLY_COUNT,
+    reading: READING_WEEKLY_COUNT,
+  },
+};
+
+// Coerce the wizard's raw payload into a clean RitualWeekSettings, filling any
+// missing field from the defaults. Daily flags are booleans; weekly counts are
+// integers clamped to 0..5 (retro to 0..1, since it only ever takes one slot).
+// Shared by the propose route and the prep/candidates route so both agree.
+export function sanitizeRitualWeekSettings(raw: unknown): RitualWeekSettings {
+  const d = DEFAULT_RITUAL_WEEK_SETTINGS;
+  const base: RitualWeekSettings = { daily: { ...d.daily }, weekly: { ...d.weekly } };
+  if (!raw || typeof raw !== 'object') return base;
+  const r = raw as { daily?: unknown; weekly?: unknown };
+  const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);
+  const count = (v: unknown, fallback: number, max: number) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(0, Math.round(n)));
+  };
+  const rd = (r.daily && typeof r.daily === 'object' ? r.daily : {}) as Record<string, unknown>;
+  const rw = (r.weekly && typeof r.weekly === 'object' ? r.weekly : {}) as Record<string, unknown>;
+  return {
+    daily: {
+      lunch: bool(rd.lunch, d.daily.lunch),
+      exercise: bool(rd.exercise, d.daily.exercise),
+      emails: bool(rd.emails, d.daily.emails),
+      breaks: bool(rd.breaks, d.daily.breaks),
+    },
+    weekly: {
+      kindleNotes: count(rw.kindleNotes, d.weekly.kindleNotes, 5),
+      delegationReview: count(rw.delegationReview, d.weekly.delegationReview, 5),
+      grooming: count(rw.grooming, d.weekly.grooming, 5),
+      retro: count(rw.retro, d.weekly.retro, 1),
+      newBookies: count(rw.newBookies, d.weekly.newBookies, 5),
+      reading: count(rw.reading, d.weekly.reading, 5),
+    },
+  };
+}
 
 // Lunch + exercise + break are breaks (split work runs); emails counts as work.
 // A calendar event titled exactly like any of them is treated as a break by the
@@ -378,6 +449,10 @@ export interface ProposeRitualsInput {
   // blocks (so lunch/exercise structure the day) and 'weekly' AFTER them (so deep
   // work claims the mornings first and the weekly work rituals fit around it).
   phase?: 'all' | 'daily' | 'weekly';
+  // Per-week ritual choices from the wizard's Rituals step. A daily ritual that
+  // is off is skipped; a weekly ritual uses its per-week count (0 = skip). Absent
+  // → every ritual on with its default count (DEFAULT_RITUAL_WEEK_SETTINGS).
+  ritualSettings?: RitualWeekSettings;
 }
 
 // Absolute ms for an hour/minute on a working day (local).
@@ -496,6 +571,9 @@ export function placeWeekRituals(params: {
   walkDays?: string[];
   // Which rituals to place (see ProposeRitualsInput.phase). Defaults to 'all'.
   phase?: 'all' | 'daily' | 'weekly';
+  // Per-week ritual choices from the wizard's Rituals step (see
+  // ProposeRitualsInput.ritualSettings). Absent → all rituals on, default counts.
+  ritualSettings?: RitualWeekSettings;
 }): ProposedBlock[] {
   return proposeRitualBlocks({
     config: params.config,
@@ -506,6 +584,7 @@ export function placeWeekRituals(params: {
     outOfOfficeDates: params.outOfOfficeDates,
     walkDays: params.walkDays,
     phase: params.phase,
+    ritualSettings: params.ritualSettings,
   });
 }
 
@@ -569,6 +648,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     now,
     input.outOfOfficeDates
   );
+  const settings = input.ritualSettings ?? DEFAULT_RITUAL_WEEK_SETTINGS;
   const nowMs = now.getTime();
   const durationMs = RITUAL_DURATION_MINUTES * MS_PER_MINUTE;
   const exerciseDurationMs = EXERCISE_DURATION_MINUTES * MS_PER_MINUTE;
@@ -643,7 +723,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     }
 
     // --- Lunch (break) — ideal 11:30–13:00, fallback 11:00–14:00 ---
-    if (!present.has(LUNCH_TITLE)) {
+    if (settings.daily.lunch && !present.has(LUNCH_TITLE)) {
       let startMs = findFreeSlot(
         msAtDay(day, 11, 30),
         msAtDay(day, 13, 0),
@@ -684,7 +764,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     // to 15:00, searched outward within 13:00–18:00. When nothing fits in that
     // core window, widen the search to the ENTIRE working day (still closest to
     // 15:00); only skip the day when no free 60-min slot exists at all. ---
-    if (!present.has(EXERCISE_TITLE)) {
+    if (settings.daily.exercise && !present.has(EXERCISE_TITLE)) {
       let startMs = findClosestFreeSlot(
         msAtDay(day, 15, 0),
         msAtDay(day, 13, 0),
@@ -722,7 +802,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
 
     // --- Emails (work) — end of the day: last free slot in the final 2 hours,
     // falling back to the wider afternoon (latest-first keeps it near day-end) ---
-    if (!present.has(EMAILS_TITLE)) {
+    if (settings.daily.emails && !present.has(EMAILS_TITLE)) {
       const finalTwoHoursStart = day.whEndMs - 2 * 60 * MS_PER_MINUTE;
       let startMs = findFreeSlot(
         Math.max(finalTwoHoursStart, day.whStartMs),
@@ -775,7 +855,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     for (const set of Object.values(existingRitualTitlesByDate)) {
       if (set.has(KINDLE_TITLE)) kindleExisting += 1;
     }
-    let kindleToPlace = Math.max(0, KINDLE_WEEKLY_COUNT - kindleExisting);
+    let kindleToPlace = Math.max(0, settings.weekly.kindleNotes - kindleExisting);
     for (const day of workingDays) {
       if (kindleToPlace <= 0) break;
       const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
@@ -812,7 +892,7 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     for (const set of Object.values(existingRitualTitlesByDate)) {
       if (set.has(DELEGATION_REVIEW_TITLE)) reviewExisting += 1;
     }
-    let reviewToPlace = Math.max(0, DELEGATION_REVIEW_WEEKLY_COUNT - reviewExisting);
+    let reviewToPlace = Math.max(0, settings.weekly.delegationReview - reviewExisting);
     for (const day of workingDays) {
       if (reviewToPlace <= 0) break;
       const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
@@ -841,36 +921,47 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
     }
   }
 
-  // Backlog grooming (work) — WEEKLY, 60 min: any working day with a free
-  // run-valid hour, earliest-day-first, afternoon preference.
-  if (!presentAnyDay.has(GROOMING_TITLE)) {
-    const slot = findSlot(
-      afternoonWorkWindows(workingDays, workingHoursEnd),
-      GROOMING_DURATION_MINUTES,
-      workRun,
-      busy,
-      nowMs
-    );
-    if (slot) {
+  // Backlog grooming (work) — WEEKLY x N (default 1), 60 min each: distinct
+  // working days, earliest-day-first, afternoon preference. Existing grooming
+  // events across the week count toward N (a mid-week re-run tops up).
+  {
+    let groomingExisting = 0;
+    for (const set of Object.values(existingRitualTitlesByDate)) {
+      if (set.has(GROOMING_TITLE)) groomingExisting += 1;
+    }
+    let groomingToPlace = Math.max(0, settings.weekly.grooming - groomingExisting);
+    for (const day of workingDays) {
+      if (groomingToPlace <= 0) break;
+      const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+      if (present.has(GROOMING_TITLE)) continue;
+      const slot = findSlot(
+        afternoonWorkWindows([day], workingHoursEnd),
+        GROOMING_DURATION_MINUTES,
+        workRun,
+        busy,
+        nowMs
+      );
+      if (!slot) continue;
       const start = timeStr(slot.startMs);
       proposals.push({
-        id: `${slot.dateStr}-${start}-ritual-grooming`,
+        id: `${day.dateStr}-${start}-ritual-grooming`,
         category: 'Backlog grooming',
         kind: 'ritual',
         title: GROOMING_TITLE,
-        date: slot.dateStr,
+        date: day.dateStr,
         start,
         durationMinutes: GROOMING_DURATION_MINUTES,
         reason: 'Weekly backlog grooming.',
       });
       busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+      groomingToPlace -= 1;
     }
   }
 
   // Retrospective (work) — WEEKLY, 60 min: the LAST working day preferred (as
   // late in that day as fits), falling back to earlier days (still late in the
-  // day) when the last day is full.
-  if (!presentAnyDay.has(RETRO_TITLE)) {
+  // day) when the last day is full. Capped at one per week (count 0 = skip).
+  if (settings.weekly.retro >= 1 && !presentAnyDay.has(RETRO_TITLE)) {
     const retroDurationMs = RETRO_DURATION_MINUTES * MS_PER_MINUTE;
     for (let i = workingDays.length - 1; i >= 0; i--) {
       const day = workingDays[i];
@@ -903,14 +994,24 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   // in the 18:00–22:00 window OUTSIDE working hours. This is deliberately not a
   // working-hours slot: it just avoids busy events on the 15-min grid, and the
   // work-run rule does NOT apply in the evening. Deduped by title across the week.
-  // Monday first; if Monday's evening is full or already past, fall back to Friday. ---
-  if (!presentAnyDay.has(NEW_BOOKIES_TITLE)) {
+  // Monday first; if Monday's evening is full or already past, fall back to Friday.
+  // WEEKLY x N (default 1): with N > 1 both Mon and Fri evenings can host one
+  // (max two feasible). Existing new-bookies events count toward N. ---
+  if (settings.weekly.newBookies >= 1) {
+    let nbExisting = 0;
+    for (const set of Object.values(existingRitualTitlesByDate)) {
+      if (set.has(NEW_BOOKIES_TITLE)) nbExisting += 1;
+    }
+    let nbToPlace = Math.max(0, settings.weekly.newBookies - nbExisting);
     const newBookiesDurationMs = NEW_BOOKIES_DURATION_MINUTES * MS_PER_MINUTE;
     // Monday (getDay 1) before Friday (getDay 5); other days never host it.
     const eveningDays = workingDays
       .filter(d => d.date.getDay() === 1 || d.date.getDay() === 5)
       .sort((a, b) => a.date.getDay() - b.date.getDay());
     for (const day of eveningDays) {
+      if (nbToPlace <= 0) break;
+      const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+      if (present.has(NEW_BOOKIES_TITLE)) continue;
       const startMs = findFreeSlot(
         msAtDay(day, NEW_BOOKIES_WINDOW_START_HOUR, 0),
         msAtDay(day, NEW_BOOKIES_WINDOW_END_HOUR, 0),
@@ -933,33 +1034,44 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
       });
       // Evening block: still busy, but the work-run rule never applies here.
       busy.push({ start: startMs, end: startMs + newBookiesDurationMs });
-      break;
+      nbToPlace -= 1;
     }
   }
 
-  // --- Weekly WORK single (reading) — placed ONCE for the week, afternoon
-  // preference (morning fallback), deduped by title across the whole week. ---
-  if (!presentAnyDay.has(READING_TITLE)) {
-    const slot = findSlot(
-      afternoonWorkWindows(workingDays, workingHoursEnd),
-      READING_DURATION_MINUTES,
-      workRun,
-      busy,
-      nowMs
-    );
-    if (slot) {
+  // --- Weekly WORK (reading) — WEEKLY x N (default 1), 60 min each: distinct
+  // working days, earliest-day-first, afternoon preference (morning fallback).
+  // Existing reading events across the week count toward N. ---
+  {
+    let readingExisting = 0;
+    for (const set of Object.values(existingRitualTitlesByDate)) {
+      if (set.has(READING_TITLE)) readingExisting += 1;
+    }
+    let readingToPlace = Math.max(0, settings.weekly.reading - readingExisting);
+    for (const day of workingDays) {
+      if (readingToPlace <= 0) break;
+      const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+      if (present.has(READING_TITLE)) continue;
+      const slot = findSlot(
+        afternoonWorkWindows([day], workingHoursEnd),
+        READING_DURATION_MINUTES,
+        workRun,
+        busy,
+        nowMs
+      );
+      if (!slot) continue;
       const start = timeStr(slot.startMs);
       proposals.push({
-        id: `${slot.dateStr}-${start}-ritual-reading`,
+        id: `${day.dateStr}-${start}-ritual-reading`,
         category: 'Reading',
         kind: 'ritual',
         title: READING_TITLE,
-        date: slot.dateStr,
+        date: day.dateStr,
         start,
         durationMinutes: READING_DURATION_MINUTES,
         reason: 'Weekly reading time.',
       });
       busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+      readingToPlace -= 1;
     }
   }
 

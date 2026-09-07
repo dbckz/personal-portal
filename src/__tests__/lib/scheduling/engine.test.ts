@@ -302,6 +302,63 @@ describe('proposeBlocks - durationOverridesByTask', () => {
   });
 });
 
+describe('proposeBlocks - weeklyCountOverridesByCategory', () => {
+  const engageConfig = () =>
+    makeConfig({
+      quotas: {
+        Engage: { weeklyCount: 2, targetLength: '1h', grouped: true, preferredTimes: ['13:00-17:00'] },
+      },
+      typeMapping: { Engage: ['engage'] },
+    });
+
+  it('places the override count of grouped blocks in place of the config weeklyCount', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: engageConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['engage'] })],
+        weeklyCountOverridesByCategory: { Engage: 4 },
+      })
+    );
+    // 4 grouped containers instead of the configured 2.
+    expect(proposals.filter(p => p.category === 'Engage')).toHaveLength(4);
+  });
+
+  it('places NO blocks when the override is 0', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: engageConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['engage'] })],
+        weeklyCountOverridesByCategory: { Engage: 0 },
+      })
+    );
+    expect(proposals.filter(p => p.category === 'Engage')).toHaveLength(0);
+  });
+
+  it('reduces the override by blocks already scheduled this week', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: engageConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['engage'] })],
+        weeklyCountOverridesByCategory: { Engage: 3 },
+        existingScheduledCounts: { Engage: 1 },
+      })
+    );
+    // 3 target − 1 already scheduled = 2 new blocks.
+    expect(proposals.filter(p => p.category === 'Engage')).toHaveLength(2);
+  });
+
+  it('leaves a category with no override on its configured weeklyCount', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: engageConfig(),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['engage'] })],
+        weeklyCountOverridesByCategory: { Other: 5 },
+      })
+    );
+    expect(proposals.filter(p => p.category === 'Engage')).toHaveLength(2);
+  });
+});
+
 describe('slotIsValid - work-run rule', () => {
   const WR: WorkRun = { maxMinutes: 120, bufferMinutes: 15 };
   // Absolute ms for a time on Monday 2026-07-13.

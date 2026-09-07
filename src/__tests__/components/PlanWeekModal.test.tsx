@@ -115,6 +115,7 @@ describe('PlanWeekModal — next-week targeting', () => {
       NEXT_MONDAY,
       expect.anything(),
       expect.anything(),
+      expect.anything(),
       expect.anything()
     );
     expect(api.getWeekCandidates).toHaveBeenCalledWith(
@@ -161,29 +162,48 @@ describe('PlanWeekModal — next-week targeting', () => {
 });
 
 describe('PlanWeekModal — walks (opt-in per day)', () => {
-  const WEEK = '2026-07-20'; // Monday
+  // The Walks row now lives on the Rituals step, which runs BEFORE Prep. Its day
+  // chips come from the week's working days computed client-side from the config
+  // (locationWorkingDays), so the target week must be in the FUTURE for the chips
+  // to render (past days are dropped). Use the upcoming Monday so the test is
+  // independent of the wall clock; its Monday chip's date is exactly WEEK.
+  const isoDay = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const nextMonday = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + (((8 - d.getDay()) % 7) || 7));
+    return d;
+  };
+  const MONDAY = nextMonday();
+  const WEEK = isoDay(MONDAY);
+  const WEEK_END = isoDay(new Date(MONDAY.getTime() + 6 * 86400000));
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (api.getWorkflowConfig as jest.Mock).mockResolvedValue({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
     (api.getPrepCandidates as jest.Mock).mockResolvedValue({
       meetings: [],
       unplaced: [],
-      workingDays: ['2026-07-20', '2026-07-21'], // Mon, Tue
+      workingDays: [WEEK],
     });
     (api.getWeekCandidates as jest.Mock).mockResolvedValue({ categories: [] });
     (api.proposeWeeklyPlan as jest.Mock).mockResolvedValue({
       proposals: [],
       quotaSummary: [],
       weekStart: WEEK,
-      weekEnd: '2026-07-26',
+      weekEnd: WEEK_END,
     });
   });
 
-  // Skip priorities (→ prep) then skip prep (→ tasks), where the Walks row shows.
-  async function reachTasksStep() {
+  // Skip through to the Rituals step (calendar → location → priorities →
+  // rituals), where the Walks row now lives. Rituals is BEFORE prep, so no prep
+  // candidates are fetched yet.
+  async function reachRitualsStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
-    // Calendar step first (Next), then Location (skip = all home), then priorities
-    // (skip → prep).
+    // Calendar (Next), Location (skip → priorities), priorities (skip → rituals).
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
     });
@@ -193,49 +213,58 @@ describe('PlanWeekModal — walks (opt-in per day)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
-    await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
-    await act(async () => {
-      fireEvent.click(
-        screen.queryByRole('button', { name: 'Skip' }) ??
-          screen.getByRole('button', { name: /^Next/i })
-      );
-    });
     await screen.findByText('🚶 Walks');
+    // Prep candidates must NOT have been fetched before the Rituals step.
+    expect(api.getPrepCandidates).not.toHaveBeenCalled();
+  }
+
+  // Rituals → prep → tasks → review, so the propose call fires.
+  async function advanceToReview() {
+    // Rituals → prep (prep candidates fetch fires with the chosen settings).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
+    // Prep → tasks.
+    const skip = await screen.findByRole('button', { name: 'Skip' });
+    await act(async () => {
+      fireEvent.click(skip);
+    });
+    await waitFor(() => expect(api.getWeekCandidates).toHaveBeenCalled());
+    // Tasks → review.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
   }
 
   it('offers a chip per working day, none selected by default, and omits walkDays from propose', async () => {
-    await reachTasksStep();
+    await reachRitualsStep();
 
-    // One chip per working day of the target week (Mon, Tue), none pressed.
+    // A chip per working day of the target week (Mon–Fri), none pressed.
     const mon = screen.getByRole('button', { name: 'Mon' });
     const tue = screen.getByRole('button', { name: 'Tue' });
     expect(mon).toHaveAttribute('aria-pressed', 'false');
     expect(tue).toHaveAttribute('aria-pressed', 'false');
 
     // Advance to review WITHOUT picking a walk → propose gets no walkDays.
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
-    });
-    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+    await advanceToReview();
     expect(api.proposeWeeklyPlan).toHaveBeenCalledWith(
       expect.not.objectContaining({ walkDays: expect.anything() })
     );
   });
 
   it('sends the picked day in walkDays when a chip is toggled on', async () => {
-    await reachTasksStep();
+    await reachRitualsStep();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Mon' }));
     });
     expect(screen.getByRole('button', { name: 'Mon' })).toHaveAttribute('aria-pressed', 'true');
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
-    });
-    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+    await advanceToReview();
     expect(api.proposeWeeklyPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ walkDays: ['2026-07-20'] })
+      expect.objectContaining({ walkDays: [WEEK] })
     );
   });
 });
@@ -251,10 +280,10 @@ describe('PlanWeekModal', () => {
     await advancePastLocation();
 
     // With no untyped tasks and no reminders, the screens the user pages through
-    // are: calendar, location, priorities-input, priorities-review, prep, tasks,
-    // review = 7 dots.
+    // are: calendar, location, priorities-input, priorities-review, prep, rituals,
+    // tasks, review = 8 dots.
     const dots = container.querySelectorAll('span.rounded-full');
-    expect(dots).toHaveLength(7);
+    expect(dots).toHaveLength(8);
 
     // The two priorities screens each get their own labelled dot.
     expect(screen.getByTitle('Priorities')).toBeInTheDocument();
@@ -327,14 +356,18 @@ describe('PlanWeekModal — prep step optimistic toggling', () => {
     (api.getWeekCandidates as jest.Mock).mockResolvedValue({ categories: [] });
   });
 
-  // Skip the priorities step (no reminders/type steps in this setup) to land on
-  // the prep step, then wait for its candidates to render.
+  // Skip through to the prep step (no reminders/type steps in this setup), then
+  // wait for its candidates to render. Order: calendar → location → priorities →
+  // rituals → prep.
   async function reachPrepStep() {
     render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={WEEK} />);
-    // Calendar step first (Next), then Location (skip = all home), then priorities
+    // Calendar (Next), Location (skip), priorities (skip → rituals), rituals
     // (skip → prep).
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));

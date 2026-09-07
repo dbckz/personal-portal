@@ -14,6 +14,7 @@ import { TaskPeekModal } from '@/components/dashboard/plan-week/TaskPeekModal';
 import { MobileLocationStep } from './MobileLocationStep';
 import { MobilePrioritiesStep } from './MobilePrioritiesStep';
 import { MobileRemindersStep } from './MobileRemindersStep';
+import { MobileRitualsStep } from './MobileRitualsStep';
 import { MobileTasksStep } from './MobileTasksStep';
 
 interface MobilePlanWeekWizardProps {
@@ -92,6 +93,13 @@ export function MobilePlanWeekWizard({
     setPrepDecision,
     changePrepDuration,
     changePrepDay,
+    ritualSettings,
+    setRitualSettings,
+    walkDays,
+    toggleWalkDay,
+    engagementSessions,
+    changeEngagementSessions,
+    toggleSelectAll,
     taskCats,
     selections,
     taskDurations,
@@ -99,8 +107,6 @@ export function MobilePlanWeekWizard({
     taskDurationOverrides,
     setTaskDurationOverrides,
     mustDoIds,
-    walkDays,
-    toggleWalkDay,
     completingIds,
     addMoreMode,
     spareCapacity,
@@ -279,6 +285,15 @@ export function MobilePlanWeekWizard({
                 changePrepDay={changePrepDay}
               />
             )}
+            {step === 'rituals' && (
+              <MobileRitualsStep
+                ritualSettings={ritualSettings}
+                setRitualSettings={setRitualSettings}
+                walkDays={walkDays}
+                weekWorkingDays={locationWorkingDays}
+                toggleWalkDay={toggleWalkDay}
+              />
+            )}
             {step === 'tasks' && (
               <MobileTasksStep
                 taskCats={taskCats}
@@ -288,12 +303,12 @@ export function MobilePlanWeekWizard({
                 taskDurationOverrides={taskDurationOverrides}
                 setTaskDurationOverrides={setTaskDurationOverrides}
                 mustDoIds={mustDoIds}
-                walkDays={walkDays}
-                weekWorkingDays={prepData?.workingDays ?? []}
-                toggleWalkDay={toggleWalkDay}
                 completingIds={completingIds}
                 addMoreMode={addMoreMode}
                 spareCapacity={spareCapacity}
+                engagementSessions={engagementSessions}
+                changeEngagementSessions={changeEngagementSessions}
+                toggleSelectAll={toggleSelectAll}
                 toggleSelection={toggleSelection}
                 toggleMustDo={toggleMustDo}
                 completeAsana={completeAsana}

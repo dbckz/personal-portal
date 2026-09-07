@@ -1,7 +1,18 @@
 import type { PriorityMatchRow } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import type { RitualWeekSettings } from '@/lib/scheduling/rituals';
 
-export type Step = 'calendar' | 'type' | 'location' | 'priorities' | 'reminders' | 'prep' | 'tasks' | 'review' | 'done';
+export type Step =
+  | 'calendar'
+  | 'type'
+  | 'location'
+  | 'priorities'
+  | 'reminders'
+  | 'prep'
+  | 'rituals'
+  | 'tasks'
+  | 'review'
+  | 'done';
 
 export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
   calendar: 'Calendar',
@@ -10,8 +21,29 @@ export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
   priorities: 'Priorities',
   reminders: 'Reminders',
   prep: 'Prep',
+  rituals: 'Rituals',
   tasks: 'Tasks',
   review: 'Review',
+};
+
+// The grouped quota category whose Tasks-step header carries the "sessions this
+// week" stepper and the select-all toggle. Kept as a shared constant so the hook
+// and the step components agree on the key sent as a weeklyCount override.
+export const ENGAGEMENT_CATEGORY = 'Engagement/Outreach';
+
+// Client-safe copy of the ritual-step defaults (all rituals on, historical
+// counts), so the wizard needn't import the ritual-engine runtime. Kept in step
+// with DEFAULT_RITUAL_WEEK_SETTINGS in scheduling/rituals.ts.
+export const DEFAULT_RITUAL_SETTINGS: RitualWeekSettings = {
+  daily: { lunch: true, exercise: true, emails: true, breaks: true },
+  weekly: {
+    kindleNotes: 2,
+    delegationReview: 2,
+    grooming: 1,
+    retro: 1,
+    newBookies: 1,
+    reading: 1,
+  },
 };
 
 // The 'priorities' step is really two screens the user pages through: an input

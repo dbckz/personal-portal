@@ -123,6 +123,13 @@ export interface ProposeBlocksInput {
   // selection was made (e.g. the tasks step was skipped), in which case the
   // quota cap applies as before. Keyed by category name.
   selectedCountsByCategory?: Record<string, number>;
+  // Per-week weekly-count overrides, keyed by category name. When set for a
+  // category, its effective weekly target uses this count in place of the config
+  // `weeklyCount` (still pro-rated by out-of-office days and reduced by blocks
+  // already scheduled, exactly as the config value would be). Used by the
+  // Engagement/Outreach "sessions this week" stepper. Does not modify the saved
+  // config; a category with no entry keeps its configured weeklyCount.
+  weeklyCountOverridesByCategory?: Record<string, number>;
   weekStart: Date; // local midnight of the week's Monday
   now: Date;
   // Dates (yyyy-MM-dd) the user is out of office. These days are dropped from the

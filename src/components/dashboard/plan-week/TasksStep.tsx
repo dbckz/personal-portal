@@ -1,7 +1,7 @@
 'use client';
 
 import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
-import { Loader2, CheckCircle2, Star, Flag, ExternalLink, Trash2 } from 'lucide-react';
+import { Loader2, CheckCircle2, Star, Flag, ExternalLink, Trash2, Minus, Plus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import type {
@@ -15,6 +15,10 @@ import {
   blockLengthOptions,
   RowSelect,
 } from './helpers';
+import { ENGAGEMENT_CATEGORY } from './types';
+
+// Max for the Engagement/Outreach "sessions this week" stepper.
+const MAX_ENGAGEMENT_SESSIONS = 5;
 
 // 1 → "1st", 2 → "2nd", 3 → "3rd", 4+ → "4th" (11-13 are always "th").
 function ordinal(n: number): string {
@@ -31,15 +35,15 @@ interface TasksStepProps {
   taskDurationOverrides: Record<string, number>;
   setTaskDurationOverrides: Dispatch<SetStateAction<Record<string, number>>>;
   mustDoIds: Set<string>;
-  // 🚶 Walks: days (yyyy-MM-dd) opted into a walk, the target week's working days
-  // to offer as chips, and the per-day toggle. Walks are opt-in per day (none by
-  // default).
-  walkDays: Set<string>;
-  weekWorkingDays: string[];
-  toggleWalkDay: (dateStr: string) => void;
   completingIds: Set<string>;
   addMoreMode: boolean;
   spareCapacity: SpareCapacity | null;
+  // Engagement/Outreach "sessions this week" stepper: current value (null until
+  // seeded from config), the clamped setter, and the select-all toggle for that
+  // category's task list.
+  engagementSessions: number | null;
+  changeEngagementSessions: (n: number) => void;
+  toggleSelectAll: (category: string, ids: string[]) => void;
   toggleSelection: (category: string, id: string, remainingQuota: number | null) => void;
   toggleMustDo: (category: string, id: string) => void;
   completeAsana: (id: string, gid: string, integrationId: string) => void;
@@ -56,12 +60,12 @@ export function TasksStep({
   taskDurationOverrides,
   setTaskDurationOverrides,
   mustDoIds,
-  walkDays,
-  weekWorkingDays,
-  toggleWalkDay,
   completingIds,
   addMoreMode,
   spareCapacity,
+  engagementSessions,
+  changeEngagementSessions,
+  toggleSelectAll,
   toggleSelection,
   toggleMustDo,
   completeAsana,
@@ -86,48 +90,9 @@ export function TasksStep({
     []
   );
 
-  // Compact "🚶 Walks" row: one toggle chip per working day of the target week,
-  // none selected by default. Walks are opt-in per day; selected days are sent to
-  // the propose route. Hidden when the week's working days aren't known yet. Shown
-  // above the task list on the tasks step regardless of whether there are any
-  // quota categories to fill.
-  const renderWalksRow = () => {
-    if (weekWorkingDays.length === 0) return null;
-    return (
-      <div className="rounded-lg border border-gray-200 p-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-gray-700 mr-1">🚶 Walks</span>
-          {weekWorkingDays.map(dateStr => {
-            const on = walkDays.has(dateStr);
-            return (
-              <button
-                key={dateStr}
-                type="button"
-                onClick={() => toggleWalkDay(dateStr)}
-                aria-pressed={on}
-                title={`${on ? 'Remove' : 'Add a'} walk on ${format(parseISO(dateStr), 'EEEE d MMM')}`}
-                className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
-                  on
-                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
-                    : 'text-gray-500 border-gray-200 hover:bg-gray-100'
-                }`}
-              >
-                {format(parseISO(dateStr), 'EEE')}
-              </button>
-            );
-          })}
-          <span className="text-[11px] text-gray-400 ml-1">
-            {walkDays.size === 0 ? 'None' : `${walkDays.size} selected`}
-          </span>
-        </div>
-      </div>
-    );
-  };
-
   if (!taskCats) {
     return (
       <div className="space-y-5">
-        {renderWalksRow()}
         <p className="text-sm text-gray-400 italic py-8 text-center">No candidates available.</p>
       </div>
     );
@@ -135,7 +100,6 @@ export function TasksStep({
   if (taskCats.length === 0) {
     return (
       <div className="space-y-5">
-        {renderWalksRow()}
         <p className="text-sm text-gray-400 italic py-8 text-center">
           No quota categories to fill this week.
         </p>
@@ -354,7 +318,6 @@ export function TasksStep({
 
   return (
     <div className="space-y-5">
-      {renderWalksRow()}
       {addMoreMode && (
         <div className="rounded-lg bg-orange-50 border border-orange-200 p-3 text-sm text-orange-800">
           {spareCapacity && spareCapacity.totalMinutes > 0
@@ -375,6 +338,10 @@ export function TasksStep({
         // EXCEPT a category with an explicit maxSelection, whose cap always
         // holds (a shared-agenda category gains nothing from extra picks).
         const cap = addMoreMode && !cat.hasMaxSelection ? null : cat.remainingQuota;
+        const isEngagement = cat.category === ENGAGEMENT_CATEGORY;
+        const candidateIds = cat.candidates.map(c => c.id);
+        const allSelected =
+          candidateIds.length > 0 && candidateIds.every(id => picked.has(id));
         return (
           <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
@@ -404,6 +371,34 @@ export function TasksStep({
                   <span className="text-[11px] text-gray-400">
                     Pick up to {cap} · {picked.size} selected
                   </span>
+                )}
+                {/* Engagement/Outreach: how many sessions to schedule this week
+                    (a per-week override of the config weeklyCount). */}
+                {isEngagement && engagementSessions !== null && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                    Sessions this week
+                    <button
+                      type="button"
+                      onClick={() => changeEngagementSessions(engagementSessions - 1)}
+                      disabled={engagementSessions <= 0}
+                      aria-label="Fewer sessions this week"
+                      className="flex h-6 w-6 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="w-4 text-center text-sm tabular-nums text-gray-700" aria-live="polite">
+                      {engagementSessions}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => changeEngagementSessions(engagementSessions + 1)}
+                      disabled={engagementSessions >= MAX_ENGAGEMENT_SESSIONS}
+                      aria-label="More sessions this week"
+                      className="flex h-6 w-6 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 )}
                 {/* Grouped categories are shared containers, so their length is
                     set once at the category level. Single-task categories set
@@ -448,6 +443,16 @@ export function TasksStep({
               </ul>
             ) : (
               <>
+                {/* Select-all / deselect-all — Engagement/Outreach only. */}
+                {isEngagement && cat.candidates.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSelectAll(cat.category, candidateIds)}
+                    className="mb-2 rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
+                  >
+                    {allSelected ? 'Deselect all' : 'Select all'}
+                  </button>
+                )}
                 <ul className="space-y-1.5">
                   {cat.candidates.map(c => {
                     const isMustDo = mustDoIds.has(c.id);

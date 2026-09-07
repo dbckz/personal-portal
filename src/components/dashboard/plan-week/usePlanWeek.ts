@@ -30,6 +30,8 @@ import {
   type Step,
   STEP_LABELS,
   PRIORITIES_MATCH_LABEL,
+  ENGAGEMENT_CATEGORY,
+  DEFAULT_RITUAL_SETTINGS,
   type UntypedTask,
   type TypeRow,
   type EditableProposal,
@@ -38,6 +40,7 @@ import {
   type ReminderTriageRow,
 } from './types';
 import type { WizardDayLocation } from '@/lib/api';
+import type { RitualWeekSettings } from '@/lib/scheduling/rituals';
 
 const WEEKDAY_NAMES = [
   'Sunday',
@@ -175,6 +178,7 @@ export function usePlanWeek({
       { key: 'priorities-input', title: STEP_LABELS.priorities },
       { key: 'priorities-review', title: PRIORITIES_MATCH_LABEL },
       ...(hasRemindersStep ? [{ key: 'reminders', title: STEP_LABELS.reminders }] : []),
+      { key: 'rituals', title: STEP_LABELS.rituals },
       { key: 'prep', title: STEP_LABELS.prep },
       { key: 'tasks', title: STEP_LABELS.tasks },
       { key: 'review', title: STEP_LABELS.review },
@@ -182,8 +186,9 @@ export function usePlanWeek({
     [hasTypeStep, hasRemindersStep]
   );
 
-  // The step that follows priorities — reminders when present, else prep.
-  const afterPriorities: Step = hasRemindersStep ? 'reminders' : 'prep';
+  // The step that follows priorities — reminders when present, else rituals
+  // (rituals runs before prep so ritual choices are known when prep is proposed).
+  const afterPriorities: Step = hasRemindersStep ? 'reminders' : 'rituals';
 
   // Step 0 — type review
   const [typeRows, setTypeRows] = useState<TypeRow[] | null>(null); // null = not yet classified
@@ -248,6 +253,16 @@ export function usePlanWeek({
   // opt-in per day, so this starts empty (no walks) and the chosen days are sent
   // to the propose route. Reset on open.
   const [walkDays, setWalkDays] = useState<Set<string>>(new Set());
+
+  // Rituals step — per-week ritual choices (daily on/off, weekly counts). Starts
+  // from the defaults (every ritual on); the step edits this in place and it is
+  // sent to the propose + prep-candidates requests. Reset on open.
+  const [ritualSettings, setRitualSettings] = useState<RitualWeekSettings>(DEFAULT_RITUAL_SETTINGS);
+
+  // Tasks step — Engagement/Outreach "sessions this week" stepper. null until the
+  // candidates load seeds it from the category's configured weeklyCount; sent to
+  // propose as a per-week weeklyCount override. Reset on open.
+  const [engagementSessions, setEngagementSessions] = useState<number | null>(null);
 
   // Step 3 — "Must do this week": task ids (gid/adhocId) the user flagged as
   // must-do. Flagging auto-selects the task and bypasses the selection cap; the
@@ -344,6 +359,8 @@ export function usePlanWeek({
     setTaskDurations({});
     setTaskDurationOverrides({});
     setWalkDays(new Set());
+    setRitualSettings(DEFAULT_RITUAL_SETTINGS);
+    setEngagementSessions(null);
     setMustDoIds(new Set());
     setCompletingIds(new Set());
     setDeletingIds(new Set());
@@ -639,14 +656,14 @@ export function usePlanWeek({
     try {
       // Thread the Location step's picks so prep is proposed against the same busy
       // timeline (office get-ready/commute + daily rituals) the final plan uses.
-      const data = await api.getPrepCandidates(weekStart, durations, days, dayLocations);
+      const data = await api.getPrepCandidates(weekStart, durations, days, dayLocations, ritualSettings);
       setPrepData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meeting prep');
     } finally {
       setIsLoading(false);
     }
-  }, [prepDurations, prepDays, dayLocations, weekStart]);
+  }, [prepDurations, prepDays, dayLocations, ritualSettings, weekStart]);
 
   // Changing a prep row's length/day updates LOCAL state only — no refetch on
   // every change (that felt like a page reload). The proposed slots are
@@ -680,6 +697,12 @@ export function usePlanWeek({
         categoryOverrides: Object.keys(categoryOverrides).length ? categoryOverrides : undefined,
       });
       setTaskCats(data.categories);
+      // Seed the Engagement/Outreach "sessions this week" stepper from the
+      // category's configured weekly count (once, if not already set this open).
+      const engagementCat = data.categories.find(c => c.category === ENGAGEMENT_CATEGORY);
+      if (engagementCat) {
+        setEngagementSessions(prev => (prev === null ? engagementCat.weeklyCount ?? 0 : prev));
+      }
       // A task the end-of-week review flagged "must do next week" arrives
       // pre-flagged, so a selection cap can never quietly drop it again.
       const mustDoFromReview = data.categories.flatMap(c =>
@@ -738,6 +761,10 @@ export function usePlanWeek({
       if (Object.keys(taskDurationOverrides).length) body.taskDurationOverrides = taskDurationOverrides;
       if (walkDays.size) body.walkDays = Array.from(walkDays);
       if (Object.keys(dayLocations).length) body.dayLocations = dayLocations;
+      body.ritualSettings = ritualSettings;
+      if (engagementSessions !== null) {
+        body.weeklyCountOverrides = { [ENGAGEMENT_CATEGORY]: engagementSessions };
+      }
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
       // Overflow blocks are OPTIONAL — default them to rejected so the user opts in.
       setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
@@ -754,7 +781,17 @@ export function usePlanWeek({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, walkDays, dayLocations, weekStart]);
+  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, walkDays, dayLocations, ritualSettings, engagementSessions, weekStart]);
+
+  // The Rituals step runs BEFORE Prep, and prep candidates are placed around the
+  // daily rituals. So when the ritual choices change, invalidate any cached prep
+  // data — re-entering the Prep step then re-fetches with the chosen settings
+  // (never the defaults). A no-op on the first render (prepData already null).
+  useEffect(() => {
+    if (!isOpen) return;
+    setPrepData(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ritualSettings]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -961,6 +998,23 @@ export function usePlanWeek({
       else next.add(dateStr);
       return next;
     });
+  }, []);
+
+  // Select-all / deselect-all for one category's candidate list (used only for
+  // Engagement/Outreach). If every id is already picked, clears the category;
+  // otherwise selects all of them. Bypasses the per-category cap (grouped
+  // categories have none), mirroring the "pick any" behaviour of that category.
+  const toggleSelectAll = useCallback((category: string, ids: string[]) => {
+    setSelections(prev => {
+      const current = prev[category] ?? new Set<string>();
+      const allPicked = ids.length > 0 && ids.every(id => current.has(id));
+      return { ...prev, [category]: allPicked ? new Set<string>() : new Set(ids) };
+    });
+  }, []);
+
+  // Clamp the Engagement/Outreach "sessions this week" stepper to 0..5.
+  const changeEngagementSessions = useCallback((next: number) => {
+    setEngagementSessions(Math.min(5, Math.max(0, Math.round(next))));
   }, []);
 
   // Mark an Asana-backed candidate complete in Asana, then drop it from the wizard
@@ -1243,6 +1297,9 @@ export function usePlanWeek({
         else confirmPriorities();
         break;
       case 'reminders':
+        setStep('rituals');
+        break;
+      case 'rituals':
         setStep('prep');
         break;
       case 'prep':
@@ -1277,6 +1334,10 @@ export function usePlanWeek({
       case 'reminders':
         // Skip = convert nothing; leave every reminder as-is.
         setReminderRows(prev => (prev ? prev.map(r => ({ ...r, action: 'keep' })) : prev));
+        setStep('rituals');
+        break;
+      case 'rituals':
+        // Skip = keep the ritual defaults already in state.
         setStep('prep');
         break;
       case 'prep':
@@ -1304,8 +1365,11 @@ export function usePlanWeek({
       case 'reminders':
         setStep('priorities');
         break;
+      case 'rituals':
+        setStep(hasRemindersStep ? 'reminders' : 'priorities');
+        break;
       case 'prep':
-        setStep(afterPriorities);
+        setStep('rituals');
         break;
       case 'tasks':
         setStep('prep');
@@ -1314,7 +1378,7 @@ export function usePlanWeek({
         setStep('tasks');
         break;
     }
-  }, [step, hasTypeStep, matchRows, afterPriorities]);
+  }, [step, hasTypeStep, matchRows, hasRemindersStep]);
 
   // Map the current step (and, for priorities, its input/review phase) onto the
   // screen the active dot should mark. 'done' fills every dot (index = length).
@@ -1328,6 +1392,7 @@ export function usePlanWeek({
     (step === 'priorities' && matchRows !== null) ||
     step === 'reminders' ||
     step === 'prep' ||
+    step === 'rituals' ||
     step === 'tasks' ||
     step === 'review';
   const canSkip =
@@ -1336,6 +1401,7 @@ export function usePlanWeek({
     step === 'priorities' ||
     step === 'reminders' ||
     step === 'prep' ||
+    step === 'rituals' ||
     step === 'tasks';
 
   const projectsForIntegration = useCallback(
@@ -1409,7 +1475,15 @@ export function usePlanWeek({
     setPrepDecision,
     changePrepDuration,
     changePrepDay,
+    // rituals step
+    ritualSettings,
+    setRitualSettings,
+    walkDays,
+    toggleWalkDay,
     // tasks step
+    engagementSessions,
+    changeEngagementSessions,
+    toggleSelectAll,
     taskCats,
     selections,
     taskDurations,
@@ -1417,8 +1491,6 @@ export function usePlanWeek({
     taskDurationOverrides,
     setTaskDurationOverrides,
     mustDoIds,
-    walkDays,
-    toggleWalkDay,
     completingIds,
     addMoreMode,
     spareCapacity,

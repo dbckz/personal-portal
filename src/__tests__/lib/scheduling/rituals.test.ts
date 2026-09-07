@@ -36,6 +36,9 @@ import {
   isTravelTitle,
   GET_READY_TITLE,
   COMMUTE_TITLE,
+  sanitizeRitualWeekSettings,
+  DEFAULT_RITUAL_WEEK_SETTINGS,
+  type RitualWeekSettings,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -943,5 +946,104 @@ describe('office/travel ritual identity', () => {
     for (const b of blocks) {
       expect(proposedBlockToBusyInterval(b).isBreak).toBe(true);
     }
+  });
+});
+
+describe('sanitizeRitualWeekSettings', () => {
+  it('returns the defaults for missing / non-object input', () => {
+    expect(sanitizeRitualWeekSettings(undefined)).toEqual(DEFAULT_RITUAL_WEEK_SETTINGS);
+    expect(sanitizeRitualWeekSettings(null)).toEqual(DEFAULT_RITUAL_WEEK_SETTINGS);
+    expect(sanitizeRitualWeekSettings(42)).toEqual(DEFAULT_RITUAL_WEEK_SETTINGS);
+  });
+
+  it('fills any missing field from the defaults', () => {
+    const s = sanitizeRitualWeekSettings({ daily: { lunch: false }, weekly: { kindleNotes: 4 } });
+    expect(s.daily.lunch).toBe(false);
+    expect(s.daily.exercise).toBe(true); // default
+    expect(s.weekly.kindleNotes).toBe(4);
+    expect(s.weekly.reading).toBe(1); // default
+  });
+
+  it('clamps weekly counts to 0..5 and caps retro at 1', () => {
+    const s = sanitizeRitualWeekSettings({
+      weekly: { kindleNotes: 99, delegationReview: -3, grooming: 2.6, retro: 5, newBookies: 0, reading: 3 },
+    });
+    expect(s.weekly.kindleNotes).toBe(5); // capped at 5
+    expect(s.weekly.delegationReview).toBe(0); // floored at 0
+    expect(s.weekly.grooming).toBe(3); // rounded
+    expect(s.weekly.retro).toBe(1); // retro capped at 1
+    expect(s.weekly.newBookies).toBe(0);
+    expect(s.weekly.reading).toBe(3);
+  });
+
+  it('coerces non-boolean daily flags to the default', () => {
+    const s = sanitizeRitualWeekSettings({ daily: { emails: 'yes', breaks: 0 } });
+    expect(s.daily.emails).toBe(true);
+    expect(s.daily.breaks).toBe(true);
+  });
+});
+
+describe('proposeRitualBlocks — RitualWeekSettings', () => {
+  const settings = (over: {
+    daily?: Partial<RitualWeekSettings['daily']>;
+    weekly?: Partial<RitualWeekSettings['weekly']>;
+  }): RitualWeekSettings => ({
+    daily: { ...DEFAULT_RITUAL_WEEK_SETTINGS.daily, ...over.daily },
+    weekly: { ...DEFAULT_RITUAL_WEEK_SETTINGS.weekly, ...over.weekly },
+  });
+
+  const place = (ritualSettings: RitualWeekSettings) =>
+    proposeRitualBlocks({
+      config: makeConfig(FULL_WEEK),
+      busyIntervals: [],
+      weekStart: WEEK_START,
+      now: WEEK_START,
+      existingRitualTitlesByDate: {},
+      ritualSettings,
+    });
+
+  it('skips a daily ritual that is switched off (lunch)', () => {
+    const blocks = place(settings({ daily: { lunch: false } }));
+    expect(blocks.some(b => b.title === LUNCH_TITLE)).toBe(false);
+    // Exercise + emails (still on) are unaffected.
+    expect(blocks.some(b => b.title === EXERCISE_TITLE)).toBe(true);
+    expect(blocks.some(b => b.title === EMAILS_TITLE)).toBe(true);
+  });
+
+  it('skips exercise + emails when those are off', () => {
+    const blocks = place(settings({ daily: { exercise: false, emails: false } }));
+    expect(blocks.some(b => b.title === EXERCISE_TITLE)).toBe(false);
+    expect(blocks.some(b => b.title === EMAILS_TITLE)).toBe(false);
+    expect(blocks.some(b => b.title === LUNCH_TITLE)).toBe(true);
+  });
+
+  it('honours a raised weekly count (kindle x4 on distinct days)', () => {
+    const blocks = place(settings({ weekly: { kindleNotes: 4 } }));
+    const kindles = blocks.filter(b => b.title === KINDLE_TITLE);
+    expect(kindles).toHaveLength(4);
+    expect(new Set(kindles.map(k => k.date)).size).toBe(4);
+  });
+
+  it('places no kindle / grooming / retro / reading / new bookies when their count is 0', () => {
+    const blocks = place(
+      settings({ weekly: { kindleNotes: 0, grooming: 0, retro: 0, reading: 0, newBookies: 0 } })
+    );
+    for (const t of [KINDLE_TITLE, GROOMING_TITLE, RETRO_TITLE, READING_TITLE, NEW_BOOKIES_TITLE]) {
+      expect(blocks.some(b => b.title === t)).toBe(false);
+    }
+  });
+
+  it('places grooming on two distinct days when count is 2', () => {
+    const blocks = place(settings({ weekly: { grooming: 2 } }));
+    const grooming = blocks.filter(b => b.title === GROOMING_TITLE);
+    expect(grooming).toHaveLength(2);
+    expect(new Set(grooming.map(g => g.date)).size).toBe(2);
+  });
+
+  it('places new bookies on both Mon and Fri evenings when count is 2', () => {
+    const blocks = place(settings({ weekly: { newBookies: 2 } }));
+    const nb = blocks.filter(b => b.title === NEW_BOOKIES_TITLE);
+    expect(nb).toHaveLength(2);
+    expect(new Set(nb.map(b => b.date))).toEqual(new Set(['2026-07-13', '2026-07-17']));
   });
 });

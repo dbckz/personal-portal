@@ -5,6 +5,7 @@ import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaT
 import type { PrepBlock, RitualBlock } from '@/lib/storage/core';
 import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import type { RitualWeekSettings } from '@/lib/scheduling/rituals';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanRemoval, ReplanConversion, ReplanReviewBlock, ReplanCarryBlock, ReplanFreeSlot } from '@/lib/scheduling/replan';
 import type {
   ReviewAdoptInput,
@@ -122,6 +123,13 @@ export interface ProposeWeekRequest {
   prepBlocks?: ProposedBlock[];
   durationOverrides?: Record<string, number>; // grouped category -> per-week block length (mins)
   taskDurationOverrides?: Record<string, number>; // task id (gid/adhocId) -> block length (mins)
+  // Per-week weekly-count overrides, keyed by category (the Engagement/Outreach
+  // "sessions this week" stepper). Sanitised server-side to 0..7; replaces the
+  // config weeklyCount for that category this plan only, never written to config.
+  weeklyCountOverrides?: Record<string, number>;
+  // Per-week ritual choices from the wizard's Rituals step (daily on/off, weekly
+  // counts). Absent → every ritual on with its default count.
+  ritualSettings?: RitualWeekSettings;
   // Days (yyyy-MM-dd) the user opted a 🚶 walk into, from the wizard's Walks row.
   // Absent/empty → no walks are scheduled (walks are opt-in per day).
   walkDays?: string[];
@@ -232,6 +240,9 @@ export interface WeekCandidateCategory {
   // mode (the cap is never lifted), and remainingQuota carries the cap value.
   hasMaxSelection?: boolean;
   remainingQuota: number | null;
+  // The category's configured weekly count (0 for a no-quota catch-all). Used as
+  // the default for the Engagement/Outreach "sessions this week" stepper.
+  weeklyCount?: number;
   // Count of this category's tasks currently deferred to a later week (shown as
   // a muted "N deferred to next week" note on the wizard's tasks step).
   deferredCount?: number;
@@ -1576,7 +1587,11 @@ export const api = {
     // Per-day work location from the wizard's Location step (which runs before the
     // prep step). Threaded through so prep slots are proposed against the SAME busy
     // timeline the final plan uses (office get-ready/commute + daily rituals).
-    dayLocations?: Record<string, WizardDayLocation>
+    dayLocations?: Record<string, WizardDayLocation>,
+    // Per-week ritual choices from the Rituals step (which runs before prep).
+    // Threaded so a ritual switched off frees its slot for prep, matching the
+    // final plan. Absent → all rituals on with default counts.
+    ritualSettings?: RitualWeekSettings
   ): Promise<PrepCandidatesResponse> {
     return fetchWithRetry<PrepCandidatesResponse>(
       '/api/scheduling/prep/candidates',
@@ -1588,6 +1603,7 @@ export const api = {
           ...(prepDurations && Object.keys(prepDurations).length ? { prepDurations } : {}),
           ...(prepDays && Object.keys(prepDays).length ? { prepDays } : {}),
           ...(dayLocations && Object.keys(dayLocations).length ? { dayLocations } : {}),
+          ...(ritualSettings ? { ritualSettings } : {}),
         }),
       },
       { maxRetries: 0 }

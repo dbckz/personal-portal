@@ -17,9 +17,12 @@ function renderStep(
     deleteTask: jest.Mock;
     onOpenTask: jest.Mock;
     toggleSelection: jest.Mock;
+    toggleSelectAll: jest.Mock;
+    changeEngagementSessions: jest.Mock;
     deletingIds: Set<string>;
   }> = {},
-  catOver: Partial<WeekCandidateCategory> = {}
+  catOver: Partial<WeekCandidateCategory> = {},
+  extra: { selections?: Record<string, Set<string>>; engagementSessions?: number | null } = {}
 ) {
   const cat: WeekCandidateCategory = {
     category: 'Writing',
@@ -34,23 +37,25 @@ function renderStep(
     deleteTask: handlers.deleteTask ?? jest.fn(),
     onOpenTask: handlers.onOpenTask ?? jest.fn(),
     toggleSelection: handlers.toggleSelection ?? jest.fn(),
+    toggleSelectAll: handlers.toggleSelectAll ?? jest.fn(),
+    changeEngagementSessions: handlers.changeEngagementSessions ?? jest.fn(),
     deletingIds: handlers.deletingIds ?? new Set<string>(),
   };
   render(
     <TasksStep
       taskCats={[cat]}
-      selections={{}}
+      selections={extra.selections ?? {}}
       taskDurations={{}}
       setTaskDurations={jest.fn()}
       taskDurationOverrides={{}}
       setTaskDurationOverrides={jest.fn()}
       mustDoIds={new Set()}
-      walkDays={new Set()}
-      weekWorkingDays={[]}
-      toggleWalkDay={jest.fn()}
       completingIds={new Set()}
       addMoreMode={false}
       spareCapacity={null}
+      engagementSessions={extra.engagementSessions ?? null}
+      changeEngagementSessions={props.changeEngagementSessions}
+      toggleSelectAll={props.toggleSelectAll}
       toggleSelection={props.toggleSelection}
       toggleMustDo={jest.fn()}
       completeAsana={jest.fn()}
@@ -126,6 +131,57 @@ describe('TasksStep calibration hints', () => {
       },
     });
     expect(screen.queryByText(/Done tasks here usually got/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TasksStep — Engagement/Outreach sessions + select-all', () => {
+  const engageCat: Partial<WeekCandidateCategory> = {
+    category: 'Engagement/Outreach',
+    grouped: true,
+    remainingQuota: null,
+    weeklyCount: 2,
+  };
+
+  it('renders the sessions stepper and steps the count', () => {
+    const changeEngagementSessions = jest.fn();
+    renderStep([candidate({ id: 'e1' })], { changeEngagementSessions }, engageCat, {
+      engagementSessions: 2,
+    });
+    // Current value shown, +/- wired to the clamped setter.
+    expect(screen.getByLabelText('More sessions this week')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('More sessions this week'));
+    expect(changeEngagementSessions).toHaveBeenCalledWith(3);
+    fireEvent.click(screen.getByLabelText('Fewer sessions this week'));
+    expect(changeEngagementSessions).toHaveBeenCalledWith(1);
+  });
+
+  it('offers a select-all toggle that selects every candidate, then deselects', () => {
+    const toggleSelectAll = jest.fn();
+    // Nothing selected → button reads "Select all".
+    const { toggleSelectAll: mock } = renderStep(
+      [candidate({ id: 'e1' }), candidate({ id: 'e2', title: 'Second' })],
+      { toggleSelectAll },
+      engageCat,
+      { engagementSessions: 2 }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(mock).toHaveBeenCalledWith('Engagement/Outreach', ['e1', 'e2']);
+  });
+
+  it('shows "Deselect all" when every candidate is already picked', () => {
+    renderStep(
+      [candidate({ id: 'e1' }), candidate({ id: 'e2', title: 'Second' })],
+      {},
+      engageCat,
+      { engagementSessions: 2, selections: { 'Engagement/Outreach': new Set(['e1', 'e2']) } }
+    );
+    expect(screen.getByRole('button', { name: 'Deselect all' })).toBeInTheDocument();
+  });
+
+  it('does NOT show the stepper or select-all for a non-Engagement category', () => {
+    renderStep([candidate({ id: 'g1' })], {}, { category: 'Writing' });
+    expect(screen.queryByLabelText('More sessions this week')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Select all/ })).not.toBeInTheDocument();
   });
 });
 

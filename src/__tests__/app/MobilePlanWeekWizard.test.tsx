@@ -99,31 +99,31 @@ describe('MobilePlanWeekWizard — rendering & progress', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('opens on the calendar step, then reaches priorities (step 3 of 7, no type/reminders steps)', async () => {
+  it('opens on the calendar step, then reaches priorities (step 3 of 8, no type/reminders steps)', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
     expect(screen.getByRole('heading', { name: 'Plan my week' })).toBeInTheDocument();
     // Screens paged through: calendar, location, priorities-input, priorities-review,
-    // prep, tasks, review.
-    expect(screen.getByText(/Step 1 of 7/)).toBeInTheDocument();
+    // prep, rituals, tasks, review.
+    expect(screen.getByText(/Step 1 of 8/)).toBeInTheDocument();
     // Calendar step has Next (no Skip) and Close.
     expect(screen.getByRole('button', { name: /^Next/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
 
     await advancePastLocation();
     expect(screen.getByPlaceholderText(/One priority per line/i)).toBeInTheDocument();
-    expect(screen.getByText(/Step 3 of 7/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 8/)).toBeInTheDocument();
   });
 });
 
 describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
   beforeEach(setupMocks);
 
-  it('skips priorities → prep → tasks, firing each step fetch in order', async () => {
+  it('skips priorities → rituals → prep → tasks, firing each step fetch in order', async () => {
     render(<MobilePlanWeekWizard isOpen onClose={jest.fn()} weekStart={WEEK} />);
 
-    // Calendar step (Next), then skip location → priorities, then skip priorities
-    // → prep (candidates fetch).
+    // Calendar (Next), skip location → priorities, skip priorities → rituals
+    // (rituals now runs BEFORE prep, so no prep fetch yet).
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
     });
@@ -133,9 +133,19 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     });
+    expect(api.getPrepCandidates).not.toHaveBeenCalled();
+
+    // Skip off rituals → prep (candidates fetch fires, with the ritual settings).
+    await act(async () => {
+      fireEvent.click(
+        screen.queryByRole('button', { name: 'Skip' }) ??
+          screen.getByRole('button', { name: /^Next/i })
+      );
+    });
     await waitFor(() => expect(api.getPrepCandidates).toHaveBeenCalled());
     expect(api.getPrepCandidates).toHaveBeenCalledWith(
       WEEK,
+      expect.anything(),
       expect.anything(),
       expect.anything(),
       expect.anything()
@@ -149,8 +159,6 @@ describe('MobilePlanWeekWizard — step progression & skip conditions', () => {
       );
     });
     await waitFor(() => expect(api.getWeekCandidates).toHaveBeenCalled());
-    // The Walks row (tasks step) is on screen.
-    expect(await screen.findByText('🚶 Walks')).toBeInTheDocument();
   });
 
   it('passes the target week to every wizard endpoint through the touch UI', async () => {

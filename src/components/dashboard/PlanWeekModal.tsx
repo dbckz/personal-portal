@@ -20,6 +20,7 @@ import { LocationStep } from './plan-week/LocationStep';
 import { PrioritiesStep } from './plan-week/PrioritiesStep';
 import { RemindersStep } from './plan-week/RemindersStep';
 import { PrepStep } from './plan-week/PrepStep';
+import { RitualsStep } from './plan-week/RitualsStep';
 import { TasksStep } from './plan-week/TasksStep';
 import { ReviewStep } from './plan-week/ReviewStep';
 import { usePlanWeek } from './plan-week/usePlanWeek';
@@ -102,6 +103,13 @@ export function PlanWeekModal({
     setPrepDecision,
     changePrepDuration,
     changePrepDay,
+    ritualSettings,
+    setRitualSettings,
+    walkDays,
+    toggleWalkDay,
+    engagementSessions,
+    changeEngagementSessions,
+    toggleSelectAll,
     taskCats,
     selections,
     taskDurations,
@@ -109,8 +117,6 @@ export function PlanWeekModal({
     taskDurationOverrides,
     setTaskDurationOverrides,
     mustDoIds,
-    walkDays,
-    toggleWalkDay,
     completingIds,
     addMoreMode,
     spareCapacity,
@@ -267,6 +273,15 @@ export function PlanWeekModal({
                   changePrepDay={changePrepDay}
                 />
               )}
+              {step === 'rituals' && (
+                <RitualsStep
+                  ritualSettings={ritualSettings}
+                  setRitualSettings={setRitualSettings}
+                  walkDays={walkDays}
+                  weekWorkingDays={locationWorkingDays}
+                  toggleWalkDay={toggleWalkDay}
+                />
+              )}
               {step === 'tasks' && (
                 <TasksStep
                   taskCats={taskCats}
@@ -276,12 +291,12 @@ export function PlanWeekModal({
                   taskDurationOverrides={taskDurationOverrides}
                   setTaskDurationOverrides={setTaskDurationOverrides}
                   mustDoIds={mustDoIds}
-                  walkDays={walkDays}
-                  weekWorkingDays={prepData?.workingDays ?? []}
-                  toggleWalkDay={toggleWalkDay}
                   completingIds={completingIds}
                   addMoreMode={addMoreMode}
                   spareCapacity={spareCapacity}
+                  engagementSessions={engagementSessions}
+                  changeEngagementSessions={changeEngagementSessions}
+                  toggleSelectAll={toggleSelectAll}
                   toggleSelection={toggleSelection}
                   toggleMustDo={toggleMustDo}
                   completeAsana={completeAsana}

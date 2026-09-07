@@ -10,6 +10,7 @@ import {
   proposedBlockToBusyInterval,
   existingRitualTitlesByDateFromEvents,
   isTravelTitle,
+  sanitizeRitualWeekSettings,
   EXERCISE_TITLE,
 } from '@/lib/scheduling/rituals';
 import { proposeBreakBlocks } from '@/lib/scheduling/breaks';
@@ -54,6 +55,22 @@ export async function POST(request: NextRequest) {
     const rawWalkDays: string[] = Array.isArray(body?.walkDays)
       ? body.walkDays.filter((d: unknown): d is string => typeof d === 'string')
       : [];
+
+    // Per-week weekly-count overrides, keyed by category (the Engagement/Outreach
+    // "sessions this week" stepper). Sanitised to integers 0..7; never written to
+    // the saved config. Applied in the engine in place of the config weeklyCount.
+    const weeklyCountOverrides: Record<string, number> = {};
+    if (body?.weeklyCountOverrides && typeof body.weeklyCountOverrides === 'object') {
+      for (const [category, value] of Object.entries(body.weeklyCountOverrides as Record<string, unknown>)) {
+        const n = Number(value);
+        if (Number.isFinite(n)) weeklyCountOverrides[category] = Math.min(7, Math.max(0, Math.round(n)));
+      }
+    }
+
+    // Per-week ritual choices from the wizard's Rituals step (daily on/off, weekly
+    // counts). Absent → every ritual on with its default count. Threaded into the
+    // ritual placer; the daily-breaks flag also gates the break-gap pass below.
+    const ritualSettings = sanitizeRitualWeekSettings(body?.ritualSettings);
 
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
 
@@ -119,6 +136,7 @@ export async function POST(request: NextRequest) {
       outOfOfficeDates: ctx.outOfOfficeDates,
       walkDays,
       phase: 'daily',
+      ritualSettings,
     });
 
     // Accepted prep + office/travel + placed daily ritual blocks occupy time
@@ -182,6 +200,7 @@ export async function POST(request: NextRequest) {
       durationOverridesByCategory: Object.keys(durationOverrides).length ? durationOverrides : undefined,
       durationOverridesByTask: Object.keys(taskDurationOverrides).length ? taskDurationOverrides : undefined,
       selectedCountsByCategory: selectionSets ? selectedCountsByCategory : undefined,
+      weeklyCountOverridesByCategory: Object.keys(weeklyCountOverrides).length ? weeklyCountOverrides : undefined,
       weekStart: ctx.weekStart,
       now: ctx.now,
       outOfOfficeDates: ctx.outOfOfficeDates,
@@ -204,6 +223,7 @@ export async function POST(request: NextRequest) {
       outOfOfficeDates: ctx.outOfOfficeDates,
       walkDays,
       phase: 'weekly',
+      ritualSettings,
     });
     const ritualBlocks = [...officeTravelBlocks, ...dailyRituals, ...weeklyRituals];
 
@@ -219,12 +239,14 @@ export async function POST(request: NextRequest) {
       ...busyWithTasks,
       ...weeklyRituals.map(proposedBlockToBusyInterval),
     ];
-    const breakBlocks = proposeBreakBlocks({
-      workingDays,
-      busyIntervals: finalBusyForBreaks,
-      workRun,
-      now: ctx.now,
-    });
+    const breakBlocks = ritualSettings.daily.breaks
+      ? proposeBreakBlocks({
+          workingDays,
+          busyIntervals: finalBusyForBreaks,
+          workRun,
+          now: ctx.now,
+        })
+      : [];
 
     // Prep + ritual + break blocks are shown first, ahead of the task/reserved blocks.
     const proposals = [...prepBlocks, ...ritualBlocks, ...breakBlocks, ...taskBlocks];

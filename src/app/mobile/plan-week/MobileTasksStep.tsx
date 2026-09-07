@@ -1,7 +1,7 @@
 'use client';
 
 import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
-import { Loader2, CheckCircle2, Star, Flag, ExternalLink, Trash2 } from 'lucide-react';
+import { Loader2, CheckCircle2, Star, Flag, ExternalLink, Trash2, Minus, Plus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import type { WeekCandidateCategory, WeekCandidate, SpareCapacity } from '@/lib/api';
@@ -11,6 +11,10 @@ import {
   blockLengthOptions,
   RowSelect,
 } from '@/components/dashboard/plan-week/helpers';
+import { ENGAGEMENT_CATEGORY } from '@/components/dashboard/plan-week/types';
+
+// Max for the Engagement/Outreach "sessions this week" stepper.
+const MAX_ENGAGEMENT_SESSIONS = 5;
 
 // 1 → "1st", 2 → "2nd", 3 → "3rd", 4+ → "4th" (11-13 are always "th").
 function ordinal(n: number): string {
@@ -27,12 +31,12 @@ interface MobileTasksStepProps {
   taskDurationOverrides: Record<string, number>;
   setTaskDurationOverrides: Dispatch<SetStateAction<Record<string, number>>>;
   mustDoIds: Set<string>;
-  walkDays: Set<string>;
-  weekWorkingDays: string[];
-  toggleWalkDay: (dateStr: string) => void;
   completingIds: Set<string>;
   addMoreMode: boolean;
   spareCapacity: SpareCapacity | null;
+  engagementSessions: number | null;
+  changeEngagementSessions: (n: number) => void;
+  toggleSelectAll: (category: string, ids: string[]) => void;
   toggleSelection: (category: string, id: string, remainingQuota: number | null) => void;
   toggleMustDo: (category: string, id: string) => void;
   completeAsana: (id: string, gid: string, integrationId: string) => void;
@@ -53,12 +57,12 @@ export function MobileTasksStep({
   taskDurationOverrides,
   setTaskDurationOverrides,
   mustDoIds,
-  walkDays,
-  weekWorkingDays,
-  toggleWalkDay,
   completingIds,
   addMoreMode,
   spareCapacity,
+  engagementSessions,
+  changeEngagementSessions,
+  toggleSelectAll,
   toggleSelection,
   toggleMustDo,
   completeAsana,
@@ -82,43 +86,9 @@ export function MobileTasksStep({
     []
   );
 
-  const renderWalksRow = () => {
-    if (weekWorkingDays.length === 0) return null;
-    return (
-      <div className="rounded-xl border border-gray-200 p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="mr-1 text-sm font-medium text-gray-700">🚶 Walks</span>
-          {weekWorkingDays.map(dateStr => {
-            const on = walkDays.has(dateStr);
-            return (
-              <button
-                key={dateStr}
-                type="button"
-                onClick={() => toggleWalkDay(dateStr)}
-                aria-pressed={on}
-                title={`${on ? 'Remove' : 'Add a'} walk on ${format(parseISO(dateStr), 'EEEE d MMM')}`}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                  on
-                    ? 'border-emerald-300 bg-emerald-100 text-emerald-700'
-                    : 'border-gray-200 text-gray-500'
-                }`}
-              >
-                {format(parseISO(dateStr), 'EEE')}
-              </button>
-            );
-          })}
-          <span className="ml-1 text-[11px] text-gray-400">
-            {walkDays.size === 0 ? 'None' : `${walkDays.size} selected`}
-          </span>
-        </div>
-      </div>
-    );
-  };
-
   if (!taskCats) {
     return (
       <div className="space-y-4">
-        {renderWalksRow()}
         <p className="py-8 text-center text-sm italic text-gray-400">No candidates available.</p>
       </div>
     );
@@ -126,7 +96,6 @@ export function MobileTasksStep({
   if (taskCats.length === 0) {
     return (
       <div className="space-y-4">
-        {renderWalksRow()}
         <p className="py-8 text-center text-sm italic text-gray-400">No quota categories to fill this week.</p>
       </div>
     );
@@ -281,7 +250,6 @@ export function MobileTasksStep({
 
   return (
     <div className="space-y-4">
-      {renderWalksRow()}
       {addMoreMode && (
         <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
           {spareCapacity && spareCapacity.totalMinutes > 0
@@ -298,6 +266,10 @@ export function MobileTasksStep({
             : Math.min(cat.remainingQuota, cat.candidates.length);
         const defaultDuration = cat.targetLengthMinutes || 30;
         const cap = addMoreMode && !cat.hasMaxSelection ? null : cat.remainingQuota;
+        const isEngagement = cat.category === ENGAGEMENT_CATEGORY;
+        const candidateIds = cat.candidates.map(c => c.id);
+        const allSelected =
+          candidateIds.length > 0 && candidateIds.every(id => picked.has(id));
         return (
           <div key={cat.category} className="rounded-xl border border-gray-200 p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -324,6 +296,34 @@ export function MobileTasksStep({
                 </span>
               )}
             </div>
+
+            {/* Engagement/Outreach: sessions-this-week stepper (per-week override). */}
+            {isEngagement && engagementSessions !== null && (
+              <div className="mb-2 flex items-center gap-2 text-[11px] text-gray-500">
+                Sessions this week
+                <button
+                  type="button"
+                  onClick={() => changeEngagementSessions(engagementSessions - 1)}
+                  disabled={engagementSessions <= 0}
+                  aria-label="Fewer sessions this week"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 active:bg-gray-100 disabled:opacity-40"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
+                <span className="w-6 text-center text-sm tabular-nums text-gray-700" aria-live="polite">
+                  {engagementSessions}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => changeEngagementSessions(engagementSessions + 1)}
+                  disabled={engagementSessions >= MAX_ENGAGEMENT_SESSIONS}
+                  aria-label="More sessions this week"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 active:bg-gray-100 disabled:opacity-40"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             {/* Grouped categories set one shared block length for the container. */}
             {cat.grouped && (
@@ -364,6 +364,16 @@ export function MobileTasksStep({
               </ul>
             ) : (
               <>
+                {/* Select-all / deselect-all — Engagement/Outreach only. */}
+                {isEngagement && cat.candidates.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSelectAll(cat.category, candidateIds)}
+                    className="mb-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 active:bg-gray-100"
+                  >
+                    {allSelected ? 'Deselect all' : 'Select all'}
+                  </button>
+                )}
                 <ul className="space-y-2">
                   {cat.candidates.map(c => {
                     const isMustDo = mustDoIds.has(c.id);

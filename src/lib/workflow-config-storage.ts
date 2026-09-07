@@ -227,7 +227,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       autoSelect: true,
     },
     'Engagement/Outreach': {
-      weeklyCount: 3,
+      weeklyCount: 2,
       targetLength: '1h',
       grouped: true,
       preferredTimes: ['13:00-17:00'],

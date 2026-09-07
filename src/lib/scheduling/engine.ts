@@ -870,8 +870,16 @@ export function proposeBlocks(
       continue;
     }
     const candidateCountForCat = (tasksByCategory.get(quota.category) ?? []).length;
-    const weeklyCount = cfg
-      ? effectiveWeeklyCount(cfg, {
+    // A per-week override replaces the config weeklyCount before OOO pro-rating
+    // (the Engagement/Outreach "sessions this week" stepper). Only meaningful for
+    // a plain fixed-quota category; daily / scaleToTasks categories ignore it.
+    const overrideCount = input.weeklyCountOverridesByCategory?.[quota.category];
+    const cfgForCount =
+      cfg && typeof overrideCount === 'number' && !cfg.daily && !cfg.scaleToTasks
+        ? { ...cfg, weeklyCount: overrideCount }
+        : cfg;
+    const weeklyCount = cfgForCount
+      ? effectiveWeeklyCount(cfgForCount, {
           remainingWorkingDays: workingDays.length,
           configuredWorkingDaysPerWeek,
           availableWorkingDaysPerWeek,
