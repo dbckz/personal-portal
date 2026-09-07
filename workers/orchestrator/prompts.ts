@@ -57,6 +57,12 @@ export function buildBriefPrompt({ task, stories, brief }: BriefPromptInput): st
       + 'message with each line prefixed by "> " (and earlier messages nested '
       + 'with ">> ", etc., or included via the previous message\'s own quoted '
       + 'trail). New standalone emails (no thread) need no quoting.',
+    'NEVER include Dave\'s phone number (or any personal phone number) in an '
+      + 'email, draft, comment or any other output, even if it appears in his '
+      + 'signature, earlier messages in the thread, or elsewhere in his account. '
+      + 'Sharing his number is Dave\'s explicit per-message decision, never '
+      + 'yours. If a reply seems to need it, leave it out and mention in the '
+      + 'summary that Dave can add it himself.',
     'Return ONLY valid JSON with this schema:',
     '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
     'outputs should be a short list of concrete review items such as URLs, artefacts produced, or key caveats.',
