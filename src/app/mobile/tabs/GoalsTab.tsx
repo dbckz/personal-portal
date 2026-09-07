@@ -1,20 +1,27 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle, Check, MessageSquarePlus, Pencil, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, MessageSquarePlus, Pencil, Plus, RotateCcw, Target, Trash2 } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { GoalPacingBar } from '@/components/goals/GoalPacingBar';
 import { periodKeyFor, periodLabel } from '@/lib/goal-periods';
 import { goalSections, sectionLabel } from '@/lib/life-sections';
 import type { GoalNudge } from '@/lib/goal-progress';
-import type { Goal, GoalCheckInStatus, GoalPeriodKind, GoalWithProgress } from '@/types/life';
+import type { Goal, GoalCheckInStatus, GoalPeriodKind, GoalStatus, GoalWithProgress } from '@/types/life';
 import { MobileGoalEditorSheet } from '../components/MobileGoalEditorSheet';
 
 const CHECK_IN_OPTIONS: Array<{ status: GoalCheckInStatus; label: string; className: string }> = [
   { status: 'on-track', label: 'On track', className: 'bg-emerald-100 text-emerald-800 active:bg-emerald-200' },
   { status: 'slipping', label: 'Slipping', className: 'bg-amber-100 text-amber-800 active:bg-amber-200' },
   { status: 'stalled', label: 'Stalled', className: 'bg-red-100 text-red-800 active:bg-red-200' },
+];
+
+const CLOSE_OPTIONS: Array<{ status: Exclude<GoalStatus, 'active'>; label: string; className: string }> = [
+  { status: 'hit', label: 'Hit', className: 'bg-emerald-100 text-emerald-800 active:bg-emerald-200' },
+  { status: 'partial', label: 'Partial', className: 'bg-amber-100 text-amber-800 active:bg-amber-200' },
+  { status: 'missed', label: 'Missed', className: 'bg-red-100 text-red-800 active:bg-red-200' },
+  { status: 'dropped', label: 'Dropped', className: 'bg-gray-100 text-gray-700 active:bg-gray-200' },
 ];
 
 // The phone Goals tab is fully read/write, matching the desktop Goals section:
@@ -47,6 +54,9 @@ export function GoalsTab({
   const [savedStatus, setSavedStatus] = useState<Record<string, GoalCheckInStatus>>({});
   // Optimistically hidden while a delete is in flight.
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  // Optimistic terminal-status override, applied per-action until the refresh
+  // lands (or rolled back on failure).
+  const [statusOverride, setStatusOverride] = useState<Record<string, GoalStatus>>({});
 
   // The current quarter's goals are the only eligible parents for a new/edited
   // monthly goal, and the overview already has them.
@@ -88,6 +98,25 @@ export function GoalsTab({
         return next;
       });
       setWriteError('Could not delete that goal.');
+    }
+  };
+
+  const handleSetStatus = async (goalId: string, status: GoalStatus, reflection?: string) => {
+    setWriteError(null);
+    const previous = statusOverride[goalId];
+    setStatusOverride(prev => ({ ...prev, [goalId]: status }));
+    try {
+      await api.updateGoal(goalId, { status, ...(reflection ? { reflection } : {}) });
+      onChanged();
+    } catch (err) {
+      console.error('Failed to update goal status:', err);
+      setStatusOverride(prev => {
+        const next = { ...prev };
+        if (previous === undefined) delete next[goalId];
+        else next[goalId] = previous;
+        return next;
+      });
+      setWriteError('Could not update that goal.');
     }
   };
 
@@ -167,17 +196,21 @@ export function GoalsTab({
             heading={periodLabel('month', periodKeyFor('month', now))}
             items={visibleMonth}
             savedStatus={savedStatus}
+            statusOverride={statusOverride}
             onCheckIn={handleCheckIn}
             onEdit={setEditing}
             onDelete={handleDelete}
+            onSetStatus={handleSetStatus}
           />
           <GoalGroup
             heading={periodLabel('quarter', periodKeyFor('quarter', now))}
             items={visibleQuarter}
             savedStatus={savedStatus}
+            statusOverride={statusOverride}
             onCheckIn={handleCheckIn}
             onEdit={setEditing}
             onDelete={handleDelete}
+            onSetStatus={handleSetStatus}
           />
         </>
       )}
@@ -203,16 +236,20 @@ function GoalGroup({
   heading,
   items,
   savedStatus,
+  statusOverride,
   onCheckIn,
   onEdit,
   onDelete,
+  onSetStatus,
 }: {
   heading: string;
   items: GoalWithProgress[];
   savedStatus: Record<string, GoalCheckInStatus>;
+  statusOverride: Record<string, GoalStatus>;
   onCheckIn: (goalId: string, status: GoalCheckInStatus, note?: string, value?: number) => void;
   onEdit: (goal: Goal) => void;
   onDelete: (goalId: string) => void;
+  onSetStatus: (goalId: string, status: GoalStatus, reflection?: string) => void;
 }) {
   return (
     <section>
@@ -226,9 +263,11 @@ function GoalGroup({
               key={item.goal.id}
               item={item}
               savedStatus={savedStatus[item.goal.id]}
+              statusOverride={statusOverride[item.goal.id]}
               onCheckIn={onCheckIn}
               onEdit={onEdit}
               onDelete={onDelete}
+              onSetStatus={onSetStatus}
             />
           ))}
         </div>
@@ -240,21 +279,31 @@ function GoalGroup({
 function MobileGoalCard({
   item,
   savedStatus,
+  statusOverride,
   onCheckIn,
   onEdit,
   onDelete,
+  onSetStatus,
 }: {
   item: GoalWithProgress;
   savedStatus?: GoalCheckInStatus;
+  statusOverride?: GoalStatus;
   onCheckIn: (goalId: string, status: GoalCheckInStatus, note?: string, value?: number) => void;
   onEdit: (goal: Goal) => void;
   onDelete: (goalId: string) => void;
+  onSetStatus: (goalId: string, status: GoalStatus, reflection?: string) => void;
 }) {
   const { goal, progress } = item;
   const [checkInOpen, setCheckInOpen] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [note, setNote] = useState('');
   const [value, setValue] = useState('');
+  const [closeNote, setCloseNote] = useState(goal.reflection ?? '');
+
+  // The optimistic override wins over the server status until the refresh lands.
+  const effectiveStatus = statusOverride ?? goal.status;
+  const isActive = effectiveStatus === 'active';
 
   const submitCheckIn = (status: GoalCheckInStatus) => {
     const parsed = value.trim() === '' ? undefined : Number(value);
@@ -264,6 +313,11 @@ function MobileGoalCard({
     setValue('');
   };
 
+  const submitClose = (status: Exclude<GoalStatus, 'active'>) => {
+    onSetStatus(goal.id, status, closeNote.trim() || undefined);
+    setCloseOpen(false);
+  };
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
@@ -271,9 +325,16 @@ function MobileGoalCard({
           <p className="text-sm font-medium text-gray-900">{goal.title}</p>
           {goal.detail && <p className="mt-0.5 text-xs text-gray-600">{goal.detail}</p>}
         </div>
-        <span className="flex-shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
-          {sectionLabel(goal.sectionId)}
-        </span>
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1">
+          {!isActive && (
+            <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white">
+              {effectiveStatus}
+            </span>
+          )}
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+            {sectionLabel(goal.sectionId)}
+          </span>
+        </div>
       </div>
 
       <div className="mt-2">
@@ -292,6 +353,7 @@ function MobileGoalCard({
           type="button"
           onClick={() => {
             setConfirmingDelete(false);
+            setCloseOpen(false);
             setCheckInOpen(open => !open);
           }}
           className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-semibold text-gray-600 active:bg-gray-100"
@@ -299,6 +361,29 @@ function MobileGoalCard({
           <MessageSquarePlus className="h-4 w-4" />
           Check in
         </button>
+        {isActive ? (
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmingDelete(false);
+              setCheckInOpen(false);
+              setCloseOpen(open => !open);
+            }}
+            className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-semibold text-gray-600 active:bg-gray-100"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Close
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSetStatus(goal.id, 'active')}
+            className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-semibold text-gray-600 active:bg-gray-100"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Reopen
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onEdit(goal)}
@@ -311,6 +396,7 @@ function MobileGoalCard({
           type="button"
           onClick={() => {
             setCheckInOpen(false);
+            setCloseOpen(false);
             setConfirmingDelete(confirm => !confirm);
           }}
           className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-semibold text-gray-500 active:bg-red-50 active:text-red-600"
@@ -378,6 +464,36 @@ function MobileGoalCard({
                 key={option.status}
                 type="button"
                 onClick={() => submitCheckIn(option.status)}
+                className={`flex h-9 items-center gap-1 rounded-md px-3 text-xs font-semibold ${option.className}`}
+              >
+                <Check className="h-3.5 w-3.5" />
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {closeOpen && (
+        <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+          <p className="mb-1 text-xs font-medium text-gray-600">How did this goal land?</p>
+          <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor={`close-note-${goal.id}`}>
+            Note (optional)
+          </label>
+          <textarea
+            id={`close-note-${goal.id}`}
+            value={closeNote}
+            onChange={e => setCloseNote(e.target.value)}
+            placeholder="What happened, and what would you do differently?"
+            rows={3}
+            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-base"
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            {CLOSE_OPTIONS.map(option => (
+              <button
+                key={option.status}
+                type="button"
+                onClick={() => submitClose(option.status)}
                 className={`flex h-9 items-center gap-1 rounded-md px-3 text-xs font-semibold ${option.className}`}
               >
                 <Check className="h-3.5 w-3.5" />

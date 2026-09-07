@@ -18,6 +18,7 @@ import type {
   Goal,
   GoalCheckInStatus,
   GoalPeriodKind,
+  GoalStatus,
   GoalWithProgress,
   Scorecard,
 } from '@/types/life';
@@ -123,6 +124,18 @@ export function GoalsSection({ subTab, onGoalsChanged }: GoalsSectionProps) {
         refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to delete the goal.');
+      }
+    },
+    [refresh]
+  );
+
+  const handleSetStatus = useCallback(
+    async (goalId: string, status: GoalStatus, reflection?: string) => {
+      try {
+        await api.updateGoal(goalId, { status, ...(reflection ? { reflection } : {}) });
+        refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update the goal.');
       }
     },
     [refresh]
@@ -241,6 +254,7 @@ export function GoalsSection({ subTab, onGoalsChanged }: GoalsSectionProps) {
             onCheckIn={handleCheckIn}
             onEdit={goalId => setEditing(items.find(i => i.goal.id === goalId)?.goal ?? null)}
             onDelete={handleDelete}
+            onSetStatus={handleSetStatus}
           />
         ))}
       </div>

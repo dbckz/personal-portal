@@ -11,6 +11,7 @@ jest.mock('@/lib/api', () => ({
   api: {
     checkInGoal: jest.fn().mockResolvedValue({}),
     deleteGoal: jest.fn().mockResolvedValue({ success: true }),
+    updateGoal: jest.fn().mockResolvedValue({ goal: {} }),
     // Editor sheet lazy-loads these when its evidence pickers open; stub so a
     // stray call can't throw.
     getAsanaProjects: jest.fn().mockResolvedValue({ projects: [] }),
@@ -104,6 +105,42 @@ describe('GoalsTab (mobile, read/write)', () => {
     await waitFor(() => expect(mockApi.deleteGoal).toHaveBeenCalledWith('g1'));
     expect(onChanged).toHaveBeenCalled();
     expect(screen.queryByText('Ship the mobile goals editor')).not.toBeInTheDocument();
+  });
+
+  it('closes a goal with a terminal verdict and an optional note', async () => {
+    const onChanged = jest.fn();
+    render(<GoalsTab {...baseProps} monthItems={[item()]} onChanged={onChanged} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^close$/i }));
+    fireEvent.change(
+      screen.getByPlaceholderText('What happened, and what would you do differently?'),
+      { target: { value: 'shipped it' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^hit$/i }));
+
+    await waitFor(() =>
+      expect(mockApi.updateGoal).toHaveBeenCalledWith('g1', {
+        status: 'hit',
+        reflection: 'shipped it',
+      })
+    );
+    expect(onChanged).toHaveBeenCalled();
+    // The optimistic override shows the terminal badge before the refresh lands.
+    expect(screen.getByText('hit')).toBeInTheDocument();
+  });
+
+  it('reopens a closed goal', async () => {
+    const onChanged = jest.fn();
+    render(
+      <GoalsTab {...baseProps} monthItems={[item({ status: 'missed' })]} onChanged={onChanged} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^reopen$/i }));
+
+    await waitFor(() =>
+      expect(mockApi.updateGoal).toHaveBeenCalledWith('g1', { status: 'active' })
+    );
+    expect(onChanged).toHaveBeenCalled();
   });
 
   it('opens the editor sheet for a new goal', () => {

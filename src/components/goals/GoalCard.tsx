@@ -2,16 +2,24 @@
 
 import { useState } from 'react';
 import { format } from 'date-fns';
-import { Check, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
+import { Check, CheckCircle2, MessageSquarePlus, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { sectionLabel } from '@/lib/life-sections';
-import type { GoalCheckInStatus, GoalWithProgress } from '@/types/life';
+import type { GoalCheckInStatus, GoalStatus, GoalWithProgress } from '@/types/life';
 import { GoalPacingBar } from './GoalPacingBar';
 
 const CHECK_IN_OPTIONS: Array<{ status: GoalCheckInStatus; label: string; className: string }> = [
   { status: 'on-track', label: 'On track', className: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' },
   { status: 'slipping', label: 'Slipping', className: 'bg-amber-100 text-amber-800 hover:bg-amber-200' },
   { status: 'stalled', label: 'Stalled', className: 'bg-red-100 text-red-800 hover:bg-red-200' },
+];
+
+// The terminal verdicts, in the order the reflection session uses them.
+const CLOSE_OPTIONS: Array<{ status: Exclude<GoalStatus, 'active'>; label: string; className: string }> = [
+  { status: 'hit', label: 'Hit', className: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' },
+  { status: 'partial', label: 'Partial', className: 'bg-amber-100 text-amber-800 hover:bg-amber-200' },
+  { status: 'missed', label: 'Missed', className: 'bg-red-100 text-red-800 hover:bg-red-200' },
+  { status: 'dropped', label: 'Dropped', className: 'bg-gray-100 text-gray-700 hover:bg-gray-200' },
 ];
 
 interface GoalCardProps {
@@ -22,6 +30,9 @@ interface GoalCardProps {
   onCheckIn: (goalId: string, status: GoalCheckInStatus, note?: string, value?: number) => void;
   onEdit: (goalId: string) => void;
   onDelete: (goalId: string) => void;
+  // Close a goal early with a terminal verdict, or reopen a closed one
+  // (status 'active').
+  onSetStatus: (goalId: string, status: GoalStatus, reflection?: string) => void;
 }
 
 export function GoalCard({
@@ -31,11 +42,16 @@ export function GoalCard({
   onCheckIn,
   onEdit,
   onDelete,
+  onSetStatus,
 }: GoalCardProps) {
   const { goal, progress } = item;
   const [checkInOpen, setCheckInOpen] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
   const [note, setNote] = useState('');
   const [value, setValue] = useState('');
+  const [closeNote, setCloseNote] = useState(goal.reflection ?? '');
+
+  const isActive = goal.status === 'active';
 
   const submitCheckIn = (status: GoalCheckInStatus) => {
     const parsed = value.trim() === '' ? undefined : Number(value);
@@ -43,6 +59,11 @@ export function GoalCard({
     setCheckInOpen(false);
     setNote('');
     setValue('');
+  };
+
+  const submitClose = (status: Exclude<GoalStatus, 'active'>) => {
+    onSetStatus(goal.id, status, closeNote.trim() || undefined);
+    setCloseOpen(false);
   };
 
   return (
@@ -80,6 +101,28 @@ export function GoalCard({
           >
             <MessageSquarePlus className="w-4 h-4" />
           </button>
+          {isActive ? (
+            <button
+              onClick={() => {
+                setCheckInOpen(false);
+                setCloseOpen(open => !open);
+              }}
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-800"
+              aria-label="Close goal"
+              title="Close goal"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={() => onSetStatus(goal.id, 'active')}
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-800"
+              aria-label="Reopen goal"
+              title="Reopen goal"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={() => onEdit(goal.id)}
             className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-800"
@@ -132,6 +175,35 @@ export function GoalCard({
               <button
                 key={option.status}
                 onClick={() => submitCheckIn(option.status)}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md ${option.className}`}
+              >
+                <Check className="w-3 h-3" />
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {closeOpen && (
+        <div className="mt-3 p-3 rounded-md bg-gray-50 border border-gray-200">
+          <p className="text-xs font-medium text-gray-600 mb-1">How did this goal land?</p>
+          <label className="block text-xs font-medium text-gray-600 mb-1" htmlFor={`close-note-${goal.id}`}>
+            Note (optional)
+          </label>
+          <textarea
+            id={`close-note-${goal.id}`}
+            value={closeNote}
+            onChange={e => setCloseNote(e.target.value)}
+            placeholder="What happened, and what would you do differently?"
+            rows={3}
+            className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md"
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            {CLOSE_OPTIONS.map(option => (
+              <button
+                key={option.status}
+                onClick={() => submitClose(option.status)}
                 className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md ${option.className}`}
               >
                 <Check className="w-3 h-3" />

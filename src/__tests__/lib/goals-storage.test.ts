@@ -135,6 +135,9 @@ describe('goal storage', () => {
 
     const reopened = await updateGoal(goal.id, { status: 'active' });
     expect(reopened?.closedAt).toBeUndefined();
+    // Reopening only touches the status/closedAt — the reflection written when it
+    // was closed is left in place.
+    expect(reopened?.reflection).toBe('Went well');
   });
 
   it('records check-ins in order and adopts a reported figure', async () => {

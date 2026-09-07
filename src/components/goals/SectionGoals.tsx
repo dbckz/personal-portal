@@ -5,7 +5,7 @@ import { Plus } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { periodKeyFor, periodLabel } from '@/lib/goal-periods';
-import type { Goal, GoalCheckInStatus, GoalPeriodKind, GoalWithProgress } from '@/types/life';
+import type { Goal, GoalCheckInStatus, GoalPeriodKind, GoalStatus, GoalWithProgress } from '@/types/life';
 import { GoalCard } from './GoalCard';
 import { GoalEditorModal } from './GoalEditorModal';
 
@@ -78,6 +78,18 @@ export function SectionGoals({ sectionId, emptyHint }: SectionGoalsProps) {
     [load]
   );
 
+  const handleSetStatus = useCallback(
+    async (goalId: string, status: GoalStatus, reflection?: string) => {
+      try {
+        await api.updateGoal(goalId, { status, ...(reflection ? { reflection } : {}) });
+        load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update the goal.');
+      }
+    },
+    [load]
+  );
+
   const allItems = [...items.quarter, ...items.month];
   const findGoal = (goalId: string) => allItems.find(i => i.goal.id === goalId)?.goal ?? null;
 
@@ -119,6 +131,7 @@ export function SectionGoals({ sectionId, emptyHint }: SectionGoalsProps) {
                   onCheckIn={handleCheckIn}
                   onEdit={goalId => setEditing({ goal: findGoal(goalId), periodKind: kind })}
                   onDelete={handleDelete}
+                  onSetStatus={handleSetStatus}
                 />
               ))}
             </div>
