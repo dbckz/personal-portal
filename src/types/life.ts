@@ -418,3 +418,41 @@ export interface ExerciseAnalysis {
   // works offline.
   suggestions: string[];
 }
+
+// ---------------------------------------------------------------------------
+// 75 Hard — the self-designed 75-day discipline challenge
+// ---------------------------------------------------------------------------
+
+// The five daily rules, each a checkbox. `walk` is required Monday–Saturday
+// only (on Sunday the long walk is the exercise, so the box is auto-satisfied).
+export type Challenge75Rule = 'exercise' | 'walk' | 'water' | 'read' | 'photo';
+
+// One day's ticks. Every rule is optional (absent = not ticked). `note` lets a
+// day carry a scribbled aside, e.g. when transcribing from a paper tracker.
+export interface Challenge75DayTicks {
+  exercise?: boolean;
+  walk?: boolean;
+  water?: boolean;
+  read?: boolean;
+  photo?: boolean;
+  note?: string;
+}
+
+// How an archived attempt ended: 'failed' (a rule was breached) or 'complete'
+// (day 75 reached without failing).
+export type Challenge75Outcome = 'failed' | 'complete';
+
+// One run at the challenge. `days` is keyed by yyyy-MM-dd. An attempt with
+// `endedAt` set is archived (kept for history); the last attempt in the state's
+// list with no `endedAt` is the active one.
+export interface Challenge75Attempt {
+  startDate: string; // yyyy-MM-dd — day 1
+  days: Record<string, Challenge75DayTicks>;
+  endedAt?: string; // ISO timestamp, set when archived
+  outcome?: Challenge75Outcome;
+}
+
+// The whole challenge domain: an ordered list of attempts, the last one active.
+export interface Challenge75State {
+  attempts: Challenge75Attempt[];
+}

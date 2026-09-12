@@ -20,6 +20,8 @@ import type {
   ExerciseSession,
   RehabRoutine,
   WeeklyRoutineDay,
+  Challenge75State,
+  Challenge75Rule,
   Goal,
   GoalCheckIn,
   GoalCheckInStatus,
@@ -2158,6 +2160,70 @@ export const api = {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date, exerciseId, done }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // 75 Hard — the self-designed 75-day discipline challenge. Read the whole
+  // state (all attempts, the last one active); the caller evaluates pass/fail
+  // with the shared lib.
+  async getChallenge75(): Promise<{ state: Challenge75State }> {
+    return fetchWithRetry<{ state: Challenge75State }>('/api/challenge75');
+  },
+
+  // Tick/untick one rule on one date of the active attempt; returns the state.
+  async setChallenge75Tick(
+    date: string,
+    rule: Challenge75Rule,
+    value: boolean
+  ): Promise<{ state: Challenge75State }> {
+    return fetchWithRetry<{ state: Challenge75State }>(
+      '/api/challenge75',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, rule, value }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Set or clear a day's free-text note on the active attempt.
+  async setChallenge75Note(date: string, note: string): Promise<{ state: Challenge75State }> {
+    return fetchWithRetry<{ state: Challenge75State }>(
+      '/api/challenge75',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, note }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Edit the active attempt's start date.
+  async setChallenge75StartDate(startDate: string): Promise<{ state: Challenge75State }> {
+    return fetchWithRetry<{ state: Challenge75State }>(
+      '/api/challenge75',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Restart from day 1: archive the active attempt and start a fresh one from
+  // the chosen date (default: today).
+  async restartChallenge75(startDate?: string): Promise<{ state: Challenge75State }> {
+    return fetchWithRetry<{ state: Challenge75State }>(
+      '/api/challenge75',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(startDate ? { startDate } : {}),
       },
       { maxRetries: 0 }
     );

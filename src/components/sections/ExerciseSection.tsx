@@ -23,6 +23,7 @@ import { MusclesTab } from './exercise/MusclesTab';
 import { ProgressionTab } from './exercise/ProgressionTab';
 import { RoutineTab } from './exercise/RoutineTab';
 import { TodayTargets } from './exercise/TodayTargets';
+import { Challenge75Panel } from './exercise/challenge75/Challenge75Panel';
 
 interface ExerciseSectionProps {
   subTab: string;
@@ -47,6 +48,13 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
           <RehabBlock />
         </div>
       </>
+    );
+  }
+  if (subTab === 'challenge75') {
+    return (
+      <div className="max-w-3xl mx-auto p-6">
+        <Challenge75Panel />
+      </div>
     );
   }
   if (subTab === 'routine') return <RoutineTab />;

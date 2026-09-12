@@ -15,6 +15,7 @@ import { FreeformLogCard } from '../components/FreeformLogCard';
 import { MobileMusclesCard } from '../components/MobileMusclesCard';
 import { MobileSessionSheet } from '../components/MobileSessionSheet';
 import { RehabBlock } from '@/components/sections/exercise/RehabBlock';
+import { Challenge75Panel } from '@/components/sections/exercise/challenge75/Challenge75Panel';
 import { RoutineCard } from '../components/RoutineCard';
 import { TodayChecklist } from '../components/TodayChecklist';
 
@@ -105,6 +106,12 @@ export function ExerciseTab({
   return (
     <div className="space-y-5">
       <TodayChecklist onSessionChanged={onSessionChanged} />
+
+      {/* The 75 Hard tracker — the same panel as the desktop sub-tab, adapted to
+          the narrow column (grid reflows, restart stays behind a confirm). */}
+      <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+        <Challenge75Panel compact />
+      </div>
 
       {/* The daily back-rehab block — a separate system, shown every day. */}
       <RehabBlock />
