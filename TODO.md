@@ -2,6 +2,35 @@
 
 ## Open
 
+- Exercise planning rework (12 Sep 2026, PRIORITY — sit down together at the
+  computer and redesign, not patch): making even a basic one-off change to a
+  day's session needs hand-holding, which defeats the point of the app. Dave's
+  read is that the code has been massively over-complicated. Concrete pain from
+  12 Sep, when swapping Saturday to "Pull B + short treadmill run":
+  - No way to express a one-off day as "routine day X plus/minus a component".
+    A routine override is only `{ dayOfWeek }` or `{ rest }`. Follow-a-weekday
+    keeps the anchors but takes the exercise list from that weekday's TITLE
+    (`exercise-session-targets.ts`), so a bolted-on run vanishes; rest + a
+    hand-made plan keeps the extras but drops the anchors. Took three attempts
+    and the run ended up added as an entry after starting the session.
+  - Accessories reshuffle on every plan-level edit. The programme is cached per
+    (date, hash) and the hash moves on any override / plan create or delete /
+    entry add, each triggering a Claude regeneration that can pick different
+    accessories (cable bicep curl appeared "at random" this way). Only anchors
+    and staples are pinned. Once a day's programme exists, later edits should
+    keep its accessories and only add/remove what the edit implies.
+  - Unmatched target rows still render on a STARTED session (`mergeRows` in
+    `useTodaySession.ts`), so a regeneration after starting would show ghost
+    rows next to the logged entries.
+  - Stale planned sessions survive routine edits: a "Pull (back & arms)" plan
+    (+ calendar event) was still sitting on Sun 13 Sep after the Fri/Sun swap.
+  - No dry run: nothing shows what a change will do to the day, the routine and
+    the calendar before it does it.
+  Candidate direction: a much simpler model — a day is an explicit list of
+  components with anchors carried by the component, one-off edits are plain
+  edits to that day's list, and the AI only fills accessories once per day
+  unless asked. Decide together before writing code.
+
 - Exercise midnight rollover (28 Aug 2026): a workout in progress when the
   clock passes midnight vanishes from the Today view, which flips to the new
   date's plan mid-session. The Today tab (desktop and mobile) should keep
