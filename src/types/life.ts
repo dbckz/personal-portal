@@ -423,9 +423,16 @@ export interface ExerciseAnalysis {
 // 75 Hard — the self-designed 75-day discipline challenge
 // ---------------------------------------------------------------------------
 
-// The five daily rules, each a checkbox. `walk` is required Monday–Saturday
+// The seven daily rules, each a checkbox. `walk` is required Monday–Saturday
 // only (on Sunday the long walk is the exercise, so the box is auto-satisfied).
-export type Challenge75Rule = 'exercise' | 'walk' | 'water' | 'read' | 'photo';
+export type Challenge75Rule =
+  | 'exercise'
+  | 'walk'
+  | 'water'
+  | 'read'
+  | 'photo'
+  | 'meditate'
+  | 'pages';
 
 // One day's ticks. Every rule is optional (absent = not ticked). `note` lets a
 // day carry a scribbled aside, e.g. when transcribing from a paper tracker.
@@ -435,6 +442,8 @@ export interface Challenge75DayTicks {
   water?: boolean;
   read?: boolean;
   photo?: boolean;
+  meditate?: boolean;
+  pages?: boolean;
   note?: string;
 }
 

@@ -41,6 +41,15 @@ describe('ticks', () => {
     expect(state.attempts[0].days['2026-09-14']).toEqual({ read: true });
   });
 
+  it('persists the meditate and pages rules', async () => {
+    await getChallenge75State();
+    let state = await setChallenge75Tick('2026-09-14', 'meditate', true);
+    expect(state.attempts[0].days['2026-09-14']).toEqual({ meditate: true });
+
+    state = await setChallenge75Tick('2026-09-14', 'pages', true);
+    expect(state.attempts[0].days['2026-09-14']).toEqual({ meditate: true, pages: true });
+  });
+
   it('drops a day entry once its last tick is cleared', async () => {
     await getChallenge75State();
     await setChallenge75Tick('2026-09-15', 'photo', true);

@@ -62,26 +62,48 @@ describe('required rules', () => {
   it('requires the walk Monday–Saturday', () => {
     expect(isWalkRequired('2026-09-14')).toBe(true); // Monday
     expect(isWalkRequired('2026-09-19')).toBe(true); // Saturday
-    expect(requiredRulesFor('2026-09-14')).toEqual(['exercise', 'walk', 'water', 'read', 'photo']);
+    expect(requiredRulesFor('2026-09-14')).toEqual([
+      'exercise',
+      'walk',
+      'water',
+      'read',
+      'photo',
+      'meditate',
+      'pages',
+    ]);
   });
 
   it('drops the walk on Sundays', () => {
     expect(isWalkRequired('2026-09-20')).toBe(false); // Sunday
-    expect(requiredRulesFor('2026-09-20')).toEqual(['exercise', 'water', 'read', 'photo']);
+    expect(requiredRulesFor('2026-09-20')).toEqual([
+      'exercise',
+      'water',
+      'read',
+      'photo',
+      'meditate',
+      'pages',
+    ]);
+  });
+
+  it('still requires meditate and pages on a Sunday', () => {
+    const rules = requiredRulesFor('2026-09-20'); // Sunday
+    expect(rules).toContain('meditate');
+    expect(rules).toContain('pages');
+    expect(rules).not.toContain('walk');
   });
 });
 
 describe('day completeness', () => {
   it('is complete only when every required box is ticked', () => {
-    expect(isDayComplete('2026-09-14', { exercise: true, walk: true, water: true, read: true, photo: true })).toBe(true);
-    expect(isDayComplete('2026-09-14', { exercise: true, walk: true, water: true, read: true })).toBe(false);
+    expect(isDayComplete('2026-09-14', { exercise: true, walk: true, water: true, read: true, photo: true, meditate: true, pages: true })).toBe(true);
+    expect(isDayComplete('2026-09-14', { exercise: true, walk: true, water: true, read: true, photo: true, meditate: true })).toBe(false);
   });
 
   it('does not require the walk on a Sunday', () => {
     // No walk ticked, but it's Sunday — still complete.
-    expect(isDayComplete('2026-09-20', { exercise: true, water: true, read: true, photo: true })).toBe(true);
+    expect(isDayComplete('2026-09-20', { exercise: true, water: true, read: true, photo: true, meditate: true, pages: true })).toBe(true);
     // A ticked walk on Sunday is harmless.
-    expect(isDayComplete('2026-09-20', { exercise: true, walk: true, water: true, read: true, photo: true })).toBe(true);
+    expect(isDayComplete('2026-09-20', { exercise: true, walk: true, water: true, read: true, photo: true, meditate: true, pages: true })).toBe(true);
   });
 });
 

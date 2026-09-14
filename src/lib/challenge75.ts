@@ -1,5 +1,5 @@
 // The pure rules engine for Dave's self-designed "75 Hard" discipline
-// challenge: 75 consecutive days, five daily rules, and two failure conditions.
+// challenge: 75 consecutive days, seven daily rules, and two failure conditions.
 // I/O-free and free of React so the storage layer, the API route and both the
 // desktop and mobile UIs evaluate an attempt with exactly the same logic — the
 // only difference between them is where "today" comes from.
@@ -11,6 +11,8 @@
 //   3. water    — 3 litres of water.
 //   4. read     — read a good chunk of a book (deliberately no page count).
 //   5. photo    — a progress photo (checkbox only, no upload).
+//   6. meditate — a meditation session.
+//   7. pages    — write your morning pages.
 //
 // Pass/fail:
 //   - A day PASSES only if every REQUIRED box is ticked; otherwise it is a MISS.
@@ -38,7 +40,7 @@ export const ROLLING_MIN_PASSES = 6;
 // The first attempt's start date — Monday 14 September 2026 is day 1.
 export const DEFAULT_START_DATE = '2026-09-14';
 
-// The five rules in display order, with their labels and descriptions.
+// The seven rules in display order, with their labels and descriptions.
 export const CHALLENGE_RULES: Array<{
   id: Challenge75Rule;
   label: string;
@@ -49,6 +51,8 @@ export const CHALLENGE_RULES: Array<{
   { id: 'water', label: '3 litres of water', description: 'Drink 3 litres of water' },
   { id: 'read', label: 'Read', description: 'Read a good chunk of a book' },
   { id: 'photo', label: 'Progress photo', description: 'Take a progress photo' },
+  { id: 'meditate', label: 'Meditate', description: 'A meditation session' },
+  { id: 'pages', label: 'Morning pages', description: 'Write your morning pages' },
 ];
 
 export type Challenge75DayStatus = 'pass' | 'miss' | 'pending';

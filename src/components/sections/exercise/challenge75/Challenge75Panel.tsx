@@ -18,7 +18,7 @@ import type { Challenge75Rule } from '@/types/life';
 // reflows from ten columns down to seven on a phone.
 //
 // It shows the attempt's state and stats, the day being edited (today by
-// default, any past day when a grid cell is tapped) as a five-rule checklist,
+// default, any past day when a grid cell is tapped) as a seven-rule checklist,
 // the full 75-day grid coloured by pass/miss/pending, the rules in plain text,
 // and — when the attempt has failed or completed — a banner with the restart.
 export function Challenge75Panel({ compact = false }: { compact?: boolean }) {
@@ -458,6 +458,8 @@ function Rules() {
         <li>Drink 3 litres of water.</li>
         <li>Read a good chunk of a book.</li>
         <li>Take a progress photo.</li>
+        <li>Meditate.</li>
+        <li>Write your morning pages.</li>
       </ol>
       <p className="mt-2 text-[11px] text-gray-500">
         Miss any required box and the day is a miss. At most 1 miss in any 7 days, and 5 misses
