@@ -15,45 +15,13 @@
 
 import { readAllDomains, writeAllDomains } from './db';
 import type { RehabExercise, RehabRoutine } from '@/types/life';
+import { MCGILL_REHAB_EXERCISES } from '../full-body-routine';
 
-const SEED_EXERCISES: RehabExercise[] = [
-  {
-    id: 'couch-stretch',
-    name: 'Couch stretch',
-    prescription: '90 s per side',
-    note: 'Back knee against sofa/wall, glute squeezed, torso tall — feel it in the front of the hip, not the lower back',
-  },
-  {
-    id: 'glute-bridge',
-    name: 'Glute bridge',
-    prescription: '2×15',
-    note: "2 s squeeze at the top, ribs down, don't arch the lower back",
-  },
-  {
-    id: 'dead-bug',
-    name: 'Dead bug',
-    prescription: '10 per side, slow',
-    note: 'Lower back pressed into the floor',
-  },
-  {
-    id: 'side-plank',
-    name: 'Side plank',
-    prescription: '30 s per side',
-    note: 'On knees if the full version aggravates anything',
-  },
-  {
-    id: 'bird-dog',
-    name: 'Bird dog',
-    prescription: '8 per side, slow',
-    note: 'Hips level',
-  },
-  {
-    id: 'standing-pelvic-tilt',
-    name: 'Standing pelvic tilt',
-    prescription: '10 reps',
-    note: "Tuck into POSTERIOR tilt and hold a beat — the tuck is the rep. Practise 'run tall, tuck the pelvis'",
-  },
-];
+// The captured default: the McGill Big 3 at their 5-3-1 × 10 s dosing plus a
+// spine warm-up and a hip-rotation drill (docs/full-body-routine-plan.md §4).
+// The original six ids are preserved so a fresh install and a migrated one share
+// ids — a tick keyed by id survives either way.
+const SEED_EXERCISES: RehabExercise[] = MCGILL_REHAB_EXERCISES;
 
 // Tick dates older than this are pruned on write — a year of history is ample
 // and keeps the domain from growing without bound.

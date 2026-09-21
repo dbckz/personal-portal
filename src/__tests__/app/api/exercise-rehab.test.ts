@@ -22,12 +22,29 @@ describe('/api/exercise/rehab', () => {
     __resetDbForTests();
   });
 
-  it('GET seeds and returns the six-exercise block', async () => {
+  it('GET seeds and returns the McGill rehab block', async () => {
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.routine.exercises).toHaveLength(6);
-    expect(body.routine.exercises[0].id).toBe('couch-stretch');
+    expect(body.routine.exercises).toHaveLength(9);
+    // Cat-cow leads (spine warm-up); the original ids are still present.
+    expect(body.routine.exercises[0].id).toBe('cat-cow');
+    const ids = body.routine.exercises.map((e: { id: string }) => e.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'couch-stretch',
+        '90-90-hip-switch',
+        'mcgill-curl-up',
+        'side-plank',
+        'bird-dog',
+        'glute-bridge',
+        'dead-bug',
+        'standing-pelvic-tilt',
+      ])
+    );
+    // Side plank and bird dog carry the McGill 5-3-1 dose.
+    const sidePlank = body.routine.exercises.find((e: { id: string }) => e.id === 'side-plank');
+    expect(sidePlank.prescription).toMatch(/5-3-1/);
     expect(body.routine.ticks).toEqual({});
   });
 
