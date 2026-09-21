@@ -1,6 +1,6 @@
 # Full-body alternative routine: research and plan
 
-Status: **plan only, nothing built** (20 Sep 2026). The current 6-day routine stays untouched; this describes an alternative Dave can switch to and back from.
+Status: **v2 built, seeded and active** (21 Sep 2026). The 6-day split is retained as the "Split (6-day)" library entry Dave can switch back to; the full-body routine below is the active one. §1 and §2 are the original research; §3 and §4 describe the routine as built.
 
 ## 1. Why: what the data says
 
@@ -36,78 +36,68 @@ Most likely the one Dave remembers: **samusasuke, "Why you maybe should lift wei
 
 Also relevant: RomeoStevens' "Optimal Exercise" (2014), its 2023 reflections (spine-friendly swaps: front squat/step-ups over back squat, RDLs, "the dis-utility from injuries vastly outweighs positive effects from chasing numbers") and "Time Efficient Resistance Training" (2024: goblet squat ⇄ RDL, incline press ⇄ one-arm row, 3 × 8–20, 1 min rests).
 
-## 3. Proposed routine
+## 3. Proposed routine (v2, finalised 21 Sep 2026)
 
 ### Weekly shape
 
 | Day | Session | Venue | ~Time |
 |---|---|---|---|
-| Mon | **Full body A** (push + pull + legs, heavy legs) + 5-a-side football in the evening | gym, pitch | 55–65 min + match |
-| Tue | Treadmill run (distance ramping weekly toward the 10k goal) | gym | 30–40 min |
-| Wed | **Full body B** (push + pull + legs, moderate legs) | gym | 55–65 min |
-| Thu | Treadmill run | gym | 30–40 min |
-| Fri | **Full body C** (push + pull + legs, light legs) | gym | 50–60 min |
-| Sat | Parkrun | outdoor | 5 km |
-| Sun | rest (walk + yoga) | home | — |
+| Mon | **Home core + mobility** (the 15-min block) + 5-a-side football in the evening | home, pitch | 15 min + match |
+| Tue | **Full body A** (push + pull + legs) + treadmill run AFTER the lifts | gym | 55–65 min + run |
+| Wed | **Home core + mobility** | home | 15 min |
+| Thu | **Full body B** (push + pull + legs) + treadmill run AFTER the lifts | gym | 55–65 min + run |
+| Fri | **Home core + mobility** | home | 15 min |
+| Sat | **Parkrun** first, then **Full body C** (push + pull + legs) | outdoor, gym | 5 km + 45–55 min |
+| Sun | **Home core + mobility** (recovery) + long walk + yoga | home | 15 min + walk |
 
-Every day: the rehab/core block at home (see §4). Lifting sessions are spaced 48 h apart (Mon/Wed/Fri), which fits the LessWrong post's 48–96 h rule. Missing one still leaves every muscle hit within 2–4 days.
+Three full-body gym sessions (Tue/Thu/Sat), each spaced so every muscle is hit within a few days if one is missed. The 15-minute home core + mobility block runs on the four non-gym days as a FIXED prescription: no AI programming, no accessories, no progression — the day's checklist is exactly the block below. Runs stay on their own effort: Tue/Thu treadmill AFTER the lifts, Sat parkrun FIRST. Monday keeps 5-a-side football in the evening; Sunday adds a long walk + yoga (the block is recovery, not training).
 
-**Cardio (decided 21 Sep 2026):** unchanged from the current routine. Runs stay on Tue, Thu (treadmill) and Sat (parkrun), on separate days from the weights (RomeoStevens' "Optimal Exercise" makes the same call: no vigorous cardio on lifting days). Running goals stay active.
+### Gym sessions
 
-**Monday double:** lift earlier in the day, football in the evening. A is the heavy-legs session, so if the double proves too much, swap A and C so Monday is the light-legs day and Friday the heavy one (Friday heavy legs then Saturday parkrun mirrors the current Sat legs-after-parkrun arrangement in reverse, so watch hamstring fatigue on the parkrun). Alternative if Monday doubles keep getting skipped: move that session to Sunday and give up the full rest day.
+Four antagonist PAIRS plus calves. All working sets 8–12 reps unless stated; calves and carries 12–15; three working sets throughout. Antagonist pairs are done back-to-back: 30–60 s between the two halves, ~90 s before the next round. Two light warm-up sets on the first movement of each pair. Double progression: top of the range on all three sets → add weight and reset reps; below the bottom → drop about 10%. Alternatives (shown as "or …" on the checklist) let a machine be swapped when it is taken. Exercise names are the exact history spellings where one exists; **(new)** movements have no history yet.
 
-### Sessions
+**A — Tuesday**
+1. Leg press ⇄ Seated leg curl — plus Calf press **(new)** on the leg press, straight after each leg-press set (12–15)
+2. Incline DB press ⇄ Chest-supported DB row (or Single-arm DB row **(new)**)
+3. Neutral-grip pull-up (or Neutral-grip lat pulldown) ⇄ Hanging knee raise
+4. DB bicep curl (or Hammer curls) ⇄ Overhead DB tricep extension
+Then the treadmill run (easy pace, distance ramping toward the 10k goal).
 
-Rep ranges: compounds 6–10, accessories 10–15, 3 sets (the programmer already caps at 3). Pairs marked ⇄ are antagonist paired sets with ~60–90 s between. Exercises are drawn from Dave's existing vocabulary so history and progression carry over; the two new ones are marked.
+**B — Thursday**
+1. Converging chest press ⇄ Seated cable row
+2. Converging shoulder press ⇄ Wide-grip lat pulldown (or Diverging lat pulldown)
+3. Leg extension ⇄ Back extension **(new)** (or DB good morning **(new)**)
+4. Machine bicep curl **(new)** (or Hammer curls) ⇄ Machine tricep extension **(new)** (or DB skull crusher **(new)**)
+Then Seated calf raise **(new)**, straight sets 3 × 12–15, then the treadmill run.
 
-**A — heavy lower, horizontal push/pull (Mon)**
-1. Leg press, 3 × 6–8 (heavy)
-2. Seated leg curl, 3 × 8–10
-3. Incline dumbbell press ⇄ Chest-supported dumbbell row, 3 × 8–10
-4. Seated dumbbell shoulder press, 3 × 8–10
-5. Cable/DB curl ⇄ Tricep pushdown, 2–3 × 10–15
-6. Pallof press (finisher)
+**C — Saturday, after parkrun**
+0. Parkrun 5 km FIRST.
+1. DB Romanian deadlift **(new)** ⇄ DB lateral raise
+2. Flat DB press ⇄ Single-arm DB row **(new)** (or Chest-supported DB row)
+3. Bulgarian split squat (or Reverse lunge) ⇄ Incline dumbbell curls (or Hammer curls)
+4. Overhead DB tricep extension ⇄ Standing calf raise (step)
 
-**B — moderate lower, vertical push/pull, hinge (Wed)**
-1. Bulgarian split squat, 3 × 8–10 per side
-2. Dumbbell Romanian deadlift (**new**), 3 × 8–12; progress normally — strength and mobility are the rehab
-3. Flat dumbbell press ⇄ Wide-grip lat pulldown, 3 × 8–10
-4. Lateral raise ⇄ Face pull (**new**), 3 × 12–15
-5. Dead bug / side plank (finisher)
+Every session ends on one accessory taken to failure. Calf work is gym-days-only; the home block is mobility and core, not calves.
 
-**C — light lower, machine/cable emphasis (Fri)**
-1. Leg press, 3 × 12–15 (light) or hack squat if available
-2. Single-leg glute bridge / hip thrust, 3 × 10–12
-3. Seated cable row ⇄ Machine chest press or dips, 3 × 10–12
-4. Neutral-grip lat pulldown, 3 × 10–12
-5. Curl ⇄ Overhead tricep extension, 2 × 12–15
-6. Side plank (finisher)
+## 4. Daily home core + mobility block
 
-**No fourth lifting day** (decided 20 Sep 2026). If a session is missed, it is simply gone; the next session already covers every muscle group. The existing "swap to home" control still works for any day if the gym is out of reach.
-
-Weekly fractional set count per muscle at 3 sessions: quads ~9, hamstrings/glutes ~9, chest ~9, back ~12, shoulders ~9, arms ~8 direct + indirect. All within the 10–20 band once indirect work is counted.
-
-**Progression:** double progression, as the programmer already does (reps up to the top of range, then load up). Lower-body load undulates heavy/moderate/light across A/B/C. No fixed deload; halve sets for a week if back flares, sleep collapses or two sessions in a row regress.
-
-## 4. Daily home block (rehab + core + mobility)
-
-The existing `rehabRoutine` block already does most of this and is deliberately independent of the session system (shown every day, ticked per date, no AI). Extend it rather than adding "home days" to the weekly routine. Proposed list, ~10 min:
+The 15-minute block, done in this order on Mon/Wed/Fri/Sun as the day's FIXED prescription (no AI, no accessories, no progression — the checklist is exactly this list with these doses). It replaces the old separate rehab panel: the `rehabRoutine` data domain is retained and still readable, but its standalone UI and API were removed.
 
 | Exercise | Dose | Note |
 |---|---|---|
-| Cat-cow (**new**) | 8 slow | warm the spine |
-| Couch stretch | 90 s/side | existing |
-| 90/90 hip switch (**new**) | 8/side | hip rotation |
-| McGill curl-up (**new**) | 5-3-1 × 10 s | replaces crunch-type work |
-| Side plank | 5-3-1 × 10 s/side | existing, McGill dose |
-| Bird dog | 5-3-1 × 10 s/side | existing, McGill dose |
-| Glute bridge | 2 × 15 | existing |
-| Dead bug | 10/side slow | existing |
-| Standing pelvic tilt | 10 | existing, "run tall, tuck the pelvis" |
+| Cat-cow | 8 slow | warm the spine |
+| Couch stretch | 90 s per side | front of the hip, not the lower back |
+| 90/90 hip switch | 8 per side | hip rotation, chest up |
+| McGill curl-up | 3-2-1 × 10 s holds | brace, keep the lower back still |
+| Side plank | 3-2-1 × 10 s per side | on knees if the full version aggravates |
+| Bird dog | 3-2-1 × 10 s per side | hips level |
+| Glute bridge | 2 × 15, 2 s squeeze | ribs down, don't arch |
+| Standing pelvic tilt | 10 | "run tall, tuck the pelvis" |
 
-Keep it under 10 min; the LBP adherence literature (29–82% home-programme adherence) says short and simple wins. Consider a longer 20-min version on Sun (walk + yoga day) only.
+Sunday is the same block as recovery, alongside a long walk and yoga; Monday adds 5-a-side football in the evening. Under 15 minutes — the LBP adherence literature says short and simple wins.
 
-## 5. Implementation plan (for when Dave says go)
+
+## 5. Implementation plan (DONE — v2 built and seeded 21 Sep 2026)
 
 The routine is data: one `user_data` row, domain `weeklyRoutine`, a JSON array of seven `WeeklyRoutineDay` objects. There is no library/active-routine concept today.
 
