@@ -33,6 +33,7 @@ import {
   getAllSessions,
   getSessionsByImportPrefix,
   deleteSession,
+  setSessionVenue,
   updateSession,
   upsertSessionByImportKey,
   type CreateSessionInput,
@@ -412,6 +413,8 @@ export async function materialiseRoutineSessions(
       label: shape.label,
       components: shape.components,
       ...(shape.targetDistanceKm ? { targetDistanceKm: shape.targetDistanceKm } : {}),
+      // A standing home day stamps venue 'home' on its planned session.
+      ...(shape.venue ? { venue: shape.venue } : {}),
       planned: true,
       completed: false,
       source: 'routine',
@@ -427,8 +430,12 @@ export async function materialiseRoutineSessions(
       label: shape.label,
       components: shape.components,
       ...(shape.targetDistanceKm ? { targetDistanceKm: shape.targetDistanceKm } : {}),
+      // Set the standing home venue. updateSession ignores undefined, so a day
+      // that reverted to the gym is cleared explicitly below.
+      ...(shape.venue ? { venue: shape.venue } : {}),
     });
     if (!next) continue;
+    if (!shape.venue && next.venue === 'home') await setSessionVenue(next.id, undefined);
     // Retitle the calendar event to match; pushPlannedSession updates in place
     // because the session already carries its googleEventId.
     await pushPlannedSession(next);

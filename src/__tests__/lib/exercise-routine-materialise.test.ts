@@ -277,3 +277,57 @@ describe('planRoutineMaterialisation — a shifted week with overrides', () => {
     expect(plan.update[0].shape.label).toBe(thuShape.label);
   });
 });
+
+describe('planRoutineMaterialisation — a standing home day', () => {
+  // A routine where Monday is a standing HOME day (venue 'home'); Tuesday is an
+  // ordinary gym day.
+  const HOME_ROUTINE: WeeklyRoutineDay[] = [
+    {
+      dayOfWeek: 1,
+      title: 'Home core + mobility',
+      anchors: [],
+      staples: ['Couch stretch'],
+      venue: 'home',
+      fixed: true,
+    },
+    { dayOfWeek: 2, title: 'Full body A (push + pull + legs)', anchors: ['Leg press'] },
+  ];
+
+  it('stamps venue home on the materialised session for the home day', () => {
+    const plan = planRoutineMaterialisation(HOME_ROUTINE, [], TODAY, 2);
+    const monday = plan.create.find(s => s.date === '2026-08-17');
+    const tuesday = plan.create.find(s => s.date === '2026-08-18');
+    expect(monday?.venue).toBe('home');
+    expect(tuesday?.venue).toBeUndefined();
+  });
+
+  it('updates a routine session that lacks the standing home venue', () => {
+    // A session for the home day exists but without venue (materialised before the
+    // day became a home day) — it must reconcile to gain venue 'home'.
+    const stale = session({
+      id: 'mon',
+      date: '2026-08-17',
+      type: 'strength',
+      label: 'Home core + mobility',
+      components: ['Home core', 'mobility'],
+    });
+    const plan = planRoutineMaterialisation(HOME_ROUTINE, [stale], TODAY, 2);
+    expect(plan.update).toHaveLength(1);
+    expect(plan.update[0].sessionId).toBe('mon');
+    expect(plan.update[0].shape.venue).toBe('home');
+  });
+
+  it('leaves a home-day session that already carries venue home alone', () => {
+    const matching = session({
+      id: 'mon',
+      date: '2026-08-17',
+      type: 'strength',
+      label: 'Home core + mobility',
+      components: ['Home core', 'mobility'],
+      venue: 'home',
+    });
+    const plan = planRoutineMaterialisation(HOME_ROUTINE, [matching], TODAY, 2);
+    expect(plan.update).toEqual([]);
+    expect(plan.create.some(s => s.date === '2026-08-17')).toBe(false);
+  });
+});

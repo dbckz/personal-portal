@@ -32,6 +32,10 @@ export interface RoutineSessionShape {
   label: string;
   components: string[];
   targetDistanceKm?: number;
+  // 'home' for a STANDING home day (the routine day carries venue 'home'), so the
+  // materialiser stamps it on the planned session and the programmer resolves a
+  // home/fixed session without a per-date swap. Absent means the gym.
+  venue?: 'home';
 }
 
 // The decision, as three lists the I/O layer executes in order.
@@ -55,6 +59,7 @@ function shapeFromRoutineDay(day: WeeklyRoutineDay, date: string): RoutineSessio
     label: parsed.title,
     components: parsed.components,
     ...(parsed.targetDistanceKm ? { targetDistanceKm: parsed.targetDistanceKm } : {}),
+    ...(day.venue ? { venue: day.venue } : {}),
   };
 }
 
@@ -73,7 +78,10 @@ function shapeMatchesSession(shape: RoutineSessionShape, session: ExerciseSessio
   return (
     session.type === shape.type &&
     (session.label ?? '') === shape.label &&
-    sameComponents(session.components, shape.components)
+    sameComponents(session.components, shape.components) &&
+    // A standing home day must reconcile onto its planned session's venue, so a
+    // day newly marked home (or back to gym) is detected as changed.
+    (session.venue ?? undefined) === shape.venue
   );
 }
 
