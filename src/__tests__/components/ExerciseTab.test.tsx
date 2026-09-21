@@ -14,7 +14,7 @@ jest.mock('@/lib/api', () => ({
     getExerciseTargets: jest.fn().mockResolvedValue({ date: '2026-08-11', targets: [] }),
     getExerciseSessions: jest.fn().mockResolvedValue({ sessions: [] }),
     getExerciseProgressions: jest.fn().mockResolvedValue({ progressions: [] }),
-    getWeeklyRoutine: jest.fn().mockResolvedValue({ routine: [] }),
+    getWeeklyRoutine: jest.fn().mockResolvedValue({ routine: [], names: [], active: '' }),
     getRehabRoutine: jest.fn().mockResolvedValue({ routine: { exercises: [], ticks: {} } }),
     syncExerciseCalendar: jest.fn(),
     deleteExerciseSession: jest.fn(),

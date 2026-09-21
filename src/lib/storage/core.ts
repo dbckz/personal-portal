@@ -172,7 +172,16 @@ export interface UserData {
   dailyReviewState?: DailyReviewState;
   // Dave's standing weekly training routine — the repeating shape of the week the
   // plan is built from. Seeded and read/written through lib/storage/weekly-routine.
+  // With the routine library this row is a migration source and a mirror of the
+  // active split, not the resolution path (see weeklyRoutineLibrary).
   weeklyRoutine?: WeeklyRoutineDay[];
+  // Named alternative routines Dave can switch between (e.g. the 6-day split and
+  // a full-body 3-day). getWeeklyRoutine resolves the entry named by
+  // activeRoutineName. Read/written through lib/storage/weekly-routine.
+  weeklyRoutineLibrary?: Record<string, WeeklyRoutineDay[]>;
+  // The library entry that is currently live — the routine sessions are built
+  // from. See lib/storage/weekly-routine.
+  activeRoutineName?: string;
   // Per-date deviations from the standing weekly routine, keyed by yyyy-MM-dd.
   // A one-off week shape (a shifted plan) that outlives the calendar sync. See
   // lib/storage/routine-overrides.
@@ -261,6 +270,8 @@ const DEFAULT_USER_DATA: UserData = {
   exerciseSyncState: {},
   dailyReviewState: {},
   weeklyRoutine: [],
+  weeklyRoutineLibrary: {},
+  activeRoutineName: '',
   routineOverrides: {},
   boardTasks: {},
   boardRollover: {},
@@ -336,6 +347,12 @@ export async function getUserData(): Promise<UserData> {
       exerciseSyncState: parsed.exerciseSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
       weeklyRoutine: parsed.weeklyRoutine || [],
+      weeklyRoutineLibrary:
+        parsed.weeklyRoutineLibrary && typeof parsed.weeklyRoutineLibrary === 'object'
+          ? parsed.weeklyRoutineLibrary
+          : {},
+      activeRoutineName:
+        typeof parsed.activeRoutineName === 'string' ? parsed.activeRoutineName : '',
       routineOverrides: parsed.routineOverrides || {},
       // Tolerant load: keep only well-formed { status } entries keyed by string.
       boardTasks: Object.fromEntries(

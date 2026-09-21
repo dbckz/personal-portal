@@ -49,6 +49,14 @@ import type { ProjectScan } from '@/lib/projects/scan';
 import type { ProjectSummary } from '@/lib/projects/summarise';
 import type { CalendarReminderCandidate } from '@/lib/scheduling/calendar-reminders';
 
+// The routine endpoints' shared response: the active routine's days, its name,
+// and every routine name in the library.
+export interface RoutineState {
+  routine: WeeklyRoutineDay[];
+  active: string;
+  names: string[];
+}
+
 export interface ProjectWithSummary extends ProjectScan {
   summary: ProjectSummary | null;
 }
@@ -2125,19 +2133,62 @@ export const api = {
     );
   },
 
-  // The standing weekly routine — the repeating shape of the week, Mon→Sun.
-  async getWeeklyRoutine(): Promise<{ routine: WeeklyRoutineDay[] }> {
-    return fetchWithRetry<{ routine: WeeklyRoutineDay[] }>('/api/exercise/routine');
+  // The active standing weekly routine (Mon→Sun) plus the library: `active` is
+  // the live routine's name, `names` every routine available to switch to.
+  async getWeeklyRoutine(name?: string): Promise<RoutineState> {
+    const query = name ? `?name=${encodeURIComponent(name)}` : '';
+    return fetchWithRetry<RoutineState>(`/api/exercise/routine${query}`);
   },
 
-  async saveWeeklyRoutine(routine: WeeklyRoutineDay[]): Promise<{ routine: WeeklyRoutineDay[] }> {
-    return fetchWithRetry<{ routine: WeeklyRoutineDay[] }>(
+  // Save a routine's days. Without `name` this edits the active routine; with it,
+  // the named (possibly non-active) routine. Returns the full routine state.
+  async saveWeeklyRoutine(routine: WeeklyRoutineDay[], name?: string): Promise<RoutineState> {
+    return fetchWithRetry<RoutineState>(
       '/api/exercise/routine',
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ routine }),
+        body: JSON.stringify(name ? { routine, name } : { routine }),
       },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Switch the active routine, reconciling the plan horizon server-side.
+  async activateRoutine(name: string): Promise<RoutineState> {
+    return fetchWithRetry<RoutineState>(
+      '/api/exercise/routine/activate',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Create or duplicate a named routine. `days` seeds it explicitly; otherwise it
+  // is copied from `copyFrom`, else from the active routine. Does not activate.
+  async createRoutine(
+    name: string,
+    opts: { days?: WeeklyRoutineDay[]; copyFrom?: string } = {}
+  ): Promise<RoutineState> {
+    return fetchWithRetry<RoutineState>(
+      '/api/exercise/routine/library',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, ...opts }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Delete a named routine (refused server-side for the active one).
+  async deleteRoutine(name: string): Promise<RoutineState> {
+    return fetchWithRetry<RoutineState>(
+      `/api/exercise/routine/library?name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
       { maxRetries: 0 }
     );
   },

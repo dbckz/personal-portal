@@ -33,10 +33,16 @@ function sortDays(days: WeeklyRoutineDay[]): WeeklyRoutineDay[] {
 
 export function MobileRoutineEditor({
   initial,
+  name,
+  isActive = true,
   onClose,
   onSaved,
 }: {
   initial: WeeklyRoutineDay[];
+  // The name of the routine being edited. Omitted (or active) edits the active
+  // routine; a non-active name edits that entry without activating it.
+  name?: string;
+  isActive?: boolean;
   onClose: () => void;
   onSaved: (saved: WeeklyRoutineDay[]) => void;
 }) {
@@ -51,8 +57,8 @@ export function MobileRoutineEditor({
     setSaving(true);
     setError(null);
     try {
-      const { routine: saved } = await api.saveWeeklyRoutine(routine);
-      onSaved(sortDays(saved));
+      const state = await api.saveWeeklyRoutine(routine, isActive ? undefined : name);
+      onSaved(sortDays(state.routine.length ? state.routine : routine));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the routine.');
     } finally {

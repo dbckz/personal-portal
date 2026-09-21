@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Bed, Plus, Save, Trash2, X } from 'lucide-react';
+import { Bed, Check, Copy, Plus, Save, Trash2, X } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import type { WeeklyRoutineDay } from '@/types/life';
@@ -10,8 +10,9 @@ import { KindTag } from './action-badge';
 // The desktop Routine tab: Dave's standing weekly training routine, seven day
 // cards Mon→Sun. This is the source the portal will build future sessions from
 // once the authored calendar plan ends, so it's stored, editable data rather
-// than a live view of the plan. Desktop is the read/write surface (per CLAUDE.md);
-// mobile shows the same routine read-only.
+// than a live view of the plan. A routine picker at the top switches between the
+// named routines in the library; a non-active routine can be viewed and edited
+// without activating it. Mobile (RoutineCard) mirrors the picker and activate.
 
 // Monday-first labels, keyed by JS getDay() value (0 = Sunday).
 const DAY_LABELS: Record<number, string> = {
@@ -28,17 +29,28 @@ const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 export function RoutineTab() {
   const [routine, setRoutine] = useState<WeeklyRoutineDay[] | null>(null);
+  // The library: every routine name, the active one, and the one being viewed
+  // (which may differ from active — a non-active routine can be edited).
+  const [names, setNames] = useState<string[]>([]);
+  const [active, setActive] = useState('');
+  const [viewing, setViewing] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const load = useCallback(async () => {
+  // Load a routine by name (or the active one when name is omitted), refreshing
+  // the library list and which entry is active.
+  const load = useCallback(async (name?: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      const { routine } = await api.getWeeklyRoutine();
-      setRoutine(sortDays(routine));
+      const state = await api.getWeeklyRoutine(name);
+      setRoutine(sortDays(state.routine));
+      setNames(state.names ?? []);
+      setActive(state.active ?? '');
+      setViewing(name ?? state.active ?? '');
       setDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load the routine.');
@@ -63,8 +75,12 @@ export function RoutineTab() {
     setSaving(true);
     setError(null);
     try {
-      const { routine: saved } = await api.saveWeeklyRoutine(routine);
-      setRoutine(sortDays(saved));
+      // Editing the active routine sends no name; a non-active one is edited by
+      // name so activating is a separate, deliberate step.
+      const state = await api.saveWeeklyRoutine(routine, viewing === active ? undefined : viewing);
+      setRoutine(sortDays(state.routine.length ? state.routine : routine));
+      setNames(state.names ?? []);
+      setActive(state.active ?? '');
       setDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save the routine.');
@@ -73,19 +89,70 @@ export function RoutineTab() {
     }
   };
 
+  const activate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const state = await api.activateRoutine(viewing);
+      setNames(state.names ?? []);
+      setActive(state.active ?? '');
+      setRoutine(sortDays(state.routine));
+      setDirty(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to activate the routine.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const duplicate = async () => {
+    const name = window.prompt('Name the new routine (a copy of this one):', `${viewing} copy`);
+    if (!name?.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const state = await api.createRoutine(name.trim(), { copyFrom: viewing });
+      setNames(state.names ?? []);
+      setActive(state.active ?? '');
+      await load(name.trim());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to duplicate the routine.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete the routine "${viewing}"? This can't be undone.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const state = await api.deleteRoutine(viewing);
+      setNames(state.names ?? []);
+      setActive(state.active ?? '');
+      await load(state.active);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete the routine.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isActive = viewing === active;
+
   return (
     <div className="max-w-3xl mx-auto p-6">
       <div className="flex items-start justify-between mb-4 gap-3">
         <div>
           <h2 className="font-semibold text-gray-900">Weekly routine</h2>
           <p className="text-sm text-gray-500">
-            The standing shape of your training week. Future sessions are built from this once the
-            planned calendar runs out.
+            The standing shape of your training week. Future sessions are built from the active
+            routine once the planned calendar runs out.
           </p>
         </div>
         <button
           onClick={save}
-          disabled={saving || !dirty}
+          disabled={saving || busy || !dirty}
           className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white bg-gray-900 rounded-md hover:bg-gray-800 disabled:opacity-40"
         >
           <Save className="w-4 h-4" />
@@ -93,8 +160,68 @@ export function RoutineTab() {
         </button>
       </div>
 
+      {names.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <label htmlFor="routine-picker" className="text-sm font-medium text-gray-700">
+            Routine
+          </label>
+          <select
+            id="routine-picker"
+            value={viewing}
+            disabled={saving || busy}
+            onChange={e => load(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:opacity-50"
+          >
+            {names.map(name => (
+              <option key={name} value={name}>
+                {name}
+                {name === active ? ' (active)' : ''}
+              </option>
+            ))}
+          </select>
+          {isActive ? (
+            <span className="flex items-center gap-1 rounded-md bg-green-100 px-2 py-1.5 text-xs font-semibold text-green-700">
+              <Check className="h-3.5 w-3.5" />
+              Active
+            </span>
+          ) : (
+            <button
+              onClick={activate}
+              disabled={busy || saving}
+              className="flex items-center gap-1 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Activate
+            </button>
+          )}
+          <button
+            onClick={duplicate}
+            disabled={busy || saving}
+            className="flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            Duplicate as…
+          </button>
+          <button
+            onClick={remove}
+            disabled={busy || saving || isActive || names.length <= 1}
+            title={isActive ? 'The active routine cannot be deleted' : undefined}
+            className="flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        </div>
+      )}
+
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
       {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
+      {!isActive && !isLoading && (
+        <p className="mb-3 text-sm text-amber-700">
+          You&apos;re editing a routine that isn&apos;t active. Activate it to build sessions from
+          it.
+        </p>
+      )}
 
       {routine && (
         <div className="space-y-3">

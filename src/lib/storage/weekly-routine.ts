@@ -105,34 +105,19 @@ function normaliseDay(raw: unknown): WeeklyRoutineDay | null {
   };
 }
 
-function readRoutine(): WeeklyRoutineDay[] | null {
-  const raw = readAllDomains().weeklyRoutine;
-  if (!Array.isArray(raw)) return null;
-  const days = raw.map(normaliseDay).filter((d): d is WeeklyRoutineDay => d !== null);
-  return days.length ? days : null;
-}
+// The name the legacy single-routine `weeklyRoutine` row is migrated into the
+// library under, so the original 6-day split survives as a named, switchable
+// entry once the library exists.
+export const LEGACY_ROUTINE_NAME = 'Split (6-day)';
 
-// The full seven-day routine, Mon→Sun. Seeds the captured default on first read
-// of an empty store, persisting it so subsequent reads and edits build on it.
-export async function getWeeklyRoutine(): Promise<WeeklyRoutineDay[]> {
-  const existing = readRoutine();
-  if (existing) return [...existing].sort(byDisplayOrder);
-
-  const seeded = SEED_ROUTINE.map(d => ({ ...d }));
-  writeAllDomains({ weeklyRoutine: seeded });
-  return [...seeded].sort(byDisplayOrder);
-}
-
-// Replace the whole routine. The client edits and saves the seven days as a set,
-// so a wholesale replace (validated per day) is the honest operation — there is
-// no partial-day merge to reason about.
-export async function saveWeeklyRoutine(days: unknown): Promise<WeeklyRoutineDay[]> {
+// Normalise and dedupe-check an incoming set of days. Shared by every write path
+// (the active routine, a named library entry). Throws on a non-array or a weekday
+// that lands twice — the routine is one entry per weekday.
+function normaliseRoutineDays(days: unknown): WeeklyRoutineDay[] {
   if (!Array.isArray(days)) {
     throw new Error('weeklyRoutine must be an array of days');
   }
   const normalised = days.map(normaliseDay).filter((d): d is WeeklyRoutineDay => d !== null);
-
-  // Guard against a day landing twice — the routine is one entry per weekday.
   const seen = new Set<number>();
   for (const day of normalised) {
     if (seen.has(day.dayOfWeek)) {
@@ -140,7 +125,154 @@ export async function saveWeeklyRoutine(days: unknown): Promise<WeeklyRoutineDay
     }
     seen.add(day.dayOfWeek);
   }
+  return normalised;
+}
 
-  writeAllDomains({ weeklyRoutine: normalised });
+// The legacy single-routine row, or null when it is empty/absent. This is the
+// migration SOURCE: once the library exists it is only mirrored to (never the
+// resolution path) so nothing that still reads the raw `weeklyRoutine` row
+// regresses.
+function readLegacyRow(): WeeklyRoutineDay[] | null {
+  const raw = readAllDomains().weeklyRoutine;
+  if (!Array.isArray(raw)) return null;
+  const days = raw.map(normaliseDay).filter((d): d is WeeklyRoutineDay => d !== null);
+  return days.length ? days : null;
+}
+
+// The routine library, keyed by name. Malformed entries (non-array, or a name
+// that normalises to nothing) are dropped rather than corrupting the store.
+function readLibrary(): Record<string, WeeklyRoutineDay[]> {
+  const raw = readAllDomains().weeklyRoutineLibrary;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, WeeklyRoutineDay[]> = {};
+  for (const [name, days] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof name !== 'string' || !name.trim() || !Array.isArray(days)) continue;
+    const norm = days.map(normaliseDay).filter((d): d is WeeklyRoutineDay => d !== null);
+    if (norm.length) out[name] = norm;
+  }
+  return out;
+}
+
+function readActiveName(): string {
+  const raw = readAllDomains().activeRoutineName;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+// Resolve the active routine, migrating on first use. Semantics:
+//   - When the active name names a library entry, that entry is the routine
+//     (the fast path — no writes).
+//   - Otherwise the library is bootstrapped: an empty library is seeded from the
+//     legacy `weeklyRoutine` row (or, when even that is empty, from SEED_ROUTINE,
+//     which is also written back to the legacy row to preserve the old
+//     seed-on-empty behaviour) under LEGACY_ROUTINE_NAME, and the active name is
+//     set to a valid entry (LEGACY_ROUTINE_NAME when present, else the first).
+// The legacy row is left in place as a migration source; it is only ever mirrored
+// to by a save/activate of the legacy-derived entry, never read for resolution
+// once the library exists.
+function ensureMigrated(): {
+  name: string;
+  library: Record<string, WeeklyRoutineDay[]>;
+  days: WeeklyRoutineDay[];
+} {
+  let library = readLibrary();
+  let active = readActiveName();
+  if (active && library[active]) return { name: active, library, days: library[active] };
+
+  const patch: Record<string, unknown> = {};
+  if (Object.keys(library).length === 0) {
+    let legacy = readLegacyRow();
+    if (!legacy) {
+      legacy = SEED_ROUTINE.map(d => ({ ...d }));
+      patch.weeklyRoutine = legacy; // preserve the original seed-on-empty behaviour
+    }
+    library = { [LEGACY_ROUTINE_NAME]: legacy };
+    patch.weeklyRoutineLibrary = library;
+  }
+  active = library[LEGACY_ROUTINE_NAME] ? LEGACY_ROUTINE_NAME : Object.keys(library)[0];
+  patch.activeRoutineName = active;
+  writeAllDomains(patch);
+  return { name: active, library, days: library[active] };
+}
+
+// The full seven-day routine, Mon→Sun: the ACTIVE library entry, resolved (and
+// migrated on first use) by ensureMigrated. No caller signature changes — this
+// still returns the days to build sessions from.
+export async function getWeeklyRoutine(): Promise<WeeklyRoutineDay[]> {
+  const { days } = ensureMigrated();
+  return [...days].sort(byDisplayOrder);
+}
+
+// Replace the ACTIVE routine. The client edits and saves the seven days as a set,
+// so a wholesale replace (validated per day) is the honest operation. When the
+// active entry is the legacy-derived one, the legacy `weeklyRoutine` row is
+// mirrored too so nothing that still reads it regresses.
+export async function saveWeeklyRoutine(days: unknown): Promise<WeeklyRoutineDay[]> {
+  const normalised = normaliseRoutineDays(days);
+  const { name, library } = ensureMigrated();
+  const patch: Record<string, unknown> = {
+    weeklyRoutineLibrary: { ...library, [name]: normalised },
+  };
+  if (name === LEGACY_ROUTINE_NAME) patch.weeklyRoutine = normalised;
+  writeAllDomains(patch);
   return [...normalised].sort(byDisplayOrder);
+}
+
+// The names in the library, and the active name. Migrates on first use so the
+// list is never empty.
+export async function listRoutines(): Promise<{ names: string[]; active: string }> {
+  const { name, library } = ensureMigrated();
+  return { names: Object.keys(library), active: name };
+}
+
+export async function getActiveRoutineName(): Promise<string> {
+  return ensureMigrated().name;
+}
+
+// One named routine's days (sorted), or null when no entry has that name.
+export async function getRoutine(name: string): Promise<WeeklyRoutineDay[] | null> {
+  const { library } = ensureMigrated();
+  const days = library[name];
+  return days ? [...days].sort(byDisplayOrder) : null;
+}
+
+// Create or replace a NAMED routine (not necessarily the active one), so a
+// non-active routine can be edited or a new one duplicated in. Mirrors the legacy
+// row only when writing the legacy-derived entry.
+export async function saveRoutine(name: string, days: unknown): Promise<WeeklyRoutineDay[]> {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed) throw new Error('Routine name is required');
+  const normalised = normaliseRoutineDays(days);
+  const { library } = ensureMigrated();
+  const patch: Record<string, unknown> = {
+    weeklyRoutineLibrary: { ...library, [trimmed]: normalised },
+  };
+  if (trimmed === LEGACY_ROUTINE_NAME) patch.weeklyRoutine = normalised;
+  writeAllDomains(patch);
+  return [...normalised].sort(byDisplayOrder);
+}
+
+// Delete a named routine. Refuses to delete the active one (there must always be
+// a routine to resolve) and refuses an unknown name.
+export async function deleteRoutine(name: string): Promise<void> {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  const { name: active, library } = ensureMigrated();
+  if (!library[trimmed]) throw new Error(`Unknown routine: ${trimmed}`);
+  if (trimmed === active) throw new Error('Cannot delete the active routine');
+  const next = { ...library };
+  delete next[trimmed];
+  writeAllDomains({ weeklyRoutineLibrary: next });
+}
+
+// Switch the active routine. Refuses an unknown name. Returns the now-active
+// routine's days (sorted); mirrors the legacy row when the legacy-derived entry
+// is activated, so the raw `weeklyRoutine` row tracks the active split.
+export async function setActiveRoutine(name: string): Promise<WeeklyRoutineDay[]> {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  const { library } = ensureMigrated();
+  const days = library[trimmed];
+  if (!days) throw new Error(`Unknown routine: ${trimmed}`);
+  const patch: Record<string, unknown> = { activeRoutineName: trimmed };
+  if (trimmed === LEGACY_ROUTINE_NAME) patch.weeklyRoutine = days;
+  writeAllDomains(patch);
+  return [...days].sort(byDisplayOrder);
 }

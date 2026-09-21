@@ -6,7 +6,17 @@
  * replaces the whole routine, a rest day carries no exercises, and a duplicated
  * weekday is refused.
  */
-import { getWeeklyRoutine, saveWeeklyRoutine } from '@/lib/storage/weekly-routine';
+import {
+  deleteRoutine,
+  getRoutine,
+  getWeeklyRoutine,
+  listRoutines,
+  LEGACY_ROUTINE_NAME,
+  saveRoutine,
+  saveWeeklyRoutine,
+  setActiveRoutine,
+} from '@/lib/storage/weekly-routine';
+import { readAllDomains } from '@/lib/storage/db';
 import { __resetDbForTests } from '@/lib/storage/db';
 import type { WeeklyRoutineDay } from '@/types/life';
 
@@ -87,3 +97,69 @@ describe('weekly routine storage', () => {
     expect(saved.map(d => d.dayOfWeek)).toEqual([1]);
   });
 });
+
+describe('the routine library', () => {
+  beforeEach(() => {
+    __resetDbForTests();
+  });
+
+  it('migrates the legacy routine into the library under the split name, active', async () => {
+    const routine = await getWeeklyRoutine();
+    expect(routine).toHaveLength(7);
+    const { names, active } = await listRoutines();
+    expect(names).toEqual([LEGACY_ROUTINE_NAME]);
+    expect(active).toBe(LEGACY_ROUTINE_NAME);
+    // The legacy row is left in place as a migration source.
+    expect(Array.isArray(readAllDomains().weeklyRoutine)).toBe(true);
+  });
+
+  it('falls back to the seed unchanged when the library is empty', async () => {
+    // No writes yet — the first read seeds and migrates in one step.
+    const routine = await getWeeklyRoutine();
+    const monday = routine.find(d => d.dayOfWeek === 1)!;
+    expect(monday.title).toBe('Push (chest & arms)');
+  });
+
+  it('saveWeeklyRoutine edits the active entry (and mirrors the legacy row for the split)', async () => {
+    await getWeeklyRoutine(); // migrate
+    await saveWeeklyRoutine([{ dayOfWeek: 1, title: 'Edited', anchors: ['X'] }]);
+    const active = await getRoutine(LEGACY_ROUTINE_NAME);
+    expect(active?.[0].title).toBe('Edited');
+    // The legacy row mirrors the active split so nothing reading it regresses.
+    const legacy = readAllDomains().weeklyRoutine as WeeklyRoutineDay[];
+    expect(legacy[0].title).toBe('Edited');
+  });
+
+  it('creates a named routine and edits it without changing the active one', async () => {
+    await getWeeklyRoutine();
+    await saveRoutine('Full body', [{ dayOfWeek: 1, title: 'Full body A', anchors: ['Leg press'] }]);
+    const { names, active } = await listRoutines();
+    expect(names).toContain('Full body');
+    expect(active).toBe(LEGACY_ROUTINE_NAME); // creating does not activate
+    const fb = await getRoutine('Full body');
+    expect(fb?.[0].title).toBe('Full body A');
+  });
+
+  it('setActiveRoutine switches the active routine and refuses an unknown name', async () => {
+    await getWeeklyRoutine();
+    await saveRoutine('Full body', [{ dayOfWeek: 1, title: 'Full body A', anchors: [] }]);
+    await setActiveRoutine('Full body');
+    expect(await getActiveName()).toBe('Full body');
+    await expect(setActiveRoutine('Nope')).rejects.toThrow(/Unknown routine/);
+  });
+
+  it('deleteRoutine refuses the active routine and an unknown name', async () => {
+    await getWeeklyRoutine();
+    await saveRoutine('Full body', [{ dayOfWeek: 1, title: 'Full body A', anchors: [] }]);
+    await expect(deleteRoutine(LEGACY_ROUTINE_NAME)).rejects.toThrow(/active/i);
+    await expect(deleteRoutine('Nope')).rejects.toThrow(/Unknown routine/);
+    // A non-active routine deletes cleanly.
+    await deleteRoutine('Full body');
+    const { names } = await listRoutines();
+    expect(names).not.toContain('Full body');
+  });
+});
+
+async function getActiveName(): Promise<string> {
+  return (await listRoutines()).active;
+}

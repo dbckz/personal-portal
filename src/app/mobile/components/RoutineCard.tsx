@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarRange, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { CalendarRange, Check, ChevronDown, ChevronRight, Loader2, Pencil } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import type { WeeklyRoutineDay } from '@/types/life';
@@ -24,8 +24,12 @@ const DAY_LABELS: Record<number, string> = {
 export function RoutineCard() {
   const [open, setOpen] = useState(false);
   const [routine, setRoutine] = useState<WeeklyRoutineDay[] | null>(null);
+  const [names, setNames] = useState<string[]>([]);
+  const [active, setActive] = useState('');
+  const [viewing, setViewing] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     // Fetch lazily on first expand — the card is closed by default and most
@@ -34,13 +38,52 @@ export function RoutineCard() {
     let cancelled = false;
     api
       .getWeeklyRoutine()
-      .then(res => !cancelled && setRoutine(res.routine))
+      .then(res => {
+        if (cancelled) return;
+        setRoutine(res.routine);
+        setNames(res.names ?? []);
+        setActive(res.active ?? '');
+        setViewing(res.active ?? '');
+      })
       .catch(() => !cancelled && setRoutine([]))
       .finally(() => !cancelled && setLoaded(true));
     return () => {
       cancelled = true;
     };
   }, [open, loaded]);
+
+  // Switch which routine is shown (not activated) — a non-active routine can be
+  // viewed and edited on the phone too.
+  const view = async (name: string) => {
+    setBusy(true);
+    try {
+      const res = await api.getWeeklyRoutine(name);
+      setRoutine(res.routine);
+      setNames(res.names ?? []);
+      setActive(res.active ?? '');
+      setViewing(name);
+    } catch {
+      // Leave the current view in place on a failed switch.
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activate = async () => {
+    setBusy(true);
+    try {
+      const res = await api.activateRoutine(viewing);
+      setRoutine(res.routine);
+      setNames(res.names ?? []);
+      setActive(res.active ?? '');
+    } catch {
+      // Keep the current state; the picker still reflects the server.
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isActive = viewing === active;
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
@@ -64,12 +107,42 @@ export function RoutineCard() {
           {loaded && routine && routine.length === 0 && (
             <p className="text-sm text-gray-400">No routine set.</p>
           )}
-          {loaded && routine && (
-            <div className="mb-1 flex justify-end">
+          {loaded && routine && names.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <select
+                value={viewing}
+                disabled={busy}
+                onChange={e => view(e.target.value)}
+                aria-label="Routine"
+                className="h-9 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900 disabled:opacity-50"
+              >
+                {names.map(name => (
+                  <option key={name} value={name}>
+                    {name}
+                    {name === active ? ' (active)' : ''}
+                  </option>
+                ))}
+              </select>
+              {isActive ? (
+                <span className="flex items-center gap-1 rounded-md bg-green-100 px-2 py-1.5 text-xs font-semibold text-green-700">
+                  <Check className="h-3.5 w-3.5" />
+                  Active
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={activate}
+                  disabled={busy}
+                  className="flex items-center gap-1 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-semibold text-white active:bg-green-700 disabled:opacity-40"
+                >
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Activate
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-500 active:text-gray-900"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold text-gray-500 active:text-gray-900"
               >
                 <Pencil className="h-3.5 w-3.5" />
                 Edit
@@ -108,6 +181,8 @@ export function RoutineCard() {
       {editing && routine && (
         <MobileRoutineEditor
           initial={routine}
+          name={viewing}
+          isActive={isActive}
           onClose={() => setEditing(false)}
           onSaved={saved => {
             setRoutine(saved);
