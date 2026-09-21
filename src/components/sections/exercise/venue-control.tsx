@@ -5,16 +5,30 @@ import { Dumbbell, Home, Loader2 } from 'lucide-react';
 // it shows a "🏠 Home session" badge and a "Back to gym session" action; on a gym
 // day it shows a single "Swap to home session" action. The action is optimistic
 // in the hook (useTodaySession.setVenue) — this is presentation only.
+//
+// A STANDING home day (the fixed core + mobility block, `fixed`) is home by
+// design, not by a one-off swap: it shows a static "Home block" badge with no
+// gym↔home toggle — there is no gym session to go back to.
 export function VenueControl({
   venue,
+  fixed,
   busy,
   onSet,
 }: {
   venue?: 'home';
+  fixed?: boolean;
   busy: boolean;
   onSet: (venue: 'home' | 'gym') => void;
 }) {
   const isHome = venue === 'home';
+  if (fixed) {
+    return (
+      <span className="flex w-fit items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+        <Home className="h-3 w-3" />
+        Home block
+      </span>
+    );
+  }
   return (
     <div className="flex items-center gap-2">
       {isHome && (

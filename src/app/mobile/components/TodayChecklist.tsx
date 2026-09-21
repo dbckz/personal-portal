@@ -13,7 +13,7 @@ import {
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
-import { ActionBadge, FailureTag, FixedTag, KindTag } from '@/components/sections/exercise/action-badge';
+import { ActionBadge, FailureTag, FixedTag, KindTag, PairTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
 import { VenueControl } from '@/components/sections/exercise/venue-control';
 
@@ -64,7 +64,7 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
         )}
       </div>
 
-      <VenueControl venue={plan?.venue} busy={venueBusy} onSet={setVenue} />
+      <VenueControl venue={plan?.venue} fixed={plan?.fixed} busy={venueBusy} onSet={setVenue} />
 
       {generating && (
         <p className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -210,6 +210,7 @@ function RowCard({
             >
               {row.name}
             </p>
+            {row.pair && <PairTag pair={row.pair} />}
             {row.fixed ? (
               <FixedTag fixed={row.fixed} />
             ) : (
@@ -223,6 +224,9 @@ function RowCard({
           )}
           {row.standsInFor && (
             <p className="mt-0.5 text-[11px] text-indigo-500">stands in for {row.standsInFor}</p>
+          )}
+          {row.alternatives?.length && !row.substitutedFor && (
+            <p className="mt-0.5 text-[11px] text-gray-400">or {row.alternatives.join(', ')}</p>
           )}
           <p className="mt-0.5 text-xs tabular-nums text-gray-600">
             {current || row.targetText || '—'}
@@ -307,6 +311,22 @@ function RowCard({
                 &rdquo;) sets next session&apos;s target. A rating wins if you set one.
               </p>
             </>
+          )}
+
+          {row.alternatives?.length && !row.substitutedFor && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-gray-500">Or use:</span>
+              {row.alternatives.map(alt => (
+                <button
+                  key={alt}
+                  type="button"
+                  onClick={() => onCommitSwap({ name: alt })}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 active:bg-gray-50"
+                >
+                  {alt}
+                </button>
+              ))}
+            </div>
           )}
 
           {swapping ? (

@@ -24,7 +24,7 @@ import {
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
-import { ActionBadge, FailureTag, FixedTag, KindTag } from './action-badge';
+import { ActionBadge, FailureTag, FixedTag, KindTag, PairTag } from './action-badge';
 import { RirChips } from './rir-chips';
 import { VenueControl } from './venue-control';
 
@@ -78,7 +78,7 @@ export function ExerciseToday() {
       </div>
 
       <div className="mb-4">
-        <VenueControl venue={plan?.venue} busy={venueBusy} onSet={setVenue} />
+        <VenueControl venue={plan?.venue} fixed={plan?.fixed} busy={venueBusy} onSet={setVenue} />
       </div>
 
       {generating && (
@@ -230,6 +230,7 @@ function RowCard({
             >
               {row.name}
             </span>
+            {row.pair && <PairTag pair={row.pair} />}
             {row.fixed ? (
               <FixedTag fixed={row.fixed} />
             ) : (
@@ -244,6 +245,9 @@ function RowCard({
           )}
           {row.standsInFor && (
             <p className="mt-0.5 pl-6 text-[11px] text-indigo-500">stands in for {row.standsInFor}</p>
+          )}
+          {row.alternatives?.length && !row.substitutedFor && (
+            <p className="mt-0.5 pl-6 text-[11px] text-gray-400">or {row.alternatives.join(', ')}</p>
           )}
           <p className="mt-0.5 pl-6 text-xs tabular-nums text-gray-600">
             {current || row.targetText || '—'}
@@ -328,6 +332,22 @@ function RowCard({
                 &rdquo;) sets next session&apos;s target. A rating wins if you set one.
               </p>
             </>
+          )}
+
+          {row.alternatives?.length && !row.substitutedFor && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-gray-500">Or use:</span>
+              {row.alternatives.map(alt => (
+                <button
+                  key={alt}
+                  type="button"
+                  onClick={() => onCommitSwap({ name: alt })}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  {alt}
+                </button>
+              ))}
+            </div>
           )}
 
           {swapping ? (

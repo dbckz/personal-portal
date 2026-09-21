@@ -66,6 +66,12 @@ export interface TodayRow {
   // On a home session, the routine anchor/staple this row is a home stand-in for,
   // shown as "stands in for …".
   standsInFor?: string;
+  // Antagonist-superset membership, shown as a "1a"/"1b" tag on paired lifts.
+  pair?: { index: number; slot: 'a' | 'b' };
+  // "Or" options for this exercise, offered as a one-tap swap when logging.
+  alternatives?: string[];
+  // A fixed home-block dose string ("3-2-1 × 10 s per side"), shown as the target.
+  prescription?: string;
   rationale?: string;
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — last time with numbers, shown on the row.
@@ -78,6 +84,9 @@ export interface TodayPlan {
   // 'home' when the day has been swapped to a home workout (bands, pull-up bar,
   // bodyweight). Absent means the gym.
   venue?: 'home';
+  // True for a STANDING home core + mobility day: the checklist shows a static
+  // "Home block" state rather than the gym↔home swap control.
+  fixed?: boolean;
 }
 
 export type FieldPatch = Partial<
@@ -138,7 +147,9 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     weightKg: t.weightKg,
     durationMinutes: t.durationMinutes,
     distanceKm: t.distanceKm,
-    targetText: describeVolumeLoad(t) || undefined,
+    // A fixed day's dose string is the target verbatim; otherwise the derived
+    // "3 × 8 · 40kg" reading.
+    targetText: t.prescription || describeVolumeLoad(t) || undefined,
     action: t.action,
     kind: t.kind,
     toFailure: t.toFailure,
@@ -146,6 +157,9 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     isAnchor: t.isAnchor,
     fixed: t.fixed,
     standsInFor: t.standsInFor,
+    pair: t.pair,
+    alternatives: t.alternatives,
+    prescription: t.prescription,
     rationale: t.rationale,
     last: t.last,
     lastSummary: t.lastSummary,
@@ -206,6 +220,11 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
       lastSummary: undefined,
       kind: undefined,
       toFailure: undefined,
+      // The substitute is a different exercise: the original's pair, alternatives
+      // and fixed dose no longer describe it.
+      pair: undefined,
+      alternatives: undefined,
+      prescription: undefined,
       targetText: e.targetText,
     };
   }
