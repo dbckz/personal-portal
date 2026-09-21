@@ -20,12 +20,29 @@ import {
   saveRoutine,
   setActiveRoutine,
 } from '../src/lib/storage/weekly-routine';
+import { materialiseRoutineSessions } from '../src/lib/exercise-calendar';
 import { FULL_BODY_3DAY_NAME, FULL_BODY_3DAY_ROUTINE } from '../src/lib/full-body-routine';
 import { DATA_DIR } from '../src/lib/data-paths';
 
 async function main() {
+  // Upsert the v2 entry (overwriting any v1 stored under the same name) and make
+  // it active — the Split (6-day) entry is left untouched.
   await saveRoutine(FULL_BODY_3DAY_NAME, FULL_BODY_3DAY_ROUTINE);
   await setActiveRoutine(FULL_BODY_3DAY_NAME);
+
+  // Reconcile the 14-day horizon of routine-sourced plans to the new routine —
+  // the same reconcile the activate route runs — so the fortnight ahead is
+  // retitled and the Mon/Wed/Fri/Sun home days gain venue 'home'. Best-effort:
+  // this touches Google Calendar, and a calendar failure must not leave the
+  // routine un-seeded, so it is logged, not thrown.
+  try {
+    const result = await materialiseRoutineSessions();
+    console.log(
+      `Reconciled plan: created ${result.created}, updated ${result.updated}, removed ${result.removed}`
+    );
+  } catch (error) {
+    console.error('Failed to reconcile the plan (routine still seeded and active):', error);
+  }
 
   const { names, active } = await listRoutines();
   console.log(`Data dir: ${DATA_DIR}`);
