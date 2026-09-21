@@ -163,3 +163,91 @@ describe('the routine library', () => {
 async function getActiveName(): Promise<string> {
   return (await listRoutines()).active;
 }
+
+describe('normaliseDay — the v2 fields', () => {
+  beforeEach(() => {
+    __resetDbForTests();
+  });
+
+  it('keeps venue, valid pairs, alternatives, fixed and prescriptions, and cardioAfter', async () => {
+    const saved = await saveWeeklyRoutine([
+      {
+        dayOfWeek: 2,
+        title: 'Full body A (push + pull + legs) + Treadmill run',
+        anchors: ['Leg press', 'Seated leg curl', 'Incline DB press', 'Chest-supported DB row'],
+        staples: ['Calf press'],
+        pairs: [
+          ['Leg press', 'Seated leg curl'],
+          ['Incline DB press', 'Chest-supported DB row'],
+        ],
+        alternatives: { 'Chest-supported DB row': ['Single-arm DB row'] },
+        cardioAfter: true,
+      } as unknown as WeeklyRoutineDay,
+      {
+        dayOfWeek: 3,
+        title: 'Home core + mobility',
+        anchors: [],
+        staples: ['Couch stretch', 'Glute bridge'],
+        venue: 'home',
+        fixed: true,
+        prescriptions: { 'Couch stretch': '90 s per side', 'Glute bridge': '2 × 15' },
+      } as unknown as WeeklyRoutineDay,
+    ]);
+
+    const gym = saved.find(d => d.dayOfWeek === 2)!;
+    expect(gym.pairs).toEqual([
+      ['Leg press', 'Seated leg curl'],
+      ['Incline DB press', 'Chest-supported DB row'],
+    ]);
+    expect(gym.alternatives).toEqual({ 'Chest-supported DB row': ['Single-arm DB row'] });
+    expect(gym.cardioAfter).toBe(true);
+
+    const home = saved.find(d => d.dayOfWeek === 3)!;
+    expect(home.venue).toBe('home');
+    expect(home.fixed).toBe(true);
+    expect(home.prescriptions).toEqual({ 'Couch stretch': '90 s per side', 'Glute bridge': '2 × 15' });
+  });
+
+  it('drops a malformed pair and an alternative for an unknown exercise', async () => {
+    const saved = await saveWeeklyRoutine([
+      {
+        dayOfWeek: 1,
+        title: 'Legs',
+        anchors: ['Squat', 'Leg curl'],
+        pairs: [
+          ['Squat', 'Leg curl'], // valid
+          ['Squat', 'Bench press'], // Bench press is not in the day — dropped
+          ['Squat'], // malformed length — dropped
+        ],
+        alternatives: {
+          Squat: ['Leg press'], // kept
+          'Bench press': ['Push-up'], // key not in the day — dropped
+        },
+      } as unknown as WeeklyRoutineDay,
+    ]);
+    const day = saved[0];
+    expect(day.pairs).toEqual([['Squat', 'Leg curl']]);
+    expect(day.alternatives).toEqual({ Squat: ['Leg press'] });
+  });
+
+  it('strips the v2 fields from a rest day', async () => {
+    const saved = await saveWeeklyRoutine([
+      {
+        dayOfWeek: 5,
+        title: 'Rest',
+        rest: true,
+        anchors: ['Squat'],
+        venue: 'home',
+        fixed: true,
+        cardioAfter: true,
+        pairs: [['Squat', 'Squat']],
+      } as unknown as WeeklyRoutineDay,
+    ]);
+    const day = saved[0];
+    expect(day.rest).toBe(true);
+    expect(day.venue).toBeUndefined();
+    expect(day.fixed).toBeUndefined();
+    expect(day.cardioAfter).toBeUndefined();
+    expect(day.pairs).toBeUndefined();
+  });
+});

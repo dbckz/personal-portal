@@ -319,6 +319,29 @@ export interface WeeklyRoutineDay {
   anchors: string[];
   staples?: string[];
   rest?: boolean;
+  // A STANDING home day: the day's session is done at home (bands, a pull-up
+  // bar, bodyweight) as a matter of course, not because Dave swapped to it for a
+  // one-off. The materialiser stamps `venue: 'home'` on the planned session it
+  // creates for this day; the per-date "swap to home" (see the venue route) still
+  // works on top and never fights this standing value.
+  venue?: 'home';
+  // Antagonist supersets, in order: each pair names two of the day's
+  // anchors/staples to programme back-to-back (1a/1b, 2a/2b …). Both names must
+  // be among the day's anchors/staples; a malformed pair is dropped, never thrown.
+  pairs?: [string, string][];
+  // "Or" options per exercise name — the alternatives the checklist offers as a
+  // one-tap swap when logging. Keyed by an anchor/staple name.
+  alternatives?: Record<string, string[]>;
+  // When true the day's programme is EXACTLY its staples with fixed
+  // prescriptions: no AI generation, no accessories, no progression (the daily
+  // home core + mobility block). `prescriptions` maps each staple name to its
+  // dose string ("90 s per side", "3-2-1 × 10 s holds").
+  fixed?: boolean;
+  prescriptions?: Record<string, string>;
+  // The day's cardio component goes LAST, after the lifts (the Tue/Thu treadmill
+  // runs, done after the session). Default (absent) keeps cardio first — the Sat
+  // parkrun leads its day.
+  cardioAfter?: boolean;
 }
 
 // A per-DATE deviation from the standing weekly routine (see lib/storage/routine-

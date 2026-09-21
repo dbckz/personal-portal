@@ -95,6 +95,29 @@ function normaliseDay(raw: unknown): WeeklyRoutineDay | null {
   const anchors = rest ? [] : names(day.anchors);
   const staples = rest ? [] : names(day.staples);
 
+  // The set of exercise names a pair or an alternative may reference — the day's
+  // own anchors and staples. A rest day carries none, so it keeps no pairs or
+  // alternatives either.
+  const known = new Set([...anchors, ...staples]);
+
+  // Antagonist pairs: each must be a two-element array of names both present in
+  // the day's anchors/staples. A malformed pair is DROPPED (not thrown) so one
+  // bad edit can't reject the whole save.
+  const pairs = rest ? [] : normalisePairs(day.pairs, known);
+
+  // "Or" alternatives keyed by an anchor/staple name → its option list. Blank
+  // keys, keys not among the day's exercises, and blank options are dropped.
+  const alternatives = rest ? {} : normaliseAlternatives(day.alternatives, known);
+
+  // A fixed day's programme is exactly its staples with these doses. Prescriptions
+  // are kept for every named exercise (no membership check — a dose for a name
+  // not in the list is simply never shown).
+  const fixed = day.fixed === true && !rest;
+  const prescriptions = rest ? {} : normalisePrescriptions(day.prescriptions);
+
+  const venue = day.venue === 'home' && !rest ? ('home' as const) : undefined;
+  const cardioAfter = day.cardioAfter === true && !rest;
+
   return {
     dayOfWeek: day.dayOfWeek,
     title,
@@ -102,7 +125,59 @@ function normaliseDay(raw: unknown): WeeklyRoutineDay | null {
     anchors,
     ...(staples.length ? { staples } : {}),
     ...(rest ? { rest: true } : {}),
+    ...(venue ? { venue } : {}),
+    ...(pairs.length ? { pairs } : {}),
+    ...(Object.keys(alternatives).length ? { alternatives } : {}),
+    ...(fixed ? { fixed: true } : {}),
+    ...(Object.keys(prescriptions).length ? { prescriptions } : {}),
+    ...(cardioAfter ? { cardioAfter: true } : {}),
   };
+}
+
+// Coerce the antagonist-pair list: keep only well-formed [a, b] pairs whose both
+// endpoints are among the day's known exercise names. Everything else is dropped.
+function normalisePairs(raw: unknown, known: Set<string>): [string, string][] {
+  if (!Array.isArray(raw)) return [];
+  const out: [string, string][] = [];
+  for (const pair of raw) {
+    if (!Array.isArray(pair) || pair.length !== 2) continue;
+    const a = typeof pair[0] === 'string' ? pair[0].trim() : '';
+    const b = typeof pair[1] === 'string' ? pair[1].trim() : '';
+    if (!a || !b || !known.has(a) || !known.has(b)) continue;
+    out.push([a, b]);
+  }
+  return out;
+}
+
+// Coerce the alternatives map: string keys among the known exercises, each
+// mapping to a non-empty list of trimmed option strings.
+function normaliseAlternatives(
+  raw: unknown,
+  known: Set<string>
+): Record<string, string[]> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, string[]> = {};
+  for (const [name, options] of Object.entries(raw as Record<string, unknown>)) {
+    const key = name.trim();
+    if (!key || !known.has(key) || !Array.isArray(options)) continue;
+    const opts = options
+      .map(o => (typeof o === 'string' ? o.trim() : ''))
+      .filter(Boolean);
+    if (opts.length) out[key] = opts;
+  }
+  return out;
+}
+
+// Coerce the prescription map: string name → non-empty trimmed dose string.
+function normalisePrescriptions(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [name, dose] of Object.entries(raw as Record<string, unknown>)) {
+    const key = name.trim();
+    const value = typeof dose === 'string' ? dose.trim() : '';
+    if (key && value) out[key] = value;
+  }
+  return out;
 }
 
 // The name the legacy single-routine `weeklyRoutine` row is migrated into the
