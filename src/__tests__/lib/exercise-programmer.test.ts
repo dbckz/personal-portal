@@ -1452,3 +1452,88 @@ describe('programme cache', () => {
     expect(getCachedProgramme('2026-08-07', 'hash-a')).toBeNull();
   });
 });
+
+describe('a full-body day (push + pull + legs on one day)', () => {
+  // A vocabulary spanning all three strength groups plus a core staple, so the
+  // day's anchors resolve and coverage has accessories to pull from.
+  function fullBodyProgressions(): ExerciseProgression[] {
+    const load = (kg: number): ProgressionPoint[] => [
+      { date: '2026-08-02', sets: 3, reps: 8, weightKg: kg },
+    ];
+    return [
+      progression('Leg press', load(120), 6),
+      progression('Seated leg curl', load(45), 6),
+      progression('Incline dumbbell press', load(24), 6),
+      progression('Chest-supported dumbbell row', load(22), 6),
+      progression('Seated dumbbell shoulder press', load(18), 6),
+      progression('Cable bicep curl', load(15), 5),
+      progression('Cable tricep pushdown', load(20), 5),
+      progression('Pallof press', [{ date: '2026-08-02', sets: 3, reps: 12 }], 5),
+    ];
+  }
+
+  const fullBodyDay = (over: Partial<ProgrammerRoutineDay> = {}): ProgrammerRoutineDay => ({
+    title: 'Full body A (push + pull + legs)',
+    note: 'Heavy legs.',
+    anchors: [
+      'Leg press',
+      'Seated leg curl',
+      'Incline dumbbell press',
+      'Chest-supported dumbbell row',
+      'Seated dumbbell shoulder press',
+    ],
+    staples: ['Pallof press'],
+    ...over,
+  });
+
+  const fullBodyInput = (day = fullBodyDay()): ProgrammerInput =>
+    buildProgrammerInput(
+      fullBodyProgressions(),
+      {
+        label: 'Full body A',
+        components: ['Full body A (push + pull + legs)'],
+        routineDay: day,
+      },
+      '2026-08-06',
+      6
+    );
+
+  it('asks the model for a 6–8-row antagonist-paired session in the prompt', () => {
+    const prompt = buildProgrammerPrompt(fullBodyInput());
+    expect(prompt).toMatch(/FULL-BODY day/);
+    expect(prompt).toMatch(/6.?8 rows/);
+    expect(prompt).toMatch(/antagonist/i);
+  });
+
+  it('keeps every anchor and stays within the ~8-row budget', () => {
+    // The model returns just the anchors and the staple.
+    const returned = [
+      'Leg press',
+      'Seated leg curl',
+      'Incline dumbbell press',
+      'Chest-supported dumbbell row',
+      'Seated dumbbell shoulder press',
+      'Pallof press',
+    ].map(name => ({ name, kind: 'core', toFailure: false, target: { sets: 3, reps: 8, weightKg: 30 } }));
+
+    const rows = validateProgramme(returned, fullBodyInput());
+    const names = rows.map(r => r.name);
+    for (const anchor of fullBodyDay().anchors) {
+      expect(names).toContain(anchor);
+    }
+    // The reduced full-body floors keep this near the time budget, not the ~15
+    // rows three groups at the single-day floor of 5 would force.
+    expect(rows.length).toBeGreaterThanOrEqual(6);
+    expect(rows.length).toBeLessThanOrEqual(8);
+    // All three strength groups survive.
+    expect(rows.some(r => classifyExercise(r.name) === 'push')).toBe(true);
+    expect(rows.some(r => classifyExercise(r.name) === 'pull')).toBe(true);
+    expect(rows.some(r => classifyExercise(r.name) === 'legs')).toBe(true);
+  });
+
+  it('changes the programme hash when the routine changes', () => {
+    const before = programmeHash(fullBodyInput());
+    const after = programmeHash(fullBodyInput(fullBodyDay({ note: 'Moderate legs.' })));
+    expect(after).not.toBe(before);
+  });
+});

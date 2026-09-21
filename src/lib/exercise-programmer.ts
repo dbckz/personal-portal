@@ -496,6 +496,17 @@ function buildHomeBlock(
   return lines.join('\n');
 }
 
+// The strength groups that make a day "full body": when push, pull and legs are
+// all active on one day, the session is programmed to a tighter budget than a
+// single- or two-group day (docs/full-body-routine-plan.md §3).
+const STRENGTH_GROUPS: Group[] = ['push', 'pull', 'legs'];
+
+// Whether a set of active groups is a full-body day: all three strength groups
+// present. `run` and `core` don't count — a Pull + Legs day is not full-body.
+function isFullBodyDay(groups: Group[]): boolean {
+  return STRENGTH_GROUPS.every(g => groups.includes(g));
+}
+
 // The routine block: the standing week's shape for this day. Anchors and staples
 // are REQUIRED and must appear; accessories are the model's to rotate from the
 // history below, keeping the day's muscle-group focus.
@@ -511,9 +522,19 @@ function buildRoutineBlock(day: ProgrammerRoutineDay): string {
   if (day.staples.length) {
     lines.push(`REQUIRED staples — always include these: ${day.staples.join(', ')}.`);
   }
-  lines.push(
-    `Then ADD about 3–5 accessories chosen from the exercise history below, keeping this day's muscle-group focus. You may order the anchors and staples within the session as a coach would. Vary the accessories week to week, but revisit them within a training cycle rather than never repeating one.`
-  );
+  // A full-body day (push + pull + legs on one day) is time-boxed: it must stay
+  // near 60 minutes, so it is 6–8 ROWS TOTAL rather than "anchors + 3–5
+  // accessories" per group. Antagonist pairing (push⇄pull, curl⇄triceps) keeps
+  // it in that budget at equal work, so ask for it and have the model say so.
+  if (isFullBodyDay(activeGroups([day.title]))) {
+    lines.push(
+      `This is a FULL-BODY day — it trains push, pull and legs together. Keep the WHOLE session to 6–8 rows total and about 60 minutes: the required lifts above plus only 1–2 accessories, not 3–5 per group. Pair antagonists to save time at equal work — push with pull, curl with triceps — and say which pairs you chose in the rationale. Keep the order anchors → staples → accessories, and finish on exactly one to-failure accessory.`
+    );
+  } else {
+    lines.push(
+      `Then ADD about 3–5 accessories chosen from the exercise history below, keeping this day's muscle-group focus. You may order the anchors and staples within the session as a coach would. Vary the accessories week to week, but revisit them within a training cycle rather than never repeating one.`
+    );
+  }
   if (day.recentAccessories?.length) {
     lines.push(
       `Accessories used in the most recent session(s) of this day: ${day.recentAccessories.join(', ')} — prefer rotating to different ones this week.`
@@ -804,12 +825,22 @@ export function validateProgramme(
 const MIN_STRENGTH_ROWS = 5;
 const MIN_CORE_ROWS = 3;
 
+// On a full-body day all three strength groups share ~60 minutes, so the
+// per-group floor drops: flooring each at MIN_STRENGTH_ROWS (5) would force ~15
+// rows. Two strength rows per group plus one core keeps the whole day near the
+// 6–8-row budget the prompt asks for, while still stopping a group being dropped
+// entirely.
+const FULL_BODY_STRENGTH_ROWS = 2;
+const FULL_BODY_CORE_ROWS = 1;
+
 // The floor for a group. The 'run' group is floored at ONE so a planned run
 // always yields a cardio row even when the model omits it; the single-cardio
 // rule in validateProgramme still caps it at one, so the floor never produces a
-// second run.
-function groupMinimum(group: Group): number {
+// second run. On a full-body day the strength/core floors are reduced so three
+// strength groups on one day don't blow past the time budget.
+function groupMinimum(group: Group, fullBody: boolean): number {
   if (group === 'run') return 1;
+  if (fullBody) return group === 'core' ? FULL_BODY_CORE_ROWS : FULL_BODY_STRENGTH_ROWS;
   return group === 'core' ? MIN_CORE_ROWS : MIN_STRENGTH_ROWS;
 }
 
@@ -832,6 +863,7 @@ function guaranteeGroupCoverage(
   // The day's active groups, read from its components and its routine title so a
   // combined "Pull + Legs" surfaces both even when components arrive empty.
   const groups = activeGroups([...input.plan.components, day.title]);
+  const fullBody = isFullBodyDay(groups);
   const out = [...rows];
   // Home: never pad a group with gym-only equipment (a machine/cable/barbell/
   // dumbbell lift) — the vocabulary carries the routine's gym anchors as no-history
@@ -847,7 +879,7 @@ function guaranteeGroupCoverage(
   const plannedRunKey = exerciseKey(planCardioName(input.plan.components, input.plan.venue) ?? '');
 
   for (const group of groups) {
-    const min = groupMinimum(group);
+    const min = groupMinimum(group, fullBody);
     if (min === 0) continue;
     let count = out.filter(r => classifyExercise(r.name) === group).length;
     const candidates =
