@@ -17,7 +17,6 @@ import { SectionGoals } from '@/components/goals/SectionGoals';
 import { AdherenceTrendChart } from './exercise/AdherenceTrendChart';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
-import { RehabBlock } from './exercise/RehabBlock';
 import { FreeformLog } from './exercise/FreeformLog';
 import { MusclesTab } from './exercise/MusclesTab';
 import { ProgressionTab } from './exercise/ProgressionTab';
@@ -39,16 +38,10 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
     );
   }
   if (subTab === 'today') {
-    // The daily back-rehab block sits below the main Today checklist — separate
-    // system, so it renders every day regardless of whether a session exists.
-    return (
-      <>
-        <ExerciseToday />
-        <div className="max-w-3xl mx-auto px-6 pb-6">
-          <RehabBlock />
-        </div>
-      </>
-    );
+    // The daily home core + mobility block now lives IN the routine as the
+    // Mon/Wed/Fri/Sun fixed days, so there is no separate rehab panel here. (The
+    // old rehabRoutine data domain is retained in storage — see lib/storage/rehab.)
+    return <ExerciseToday />;
   }
   if (subTab === 'challenge75') {
     return (

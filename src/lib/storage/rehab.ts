@@ -1,9 +1,11 @@
-// Dave's daily back-rehab block: a small tickable home routine, shown every day
-// (rest days included) and tracked DELIBERATELY SEPARATELY from the exercise
-// session/programme system. It rehabs a back issue (tight hip flexors / anterior
-// pelvic tilt from running), so it must persist whether or not a gym session
-// exists that day. Some movements here also appear as gym staples — the two are
-// not synced; a tick here is only ever a tick here.
+// Dave's daily back-rehab block: a small tickable home routine, tracked
+// DELIBERATELY SEPARATELY from the exercise session/programme system.
+//
+// RETAINED, NO LONGER SHOWN (21 Sep 2026): the daily home core + mobility work
+// now lives IN the weekly routine as the Mon/Wed/Fri/Sun fixed days, so the
+// standalone rehab UI and its /api/exercise/rehab route were removed. This
+// storage module and the `rehabRoutine` data domain are kept so the historical
+// ticks are never lost and stay readable; nothing writes to it any more.
 //
 // Its own `rehabRoutine` domain in the user-data store (see ./db), read and
 // written directly rather than through getUserData(): a dedicated module owns
