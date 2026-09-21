@@ -70,7 +70,7 @@ describe('the seeded full-body routine', () => {
       'Chest-supported dumbbell row',
       'Seated dumbbell shoulder press',
     ]);
-    expect(byDay(1).staples).toEqual(['Pallof press']);
+    expect(byDay(1).staples).toEqual(['Pallof press', '5-a-side football']);
     expect(byDay(3).anchors).toContain('Dumbbell Romanian deadlift');
     expect(byDay(3).staples).toEqual(['Dead bug']);
     expect(byDay(5).anchors).toContain('Single-leg glute bridge');

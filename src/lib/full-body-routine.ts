@@ -28,7 +28,7 @@ export const FULL_BODY_3DAY_ROUTINE: WeeklyRoutineDay[] = [
       'Chest-supported dumbbell row',
       'Seated dumbbell shoulder press',
     ],
-    staples: ['Pallof press'],
+    staples: ['Pallof press', '5-a-side football'],
   },
   {
     dayOfWeek: 2, // Tuesday
