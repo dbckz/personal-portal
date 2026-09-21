@@ -265,3 +265,35 @@ describe('resolveSessionTargets — a rest override on a date with no plan', () 
     expect(resolved.components).toEqual(['Run', 'core']);
   });
 });
+
+// A fixed home core + mobility day (Mon 24 Aug 2026): the resolver must
+// short-circuit to the exact staples with their doses, source 'fixed', without
+// ever touching the programme cache or kicking off generation.
+describe('resolveSessionTargets — a fixed home day', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRoutine.mockResolvedValue([
+      {
+        dayOfWeek: 1,
+        title: 'Home core + mobility',
+        anchors: [],
+        staples: ['Couch stretch', 'Glute bridge'],
+        venue: 'home',
+        fixed: true,
+        prescriptions: { 'Couch stretch': '90 s per side', 'Glute bridge': '2 × 15' },
+      },
+    ]);
+    mockGetCached.mockReturnValue(null);
+  });
+
+  it('serves the exact staples with their doses and never reads the cache', async () => {
+    const resolved = await resolveSessionTargets('2026-08-24', []);
+    expect(resolved.source).toBe('fixed');
+    expect(resolved.targets.map(t => t.name)).toEqual(['Couch stretch', 'Glute bridge']);
+    const couch = resolved.targets.find(t => t.name === 'Couch stretch')!;
+    expect(couch.prescription).toBe('90 s per side');
+    expect(couch.fixed).toBe('staple');
+    // A fixed day never consults the programme cache — the block is the block.
+    expect(mockGetCached).not.toHaveBeenCalled();
+  });
+});

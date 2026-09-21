@@ -31,7 +31,16 @@ export async function GET(request: NextRequest) {
     const { plan, components, targets, input, hash } = resolved;
 
     const planPayload = plan
-      ? { plan: { label: plan.label, components, ...(plan.venue ? { venue: plan.venue } : {}) } }
+      ? {
+          plan: {
+            label: plan.label,
+            components,
+            ...(plan.venue ? { venue: plan.venue } : {}),
+            // A fixed home day: the checklist shows a static "Home block" state,
+            // not the gym↔home swap control.
+            ...(resolved.source === 'fixed' ? { fixed: true } : {}),
+          },
+        }
       : {};
 
     // Only the deterministic fallback triggers a background generation. 'ai' is

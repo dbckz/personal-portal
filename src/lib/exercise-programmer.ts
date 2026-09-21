@@ -70,6 +70,16 @@ export interface ProgrammeRow {
   // shoulder press"). Lets validation, ordering and the fixed badge treat the
   // stand-in as the anchor it replaces. Absent on gym rows and non-substitutes.
   standsInFor?: string;
+  // Antagonist-superset membership, stamped from the routine day (never trusted
+  // from the model): pair `index` and which half (`a`/`b`). Absent on unpaired
+  // rows and cardio.
+  pair?: { index: number; slot: 'a' | 'b' };
+  // "Or" options for this exercise, from the routine day, so the checklist can
+  // offer a one-tap swap. Absent when the day names none.
+  alternatives?: string[];
+  // A fixed day's exact dose string, carried verbatim when the target shape can't
+  // express it ("3-2-1 × 10 s per side"). Absent on ordinary programmed rows.
+  prescription?: string;
   target: ProgrammeTarget;
   rationale: string;
   // Always concrete: filled from real history server-side, never from the model.
@@ -87,6 +97,17 @@ export interface ProgrammerRoutineDay {
   staples: string[];
   rest?: boolean;
   recentAccessories?: string[];
+  // Antagonist supersets, in order — pairs of anchor/staple names programmed
+  // back-to-back. Drives the pair badge and the prompt's pairing instruction.
+  pairs?: [string, string][];
+  // "Or" options per anchor/staple name, surfaced on the checklist row.
+  alternatives?: Record<string, string[]>;
+  // A fixed day (the home core + mobility block): its programme is exactly its
+  // staples with these doses — no AI, no accessories, no progression.
+  fixed?: boolean;
+  prescriptions?: Record<string, string>;
+  // The day's run goes LAST, after the lifts (Tue/Thu). Default is cardio-first.
+  cardioAfter?: boolean;
 }
 
 export interface ProgrammerPlan {
@@ -296,6 +317,18 @@ function routineFingerprint(day: ProgrammerRoutineDay | undefined): string {
     staples: day.staples,
     rest: !!day.rest,
     recentAccessories: [...(day.recentAccessories ?? [])].sort(),
+    // New v2 fields fold in ONLY when present, so a routine that uses none of
+    // them (the legacy split) keeps a byte-identical fingerprint and its cached
+    // programmes still apply.
+    ...(day.pairs?.length ? { pairs: day.pairs } : {}),
+    ...(day.alternatives && Object.keys(day.alternatives).length
+      ? { alternatives: day.alternatives }
+      : {}),
+    ...(day.fixed ? { fixed: true } : {}),
+    ...(day.prescriptions && Object.keys(day.prescriptions).length
+      ? { prescriptions: day.prescriptions }
+      : {}),
+    ...(day.cardioAfter ? { cardioAfter: true } : {}),
   });
 }
 
@@ -522,11 +555,21 @@ function buildRoutineBlock(day: ProgrammerRoutineDay): string {
   if (day.staples.length) {
     lines.push(`REQUIRED staples — always include these: ${day.staples.join(', ')}.`);
   }
-  // A full-body day (push + pull + legs on one day) is time-boxed: it must stay
-  // near 60 minutes, so it is 6–8 ROWS TOTAL rather than "anchors + 3–5
-  // accessories" per group. Antagonist pairing (push⇄pull, curl⇄triceps) keeps
-  // it in that budget at equal work, so ask for it and have the model say so.
-  if (isFullBodyDay(activeGroups([day.title]))) {
+  // A day with explicit antagonist PAIRS is fully specified: programme exactly
+  // the paired lifts (both halves of every pair), plus the staples (e.g. calves)
+  // and the run — no extra accessories unless a pair half is somehow missing.
+  // The pairs are the session; the model's job is to set targets, not to add.
+  if (day.pairs?.length) {
+    const pairLines = day.pairs
+      .map((pair, i) => `    ${i + 1}. ${pair[0]} ⇄ ${pair[1]}`)
+      .join('\n');
+    lines.push(
+      `This is a FULL-BODY day, programmed as ANTAGONIST PAIRS done back-to-back (30–60 s between the two halves, ~90 s before the next round). Programme both halves of every pair, and keep the row order 1a, 1b, 2a, 2b … exactly as listed:\n${pairLines}`
+    );
+    lines.push(
+      `Include the required lifts in their pairs plus the staples (e.g. calves) and the run — no extra accessories unless a pair half is missing from the exercises below. Two light warm-up sets on the first movement of each pair. Double progression: top of the rep range on all 3 sets → add weight and reset reps; below the bottom → drop about 10%. Finish on exactly one safe to-failure accessory.`
+    );
+  } else if (isFullBodyDay(activeGroups([day.title]))) {
     lines.push(
       `This is a FULL-BODY day — it trains push, pull and legs together. Keep the WHOLE session to 6–8 rows total and about 60 minutes: the required lifts above plus only 1–2 accessories, not 3–5 per group. Pair antagonists to save time at equal work — push with pull, curl with triceps — and say which pairs you chose in the rationale. Keep the order anchors → staples → accessories, and finish on exactly one to-failure accessory.`
     );
@@ -811,8 +854,9 @@ export function validateProgramme(
     seenVariantGroups,
     input
   );
+  // `day` is the routine day resolved at the top of validateProgramme.
   return enforceToFailure(
-    orderProgrammeRows(markFixed(covered, input.plan.routineDay), input.plan.routineDay)
+    orderProgrammeRows(markPairsAndAlternatives(markFixed(covered, day), day), day)
   );
 }
 
@@ -864,6 +908,10 @@ function guaranteeGroupCoverage(
   // combined "Pull + Legs" surfaces both even when components arrive empty.
   const groups = activeGroups([...input.plan.components, day.title]);
   const fullBody = isFullBodyDay(groups);
+  // A pairs-based day is fully specified by its pairs (plus staples and the run):
+  // the floor for every strength/core group is exactly what the pairs give, so
+  // padding is switched off. The run floor of 1 still guarantees the cardio row.
+  const pairsBased = (day.pairs?.length ?? 0) > 0;
   const out = [...rows];
   // Home: never pad a group with gym-only equipment (a machine/cable/barbell/
   // dumbbell lift) — the vocabulary carries the routine's gym anchors as no-history
@@ -879,7 +927,8 @@ function guaranteeGroupCoverage(
   const plannedRunKey = exerciseKey(planCardioName(input.plan.components, input.plan.venue) ?? '');
 
   for (const group of groups) {
-    const min = groupMinimum(group, fullBody);
+    // Pairs-based days pad nothing but the run: the pairs are the session.
+    const min = pairsBased && group !== 'run' ? 0 : groupMinimum(group, fullBody);
     if (min === 0) continue;
     let count = out.filter(r => classifyExercise(r.name) === group).length;
     const candidates =
@@ -933,6 +982,46 @@ export function markFixed(rows: ProgrammeRow[], day?: ProgrammerRoutineDay): Pro
   });
 }
 
+// Stamp antagonist-pair membership and "or" alternatives onto rows from the
+// routine day, matched by exerciseKey — never trusted from the model. A row that
+// is one half of a pair gains `pair: { index, slot }`; a row the day lists
+// alternatives for gains `alternatives`. Applied to the whole set (model rows and
+// appended fixed lifts alike) and exported so the cached read path can stamp
+// programmes cached before pairs/alternatives existed without regenerating them.
+export function markPairsAndAlternatives(
+  rows: ProgrammeRow[],
+  day?: ProgrammerRoutineDay
+): ProgrammeRow[] {
+  if (!day) return rows;
+  const pairByKey = new Map<string, { index: number; slot: 'a' | 'b' }>();
+  (day.pairs ?? []).forEach((pair, index) => {
+    const a = exerciseKey(pair[0]);
+    const b = exerciseKey(pair[1]);
+    if (a && !pairByKey.has(a)) pairByKey.set(a, { index, slot: 'a' });
+    if (b && !pairByKey.has(b)) pairByKey.set(b, { index, slot: 'b' });
+  });
+  const altsByKey = new Map<string, string[]>();
+  for (const [name, options] of Object.entries(day.alternatives ?? {})) {
+    const key = exerciseKey(name);
+    if (key && options.length) altsByKey.set(key, options);
+  }
+  if (pairByKey.size === 0 && altsByKey.size === 0) return rows;
+
+  return rows.map(row => {
+    // A home stand-in inherits the pair/alternatives of the fixed lift it replaces.
+    const standInKey = row.standsInFor ? exerciseKey(row.standsInFor) : '';
+    const pair = pairByKey.get(row.key) ?? (standInKey ? pairByKey.get(standInKey) : undefined);
+    const alternatives =
+      altsByKey.get(row.key) ?? (standInKey ? altsByKey.get(standInKey) : undefined);
+    if (!pair && !alternatives) return row;
+    return {
+      ...row,
+      ...(pair ? { pair } : {}),
+      ...(alternatives ? { alternatives } : {}),
+    };
+  });
+}
+
 // Deterministic row order for the checklist, independent of the order the model
 // returned: cardio rows first (keeping their relative order — there is at most
 // one after the single-cardio rule), then the day's anchors in routine order,
@@ -961,8 +1050,11 @@ export function orderProgrammeRows(
   // cardio and the rest. A stable sort by (bucket, rank) is the whole rule.
   // A home stand-in orders in the bucket of the anchor/staple it replaces, so it
   // sits where that fixed lift would have — matched by key, or by standsInFor.
+  // cardioAfter (Tue/Thu): the run trails the lifts, so cardio moves to a bucket
+  // (4) after everything else rather than leading (0).
+  const cardioBucket = day.cardioAfter ? 4 : 0;
   const ranked = rows.map((row, index) => {
-    if (row.kind === 'cardio') return { row, bucket: 0, rank: index };
+    if (row.kind === 'cardio') return { row, bucket: cardioBucket, rank: index };
     const standInKey = row.standsInFor ? exerciseKey(row.standsInFor) : '';
     const anchor = anchorRank.get(row.key) ?? (standInKey ? anchorRank.get(standInKey) : undefined);
     if (anchor !== undefined) return { row, bucket: 1, rank: anchor };
@@ -1122,8 +1214,78 @@ export function enforceToFailure(rows: ProgrammeRow[]): ProgrammeRow[] {
   if (idx === -1) return cleared; // nothing safe to finish on (e.g. a pure run)
   const [finisher] = cleared.splice(idx, 1);
   finisher.toFailure = true;
-  cleared.push(finisher);
+  // The finisher is the last LIFT: it goes right after the last non-cardio row.
+  // On a cardioAfter day the run trails the lifts, so this lands the finisher
+  // just before it; on a cardio-first (or no-cardio) day there is no lift after
+  // it, so it lands at the very end exactly as before.
+  const lastLift = lastIndexWhere(cleared, r => r.kind !== 'cardio');
+  // With no lift left (a pure-cardio remainder) the finisher goes at the end,
+  // never ahead of the cardio.
+  const insertAt = lastLift === -1 ? cleared.length : lastLift + 1;
+  cleared.splice(insertAt, 0, finisher);
   return cleared;
+}
+
+// Best-effort parse of a fixed-day dose string into the target's log fields.
+// The dose STRING stays the source of truth (carried as `prescription`); this
+// only pre-fills the sets/reps/seconds so a fixed row logs like any other. Kept
+// deliberately narrow: a shape it can't read (the McGill "3-2-1" ladder) falls
+// back to just the seconds, and the full string still shows.
+function parseFixedDose(dose: string): {
+  sets?: number;
+  reps?: number;
+  holdSeconds?: number;
+  perSide?: boolean;
+} {
+  const out: { sets?: number; reps?: number; holdSeconds?: number; perSide?: boolean } = {};
+  if (/per side|each side/i.test(dose)) out.perSide = true;
+  // "2 × 15" is sets × reps; "… × 10 s" is seconds held, not reps.
+  const cross = dose.match(/(\d+)\s*[×x*]\s*(\d+)\s*(s\b|sec)?/i);
+  if (cross) {
+    if (cross[3]) out.holdSeconds = Number(cross[2]);
+    else {
+      out.sets = Number(cross[1]);
+      out.reps = Number(cross[2]);
+    }
+    return out;
+  }
+  // Seconds only when the unit "s"/"sec" ends a word — so "90 s" reads as a hold
+  // but "8 slow" does not (the "s" there begins "slow").
+  const secs = dose.match(/(\d+)\s*s(?:ec(?:onds?)?)?\b/i);
+  const bare = dose.match(/^\s*(\d+)/);
+  if (secs) out.holdSeconds = Number(secs[1]);
+  else if (bare) out.reps = Number(bare[1]);
+  return out;
+}
+
+// Build a fixed day's rows straight from its staples and prescriptions — no AI,
+// no history, no progression. The day's checklist is EXACTLY this list, in order,
+// each carrying its dose string. Every row is badged a staple and never taken to
+// failure. Exported so the target resolver can short-circuit before any
+// generation and the tests can pin the shape.
+export function buildFixedDayRows(day: ProgrammerRoutineDay): ProgrammeRow[] {
+  return day.staples.map(name => {
+    const key = exerciseKey(name);
+    const dose = day.prescriptions?.[name] ?? '';
+    const parsed = dose ? parseFixedDose(dose) : {};
+    const kind: ExerciseKind = isCardioName(name) ? 'cardio' : isHoldName(name) ? 'hold' : 'core';
+    return {
+      name,
+      key,
+      kind,
+      toFailure: false,
+      fixed: 'staple' as const,
+      ...(dose ? { prescription: dose } : {}),
+      target: {
+        ...(parsed.sets !== undefined ? { sets: parsed.sets } : {}),
+        ...(parsed.reps !== undefined ? { reps: parsed.reps } : {}),
+        ...(parsed.holdSeconds !== undefined ? { holdSeconds: parsed.holdSeconds } : {}),
+        ...(parsed.perSide ? { perSide: true } : {}),
+      },
+      rationale: dose ? `Fixed home block — ${dose}.` : 'Fixed home block.',
+      lastSummary: 'fixed prescription',
+    };
+  });
 }
 
 // Generate the programme, or null if the model is unavailable or returns nothing
@@ -1156,6 +1318,9 @@ export function programmeRowToTarget(row: ProgrammeRow): ExerciseTarget {
     lastSummary: row.lastSummary,
     ...(row.fixed ? { fixed: row.fixed } : {}),
     ...(row.standsInFor ? { standsInFor: row.standsInFor } : {}),
+    ...(row.pair ? { pair: row.pair } : {}),
+    ...(row.alternatives ? { alternatives: row.alternatives } : {}),
+    ...(row.prescription ? { prescription: row.prescription } : {}),
     ...(row.target.sets !== undefined ? { sets: row.target.sets } : {}),
     ...(row.target.reps !== undefined ? { reps: row.target.reps } : {}),
     ...(row.target.holdSeconds !== undefined ? { holdSeconds: row.target.holdSeconds } : {}),

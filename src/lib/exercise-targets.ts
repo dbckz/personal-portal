@@ -158,6 +158,16 @@ export interface ExerciseTarget {
   // shoulder press"). Shown on the row so the substitution is legible. Absent on
   // gym sessions and on rows that are not substitutes.
   standsInFor?: string;
+  // Antagonist-superset membership, attached deterministically from the routine
+  // day (never trusted from the model): pair `index` (0-based) and which half
+  // (`a`/`b`), so the checklist can tag it "1a"/"1b". Absent on unpaired rows.
+  pair?: { index: number; slot: 'a' | 'b' };
+  // "Or" options for this exercise, from the routine day, so the checklist can
+  // offer a one-tap swap to an alternative. Absent when the day names none.
+  alternatives?: string[];
+  // A FIXED day's exact dose string ("3-2-1 × 10 s per side"), carried verbatim
+  // when the sets/reps/hold shape can't express it. Rendered as the target.
+  prescription?: string;
   // Last time out, for context.
   last?: ProgressionPoint;
   // "2 Aug · 3 × 8 · 40kg" — what was actually done last time, with numbers, so
@@ -472,7 +482,11 @@ export function buildSessionTargets(
 ): ExerciseTarget[] {
   const targets = selectPlanProgressions(progressions, components, limit, options).map(buildTarget);
   return guaranteeFinisher(
-    orderTargets(guaranteeCardioComponent(targets, components, options.venue), components)
+    orderTargets(
+      guaranteeCardioComponent(targets, components, options.venue),
+      components,
+      options.cardioAfter
+    )
   );
 }
 
@@ -583,6 +597,9 @@ export function isHomeStrengthExercise(name: string, points: ProgressionPoint[] 
 // strips gym-only equipment out of the vocabulary.
 export interface SelectOptions {
   venue?: 'home';
+  // When true the day's cardio piece is ordered LAST (the Tue/Thu run after the
+  // lifts) rather than first. Only affects ordering, not selection.
+  cardioAfter?: boolean;
 }
 
 // The exercises a session's plan implies, most-relevant first and capped. Shared
@@ -702,12 +719,18 @@ function pickCardio(cardio: ExerciseTarget[], components: string[]): ExerciseTar
 // leads the session, not a chest press. A stable partition, so the relative
 // order within each group is preserved. Only ONE cardio piece survives (see
 // pickCardio): the rest are dropped so a session never carries two runs.
-function orderTargets(targets: ExerciseTarget[], components: string[] = []): ExerciseTarget[] {
+function orderTargets(
+  targets: ExerciseTarget[],
+  components: string[] = [],
+  cardioAfter = false
+): ExerciseTarget[] {
   const isCardio = (t: ExerciseTarget) => t.kind === 'cardio';
   const cardio = targets.filter(isCardio);
   const rest = targets.filter(t => !isCardio(t));
-  const lead = cardio.length > 0 ? [pickCardio(cardio, components)] : [];
-  return [...lead, ...rest];
+  const one = cardio.length > 0 ? [pickCardio(cardio, components)] : [];
+  // Default: the run leads the session. cardioAfter (Tue/Thu): it trails the
+  // lifts.
+  return cardioAfter ? [...rest, ...one] : [...one, ...rest];
 }
 
 // A muscle group a plan day can call for.

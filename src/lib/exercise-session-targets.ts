@@ -25,11 +25,13 @@ import { parsePlannedTitle } from '@/lib/exercise-parse';
 import { normalizeExerciseName } from '@/lib/exercise-names';
 import { entryWasPerformed } from '@/lib/exercise-entry';
 import {
+  buildFixedDayRows,
   buildProgrammerInput,
   capSets,
   dropExclusiveDuplicates,
   enforceToFailure,
   markFixed,
+  markPairsAndAlternatives,
   orderProgrammeRows,
   programmeHash,
   programmeRowToTarget,
@@ -54,7 +56,9 @@ export interface ResolvedSessionTargets {
   components: string[];
   // The targets to show and to seed from, whichever source they came from.
   targets: ExerciseTarget[];
-  source: 'ai' | 'fallback' | 'rest';
+  // 'fixed' — a home core + mobility day: the exact staples with fixed doses, no
+  // AI generation ever kicked off.
+  source: 'ai' | 'fallback' | 'rest' | 'fixed';
   // The programmer input and its hash. The targets route uses these to kick off a
   // background generation when serving the fallback; the start route ignores them.
   input: ProgrammerInput;
@@ -143,6 +147,21 @@ export async function resolveSessionTargets(
     return { plan, components: [], targets: [], source: 'rest', input, hash };
   }
 
+  // A FIXED day (the home core + mobility block) short-circuits before any cache
+  // lookup or generation: its checklist is exactly its staples with their fixed
+  // doses, in order. The hash is still computed above so caching semantics stay
+  // sane, but nothing is read or written and the targets route never generates.
+  if (routineDay?.fixed) {
+    return {
+      plan,
+      components,
+      targets: buildFixedDayRows(routineDay).map(programmeRowToTarget),
+      source: 'fixed',
+      input,
+      hash,
+    };
+  }
+
   const cached = getCachedProgramme(date, hash);
 
   if (cached) {
@@ -161,7 +180,13 @@ export async function resolveSessionTargets(
     // capSets clamps any row to three sets so programmes cached before the
     // three-set cap (Dave, 7 Sep 2026) are fixed on read too.
     const ordered = enforceToFailure(
-      orderProgrammeRows(capSets(dropExclusiveDuplicates(markFixed(cached, routineDay))), routineDay)
+      orderProgrammeRows(
+        markPairsAndAlternatives(
+          capSets(dropExclusiveDuplicates(markFixed(cached, routineDay))),
+          routineDay
+        ),
+        routineDay
+      )
     );
     return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
   }
@@ -254,6 +279,18 @@ function distillRoutineDay(
     staples,
     ...(day.rest ? { rest: true } : {}),
     ...(recentAccessories.length ? { recentAccessories } : {}),
+    // v2 routine fields: threaded through so the programmer sees the pairs and
+    // alternatives, the fixed-day short-circuit can fire, and cardioAfter orders
+    // the run last.
+    ...(day.pairs?.length ? { pairs: day.pairs } : {}),
+    ...(day.alternatives && Object.keys(day.alternatives).length
+      ? { alternatives: day.alternatives }
+      : {}),
+    ...(day.fixed ? { fixed: true } : {}),
+    ...(day.prescriptions && Object.keys(day.prescriptions).length
+      ? { prescriptions: day.prescriptions }
+      : {}),
+    ...(day.cardioAfter ? { cardioAfter: true } : {}),
   };
 }
 

@@ -7,12 +7,14 @@
  * have to be right whatever the model returns.
  */
 import {
+  buildFixedDayRows,
   buildProgrammerInput,
   buildProgrammerPrompt,
   capSets,
   exclusiveGroup,
   generateProgramme,
   HOME_EQUIPMENT,
+  markPairsAndAlternatives,
   MAX_SETS,
   orderProgrammeRows,
   programmeHash,
@@ -1535,5 +1537,169 @@ describe('a full-body day (push + pull + legs on one day)', () => {
     const before = programmeHash(fullBodyInput());
     const after = programmeHash(fullBodyInput(fullBodyDay({ note: 'Moderate legs.' })));
     expect(after).not.toBe(before);
+  });
+});
+
+// The v2 full-body routine's structure: antagonist pairs, the run ordered after
+// the lifts on Tue/Thu, "or" alternatives on rows, and the fixed home-block days.
+describe('v2 routine — pairs, cardioAfter, alternatives and fixed days', () => {
+  const pairedProgressions = (): ExerciseProgression[] => {
+    const load = (kg: number): ProgressionPoint[] => [
+      { date: '2026-08-02', sets: 3, reps: 10, weightKg: kg },
+    ];
+    return [
+      progression('Leg press', load(120), 6),
+      progression('Seated leg curl', load(45), 6),
+      progression('Incline DB press', load(24), 6),
+      progression('Chest-supported DB row', load(22), 6),
+      progression('Calf press', [{ date: '2026-08-02', sets: 3, reps: 15, weightKg: 80 }], 4),
+      progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 20 }], 5),
+    ];
+  };
+
+  const pairedDay = (over: Partial<ProgrammerRoutineDay> = {}): ProgrammerRoutineDay => ({
+    title: 'Full body A (push + pull + legs) + Treadmill run',
+    anchors: [
+      'Leg press',
+      'Seated leg curl',
+      'Incline DB press',
+      'Chest-supported DB row',
+    ],
+    staples: ['Calf press'],
+    pairs: [
+      ['Leg press', 'Seated leg curl'],
+      ['Incline DB press', 'Chest-supported DB row'],
+    ],
+    alternatives: { 'Chest-supported DB row': ['Single-arm DB row'] },
+    cardioAfter: true,
+    ...over,
+  });
+
+  const pairedInput = (day = pairedDay()): ProgrammerInput =>
+    buildProgrammerInput(
+      pairedProgressions(),
+      {
+        label: 'Full body A',
+        components: ['Full body A (push', 'pull', 'legs)', 'Treadmill run'],
+        routineDay: day,
+      },
+      '2026-08-06',
+      6
+    );
+
+  // The model returns the rows shuffled and unpaired; validation must still
+  // attach pair membership deterministically and keep 1a, 1b, 2a, 2b order.
+  const shuffledRecords = () =>
+    [
+      'Chest-supported DB row',
+      'Treadmill run',
+      'Seated leg curl',
+      'Calf press',
+      'Incline DB press',
+      'Leg press',
+    ].map(name =>
+      name === 'Treadmill run'
+        ? { name, kind: 'cardio', toFailure: false, target: { durationMinutes: 20 } }
+        : { name, kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 30 } }
+    );
+
+  it('describes the antagonist pairs in the prompt', () => {
+    const prompt = buildProgrammerPrompt(pairedInput());
+    expect(prompt).toMatch(/ANTAGONIST PAIRS/);
+    expect(prompt).toMatch(/Leg press ⇄ Seated leg curl/);
+    expect(prompt).toMatch(/1a, 1b, 2a, 2b/);
+  });
+
+  it('attaches pair tags and preserves 1a/1b/2a/2b order through validation', () => {
+    const rows = validateProgramme(shuffledRecords(), pairedInput());
+    const anchors = rows.filter(r => r.pair);
+    expect(anchors.map(r => `${r.pair!.index}${r.pair!.slot}`)).toEqual(['0a', '0b', '1a', '1b']);
+    expect(anchors.map(r => r.name)).toEqual([
+      'Leg press',
+      'Seated leg curl',
+      'Incline DB press',
+      'Chest-supported DB row',
+    ]);
+  });
+
+  it('puts the run LAST on a cardioAfter day', () => {
+    const rows = validateProgramme(shuffledRecords(), pairedInput());
+    expect(rows[rows.length - 1].name).toBe('Treadmill run');
+    expect(rows[0].name).toBe('Leg press');
+  });
+
+  it('puts the run FIRST when cardioAfter is not set', () => {
+    const rows = validateProgramme(shuffledRecords(), pairedInput(pairedDay({ cardioAfter: false })));
+    expect(rows[0].name).toBe('Treadmill run');
+  });
+
+  it('attaches alternatives to the row they belong to', () => {
+    const rows = validateProgramme(shuffledRecords(), pairedInput());
+    const row = rows.find(r => r.name === 'Chest-supported DB row')!;
+    expect(row.alternatives).toEqual(['Single-arm DB row']);
+    expect(programmeRowToTarget(row).alternatives).toEqual(['Single-arm DB row']);
+  });
+
+  it('does not pad a pairs-based day with extra accessories', () => {
+    // The model returns only the four anchors; coverage must not add balance rows
+    // — the pairs are the session. The run and the staple calf are still there.
+    const rows = validateProgramme(
+      ['Leg press', 'Seated leg curl', 'Incline DB press', 'Chest-supported DB row'].map(name => ({
+        name,
+        kind: 'core',
+        toFailure: false,
+        target: { sets: 3, reps: 10, weightKg: 30 },
+      })),
+      pairedInput()
+    );
+    // 4 anchors + 1 staple (Calf press) + 1 run = 6, no extra accessories.
+    expect(rows).toHaveLength(6);
+  });
+
+  it('markPairsAndAlternatives is a no-op without a routine day', () => {
+    const rows: ProgrammeRow[] = [
+      { name: 'Leg press', key: 'leg press', kind: 'core', toFailure: false, target: {}, rationale: '', lastSummary: '' },
+    ];
+    expect(markPairsAndAlternatives(rows, undefined)).toBe(rows);
+  });
+
+  describe('buildFixedDayRows', () => {
+    const fixedDay: ProgrammerRoutineDay = {
+      title: 'Home core + mobility',
+      anchors: [],
+      fixed: true,
+      staples: ['Cat-cow', 'Couch stretch', 'McGill curl-up', 'Glute bridge'],
+      prescriptions: {
+        'Cat-cow': '8 slow',
+        'Couch stretch': '90 s per side',
+        'McGill curl-up': '3-2-1 × 10 s holds',
+        'Glute bridge': '2 × 15, 2 s squeeze',
+      },
+    };
+
+    it('is exactly the staples in order, badged staple, none to failure', () => {
+      const rows = buildFixedDayRows(fixedDay);
+      expect(rows.map(r => r.name)).toEqual([
+        'Cat-cow',
+        'Couch stretch',
+        'McGill curl-up',
+        'Glute bridge',
+      ]);
+      expect(rows.every(r => r.fixed === 'staple')).toBe(true);
+      expect(rows.some(r => r.toFailure)).toBe(false);
+    });
+
+    it('carries the dose string and pre-fills the log fields it can read', () => {
+      const rows = buildFixedDayRows(fixedDay);
+      const by = (name: string) => rows.find(r => r.name === name)!;
+      expect(by('Cat-cow').prescription).toBe('8 slow');
+      expect(by('Cat-cow').target).toEqual({ reps: 8 });
+      expect(by('Couch stretch').target).toEqual({ holdSeconds: 90, perSide: true });
+      // The McGill ladder can't be expressed as sets/reps — the string carries it,
+      // and only the seconds are pre-filled.
+      expect(by('McGill curl-up').prescription).toBe('3-2-1 × 10 s holds');
+      expect(by('McGill curl-up').target).toEqual({ holdSeconds: 10 });
+      expect(by('Glute bridge').target).toEqual({ sets: 2, reps: 15 });
+    });
   });
 });
