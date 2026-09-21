@@ -33,6 +33,7 @@ import {
   markFixed,
   markPairsAndAlternatives,
   orderProgrammeRows,
+  renameRequiredToRoutine,
   programmeHash,
   programmeRowToTarget,
   type ProgrammerGoal,
@@ -182,7 +183,10 @@ export async function resolveSessionTargets(
     const ordered = enforceToFailure(
       orderProgrammeRows(
         markPairsAndAlternatives(
-          capSets(dropExclusiveDuplicates(markFixed(cached, routineDay))),
+          renameRequiredToRoutine(
+            capSets(dropExclusiveDuplicates(markFixed(cached, routineDay))),
+            routineDay
+          ),
           routineDay
         ),
         routineDay

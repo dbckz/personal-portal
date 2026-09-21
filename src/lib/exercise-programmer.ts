@@ -71,8 +71,8 @@ export interface ProgrammeRow {
   // stand-in as the anchor it replaces. Absent on gym rows and non-substitutes.
   standsInFor?: string;
   // Antagonist-superset membership, stamped from the routine day (never trusted
-  // from the model): pair `index` and which half (`a`/`b`). Absent on unpaired
-  // rows and cardio.
+  // from the model): pair `index` (1-based) and which half (`a`/`b`), rendered
+  // "1a"/"1b" … Absent on unpaired rows and cardio.
   pair?: { index: number; slot: 'a' | 'b' };
   // "Or" options for this exercise, from the routine day, so the checklist can
   // offer a one-tap swap. Absent when the day names none.
@@ -286,6 +286,12 @@ export function programmeHash(input: ProgrammerInput): string {
     // A changed routine day (anchors, staples, title, note edited in the portal)
     // must regenerate the programme.
     routineDay: routineFingerprint(input.plan.routineDay),
+    // A pairs-based day's programming RULES changed (1-based pair tags, required
+    // lifts under the routine name, no unrequested accessories — 22 Sep 2026), so
+    // bump a version folded in ONLY for pairs days. Every pairs-day programme
+    // cached under the old rules gets a new hash and regenerates; non-pairs days
+    // (the split, the home fixed days) keep a byte-identical hash.
+    ...(input.plan.routineDay?.pairs?.length ? { pairsRules: 1 } : {}),
     // Swapping the day to a home session (or back to the gym) must regenerate.
     // Included ONLY when set, so every existing gym-day hash is byte-identical to
     // before this field existed and its cached programme still applies. The run
@@ -567,7 +573,7 @@ function buildRoutineBlock(day: ProgrammerRoutineDay): string {
       `This is a FULL-BODY day, programmed as ANTAGONIST PAIRS done back-to-back (30–60 s between the two halves, ~90 s before the next round). Programme both halves of every pair, and keep the row order 1a, 1b, 2a, 2b … exactly as listed:\n${pairLines}`
     );
     lines.push(
-      `Include the required lifts in their pairs plus the staples (e.g. calves) and the run — no extra accessories unless a pair half is missing from the exercises below. Two light warm-up sets on the first movement of each pair. Double progression: top of the rep range on all 3 sets → add weight and reset reps; below the bottom → drop about 10%. Finish on exactly one safe to-failure accessory.`
+      `Programme EXACTLY these pairs, plus the required staples (e.g. calves) and the run — nothing else. Do NOT add any accessory beyond them (no extra finisher, no "balance" movement). Two light warm-up sets on the first movement of each pair. Double progression: top of the rep range on all 3 sets → add weight and reset reps; below the bottom → drop about 10%. Take ONE of the required lifts to failure as the finisher — a pair's second half or the calf row — never a movement added for the purpose.`
     );
   } else if (isFullBodyDay(activeGroups([day.title]))) {
     lines.push(
@@ -765,6 +771,16 @@ export function validateProgramme(
 
   const home = input.plan.venue === 'home';
 
+  // A pairs-based day is fully specified by its pairs plus its other staples and
+  // the run: the model may add nothing. Any row that is not a required
+  // anchor/staple (by key) and not the cardio piece is an unrequested accessory
+  // and is dropped here — guaranteeFixed then re-adds any required lift the model
+  // skipped, so the day is exactly the pairs, the staples (calves) and the run.
+  const pairsBased = (day?.pairs?.length ?? 0) > 0;
+  const requiredKeys = new Set<string>(
+    day ? [...day.anchors, ...day.staples].map(exerciseKey).filter(Boolean) : []
+  );
+
   const rows: ProgrammeRow[] = [];
   const seen = new Set<string>();
   // The exclusive-variant groups already present: at most one variant per group
@@ -786,6 +802,13 @@ export function validateProgramme(
     const key = exerciseKey(name);
     const known = byKey.get(key);
     if (!known || seen.has(key)) continue; // unknown or duplicate exercise
+
+    // On a pairs-based day, drop any model row that is neither a required
+    // anchor/staple nor the cardio piece — the pairs ARE the session, so an
+    // unrequested accessory (a returned alternative, or an extra finisher) is not
+    // kept. The cardio row is judged by the model's tag before the kind is
+    // finalised below.
+    if (pairsBased && !requiredKeys.has(key) && record.kind !== 'cardio') continue;
 
     // A stand-in for a fixed lift the model should have kept: substituting an
     // anchor/staple that is itself home-doable (the model swapped the Bulgarian
@@ -856,7 +879,10 @@ export function validateProgramme(
   );
   // `day` is the routine day resolved at the top of validateProgramme.
   return enforceToFailure(
-    orderProgrammeRows(markPairsAndAlternatives(markFixed(covered, day), day), day)
+    orderProgrammeRows(
+      markPairsAndAlternatives(renameRequiredToRoutine(markFixed(covered, day), day), day),
+      day
+    )
   );
 }
 
@@ -982,6 +1008,31 @@ export function markFixed(rows: ProgrammeRow[], day?: ProgrammerRoutineDay): Pro
   });
 }
 
+// Required anchors/staples must come back under their ROUTINE spelling, not a
+// history synonym the model or the vocabulary happened to use ("Knee raises" for
+// the anchor "Hanging knee raise" — the same exercise by key, thanks to the
+// exercise-names alias). Matched by key: a row whose key is a required
+// anchor/staple takes the routine's name. A home stand-in keeps its own name (its
+// key is the stand-in's, not the anchor's). Exported so the cached read path can
+// fix programmes cached under a synonym without regenerating them.
+export function renameRequiredToRoutine(
+  rows: ProgrammeRow[],
+  day?: ProgrammerRoutineDay
+): ProgrammeRow[] {
+  if (!day) return rows;
+  const nameByKey = new Map<string, string>();
+  for (const name of [...day.anchors, ...day.staples]) {
+    const key = exerciseKey(name);
+    if (key && !nameByKey.has(key)) nameByKey.set(key, name);
+  }
+  if (nameByKey.size === 0) return rows;
+  return rows.map(row => {
+    if (row.standsInFor) return row; // a stand-in keeps its own name
+    const routineName = nameByKey.get(row.key);
+    return routineName && routineName !== row.name ? { ...row, name: routineName } : row;
+  });
+}
+
 // Stamp antagonist-pair membership and "or" alternatives onto rows from the
 // routine day, matched by exerciseKey — never trusted from the model. A row that
 // is one half of a pair gains `pair: { index, slot }`; a row the day lists
@@ -994,7 +1045,9 @@ export function markPairsAndAlternatives(
 ): ProgrammeRow[] {
   if (!day) return rows;
   const pairByKey = new Map<string, { index: number; slot: 'a' | 'b' }>();
-  (day.pairs ?? []).forEach((pair, index) => {
+  // 1-based pair numbers so the checklist reads 1a/1b … 4a/4b, not 0a/0b.
+  (day.pairs ?? []).forEach((pair, i) => {
+    const index = i + 1;
     const a = exerciseKey(pair[0]);
     const b = exerciseKey(pair[1]);
     if (a && !pairByKey.has(a)) pairByKey.set(a, { index, slot: 'a' });

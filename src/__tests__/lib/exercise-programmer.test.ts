@@ -1613,7 +1613,7 @@ describe('v2 routine — pairs, cardioAfter, alternatives and fixed days', () =>
   it('attaches pair tags and preserves 1a/1b/2a/2b order through validation', () => {
     const rows = validateProgramme(shuffledRecords(), pairedInput());
     const anchors = rows.filter(r => r.pair);
-    expect(anchors.map(r => `${r.pair!.index}${r.pair!.slot}`)).toEqual(['0a', '0b', '1a', '1b']);
+    expect(anchors.map(r => `${r.pair!.index}${r.pair!.slot}`)).toEqual(['1a', '1b', '2a', '2b']);
     expect(anchors.map(r => r.name)).toEqual([
       'Leg press',
       'Seated leg curl',
@@ -1701,5 +1701,111 @@ describe('v2 routine — pairs, cardioAfter, alternatives and fixed days', () =>
       expect(by('McGill curl-up').target).toEqual({ holdSeconds: 10 });
       expect(by('Glute bridge').target).toEqual({ sets: 2, reps: 15 });
     });
+  });
+});
+
+// Regressions from the first deployed session A (2026-09-22): required lifts must
+// come back under the routine name, and a pairs day must not gain an unrequested
+// accessory.
+describe('v2 pairs day — required-name and no-extra-accessory rules', () => {
+  const point = (over: Partial<ProgressionPoint> = {}): ProgressionPoint => ({
+    date: '2026-08-02',
+    sets: 3,
+    reps: 10,
+    weightKg: 30,
+    ...over,
+  });
+
+  it('renames a required anchor returned under a history synonym to the routine name', () => {
+    // The vocabulary carries the anchor under a synonym ("Knee raises"), which
+    // shares the anchor's key via the exercise-names alias. The model returns the
+    // synonym; the row must come back as the routine's "Hanging knee raise".
+    const input: ProgrammerInput = {
+      date: '2026-08-06',
+      plan: {
+        label: 'Full body A',
+        components: ['Full body A (push', 'pull', 'legs)'],
+        routineDay: {
+          title: 'Full body A (push + pull + legs)',
+          anchors: ['Leg press', 'Hanging knee raise'],
+          staples: [],
+          pairs: [['Leg press', 'Hanging knee raise']],
+        },
+      },
+      exercises: [
+        { name: 'Leg press', key: exerciseKey('Leg press'), frequency: 4, totalSessions: 5, recent: [point({ weightKg: 120 })], lastSummary: '2 Aug · 3 × 10 · 120kg' },
+        // History spelling of the anchor — same key as "Hanging knee raise".
+        { name: 'Knee raises', key: exerciseKey('Hanging knee raise'), frequency: 3, totalSessions: 5, recent: [point({ reps: 12, weightKg: undefined })], lastSummary: '2 Aug · 3 × 12' },
+      ],
+    };
+    expect(exerciseKey('Knee raises')).toBe(exerciseKey('Hanging knee raise'));
+    const rows = validateProgramme(
+      [
+        { name: 'Leg press', kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 120 } },
+        { name: 'Knee raises', kind: 'core', toFailure: false, target: { sets: 3, reps: 12 } },
+      ],
+      input
+    );
+    const knee = rows.find(r => r.key === exerciseKey('Hanging knee raise'))!;
+    expect(knee.name).toBe('Hanging knee raise');
+    expect(knee.pair).toEqual({ index: 1, slot: 'b' });
+  });
+
+  it('yields exactly the pairs + calf staple + run, dropping an unrequested accessory', () => {
+    const anchors = [
+      'Leg press',
+      'Seated leg curl',
+      'Incline DB press',
+      'Chest-supported DB row',
+      'Neutral-grip pull-up',
+      'Hanging knee raise',
+      'DB bicep curl',
+      'Overhead DB tricep extension',
+    ];
+    const progressions: ExerciseProgression[] = [
+      ...anchors.map(n => progression(n, [point()], 5)),
+      progression('Calf press', [point({ reps: 15, weightKg: 80 })], 4),
+      progression('Treadmill run', [{ date: '2026-08-02', durationMinutes: 20 }], 5),
+      // A pull accessory the model likes to bolt on — it is in the vocabulary but
+      // is not one of the day's required lifts.
+      progression('Reverse pec deck', [point({ weightKg: 25 })], 4),
+    ];
+    const day: ProgrammerRoutineDay = {
+      title: 'Full body A (push + pull + legs) + Treadmill run',
+      anchors,
+      staples: ['Calf press'],
+      pairs: [
+        ['Leg press', 'Seated leg curl'],
+        ['Incline DB press', 'Chest-supported DB row'],
+        ['Neutral-grip pull-up', 'Hanging knee raise'],
+        ['DB bicep curl', 'Overhead DB tricep extension'],
+      ],
+      cardioAfter: true,
+    };
+    const input = buildProgrammerInput(
+      progressions,
+      { label: 'Full body A', components: ['Full body A (push', 'pull', 'legs)', 'Treadmill run'], routineDay: day },
+      '2026-08-06',
+      5
+    );
+    // The model returns the 8 anchors, the calf staple, the run, AND an extra
+    // to-failure accessory that was not asked for.
+    const records = [
+      ...anchors.map(name => ({ name, kind: 'core', toFailure: false, target: { sets: 3, reps: 10, weightKg: 30 } })),
+      { name: 'Calf press', kind: 'core', toFailure: false, target: { sets: 3, reps: 15, weightKg: 80 } },
+      { name: 'Treadmill run', kind: 'cardio', toFailure: false, target: { durationMinutes: 20 } },
+      { name: 'Reverse pec deck', kind: 'rotation', toFailure: true, target: { sets: 3, reps: 12, weightKg: 25 } },
+    ];
+    const rows = validateProgramme(records, input);
+    // 8 anchors + 1 calf staple + 1 run = 10; the accessory is dropped.
+    expect(rows).toHaveLength(10);
+    expect(rows.some(r => r.name === 'Reverse pec deck')).toBe(false);
+    // The run is last (cardioAfter); the to-failure finisher is one of the
+    // required lifts, not an added row.
+    expect(rows[rows.length - 1].name).toBe('Treadmill run');
+    const finisher = rows.find(r => r.toFailure)!;
+    const requiredNames = new Set([...anchors, 'Calf press']);
+    expect(requiredNames.has(finisher.name)).toBe(true);
+    expect(finisher.kind).not.toBe('cardio');
   });
 });

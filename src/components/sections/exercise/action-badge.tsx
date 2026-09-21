@@ -65,11 +65,12 @@ export function FixedTag({ fixed }: { fixed: 'anchor' | 'staple' }) {
 }
 
 // An antagonist-superset tag: "1a"/"1b" for the two halves of a pair done
-// back-to-back. Quiet slate pill so it reads as structure, not emphasis.
+// back-to-back. The pair index is already 1-based, so it renders as-is. Quiet
+// slate pill so it reads as structure, not emphasis.
 export function PairTag({ pair }: { pair: { index: number; slot: 'a' | 'b' } }) {
   return (
     <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600">
-      {pair.index + 1}
+      {pair.index}
       {pair.slot}
     </span>
   );
