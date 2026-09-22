@@ -248,6 +248,7 @@ export const EXERCISE_MUSCLES: Record<string, MuscleRole[]> = {
   'Plank': [...primary('abs'), ...secondary('obliques', 'lower-back')],
   'Dead bug': [...primary('abs'), ...secondary('hip-flexors')],
   'Hanging knee raise': [...primary('abs'), ...secondary('hip-flexors')],
+  "Captain's chair knee raise": [...primary('abs'), ...secondary('hip-flexors')],
   'Pallof press': [...primary('obliques'), ...secondary('abs')],
   'Glute bridge': [...primary('glutes'), ...secondary('abs')],
 };
