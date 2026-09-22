@@ -25,8 +25,10 @@ describe('sessionCues', () => {
     expect(cues.intro).toHaveLength(1);
     expect(cues.intro[0].text).toMatch(/bike or cross-trainer/);
     expect(Object.keys(cues.before).sort()).toEqual(['Leg press', 'Neutral-grip pull-up']);
-    expect(cues.before['Leg press'][0].text).toBe('10 reps at ~45kg, then 5 at ~65kg, then into your working sets.');
-    expect(cues.before['Neutral-grip pull-up'][0].text).toMatch(/scapular pulls/);
+    expect(cues.before['Leg press'][0].text).toBe(
+      'Leg press only, before round 1: 10 reps at ~45kg, then 5 at ~65kg. Seated leg curl needs no warm-up sets.'
+    );
+    expect(cues.before['Neutral-grip pull-up'][0].text).toMatch(/^Neutral-grip pull-up only, before round 1: 10 scapular pulls.*Captain's chair knee raise needs no warm-up sets\.$/);
     expect(cues.outro).toEqual([expect.objectContaining({ kind: 'cooldown', text: expect.stringMatching(/^Walk 3–5 min/) })]);
   });
 
@@ -69,7 +71,7 @@ describe('sessionCues', () => {
   it('ramps up once before the first lift on a day without pairs, with one easy set for a light lift', () => {
     const cues = sessionCues([r({ name: 'Treadmill run', kind: 'cardio' }), r({ name: 'DB lateral raise', weightKg: 3 })]);
     expect(Object.keys(cues.before)).toEqual(['DB lateral raise']);
-    expect(cues.before['DB lateral raise'][0].text).toMatch(/^1 easy set of 10/);
+    expect(cues.before['DB lateral raise'][0].text).toBe('DB lateral raise, before your working sets: 1 easy set of 10 with a lighter weight.');
   });
 
   it('is empty with no rows', () => {

@@ -80,26 +80,25 @@ const RAMP_MIN_KG = 10;
 
 // The ramp-up line for the first movement of a pair: ~50% then ~75% of the
 // working weight when there is a meaningful one, one easy set for a light lift,
-// a bodyweight version for pull-ups, and a plain reminder otherwise.
-export function rampUpCue(row: CueRow): SessionCue {
+// a bodyweight version for pull-ups, and a plain reminder otherwise. It names
+// the exercise, and on a superset says the partner needs none, so it can't be
+// read as "warm up both" (the plan warms up the first movement only).
+export function rampUpCue(row: CueRow, partner?: CueRow): SessionCue {
+  const who = partner ? `${row.name} only, before round 1` : `${row.name}, before your working sets`;
+  const tail = partner ? ` ${partner.name} needs no warm-up sets.` : '';
+  let what: string;
   if (row.weightKg && row.weightKg >= RAMP_MIN_KG) {
     const light = roundLoad(row.weightKg * 0.5);
     const mid = roundLoad(row.weightKg * 0.75);
-    return {
-      kind: 'warmup',
-      text: `10 reps at ~${light}kg, then 5 at ~${mid}kg, then into your working sets.`,
-    };
+    what = `10 reps at ~${light}kg, then 5 at ~${mid}kg.`;
+  } else if (row.weightKg && row.weightKg > 0) {
+    what = '1 easy set of 10 with a lighter weight.';
+  } else if (/\b(pull|chin)-?ups?\b/i.test(row.name)) {
+    what = '10 scapular pulls (hang and squeeze your shoulder blades down), then 3 easy pull-ups.';
+  } else {
+    what = '2 light sets of 5–10 easy reps.';
   }
-  if (row.weightKg && row.weightKg > 0) {
-    return { kind: 'warmup', text: '1 easy set of 10 with a lighter weight, then into your working sets.' };
-  }
-  if (/\b(pull|chin)-?ups?\b/i.test(row.name)) {
-    return {
-      kind: 'warmup',
-      text: '10 scapular pulls (hang and squeeze your shoulder blades down), then 3 easy pull-ups.',
-    };
-  }
-  return { kind: 'warmup', text: '2 light sets of 5–10 easy reps before your working sets.' };
+  return { kind: 'warmup', text: `${who}: ${what}${tail}` };
 }
 
 function push(map: Record<string, SessionCue[]>, key: string, cue: SessionCue) {
@@ -139,7 +138,10 @@ export function sessionCues(rows: CueRow[], plan?: CuePlan | null): SessionCues 
     if (!lead || row.pair.slot < lead.pair!.slot) pairLeads.set(row.pair.index, row);
   }
   if (pairLeads.size) {
-    for (const lead of pairLeads.values()) push(cues.before, lead.key, rampUpCue(lead));
+    for (const lead of pairLeads.values()) {
+      const partner = lifts.find(r => r !== lead && r.pair?.index === lead.pair!.index);
+      push(cues.before, lead.key, rampUpCue(lead, partner));
+    }
   } else if (lifts.length && plan?.venue !== 'home') {
     push(cues.before, lifts[0].key, rampUpCue(lifts[0]));
   }
