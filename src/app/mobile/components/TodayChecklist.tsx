@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ArrowLeftRight, Check, Loader2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 
 import {
@@ -12,9 +12,11 @@ import {
 } from '@/hooks/useTodaySession';
 import { isCardioName } from '@/lib/exercise-parse';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
+import { sessionCues } from '@/lib/exercise-cues';
 import { groupRowsIntoSections } from '@/lib/exercise-sections';
 import { ActionBadge, FailureTag, FixedTag, KindTag, PairTag } from '@/components/sections/exercise/action-badge';
 import { RirChips } from '@/components/sections/exercise/rir-chips';
+import { SessionCueLines } from '@/components/sections/exercise/session-cue';
 import { VenueControl } from '@/components/sections/exercise/venue-control';
 
 // The in-the-gym checklist on mobile: today's workout, one tickable row per
@@ -44,6 +46,8 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
     removeRow,
     setVenue,
   } = useTodaySession(undefined, onSessionChanged);
+  // Warm-up / cool-down lines woven into the list; guidance only, never ticked.
+  const cues = sessionCues(rows, plan);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
@@ -84,38 +88,43 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
       )}
 
       <div className="space-y-4">
+        <SessionCueLines cues={cues.intro} />
         {groupRowsIntoSections(rows).map(section => (
           <div key={section.title} className="space-y-2">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">
               {section.title}
               {section.superset && (
                 <span className="ml-1.5 font-normal normal-case tracking-normal">
-                  · back-to-back, then rest
+                  · {section.rows[0]?.sets ? `${section.rows[0].sets} rounds, ` : ''}30–60 s rest between exercises
                 </span>
               )}
             </h3>
             {/* A superset's two halves are bound by a bracket so they read as one unit. */}
             <div className={section.superset ? 'space-y-2 border-l-2 border-slate-300 pl-2' : 'space-y-2'}>
               {section.rows.map(row => (
-                <RowCard
-                  key={row.key}
-                  row={row}
-                  busy={busyKey === row.key}
-                  open={openKey === row.key}
-                  knownNames={knownNames}
-                  onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
-                  onToggleDone={() => toggleDone(row)}
-                  onCommitField={patch => commitField(row, patch)}
-                  onCommitNote={note => commitNote(row, note)}
-                  onCommitRir={rir => commitRir(row, rir)}
-                  onCommitSwap={replacement => commitSwap(row, replacement)}
-                  onRestoreSwap={() => restoreSwap(row)}
-                  onRemove={() => removeRow(row)}
-                />
+                <Fragment key={row.key}>
+                  <SessionCueLines cues={cues.before[row.key]} />
+                  <RowCard
+                    row={row}
+                    busy={busyKey === row.key}
+                    open={openKey === row.key}
+                    knownNames={knownNames}
+                    onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
+                    onToggleDone={() => toggleDone(row)}
+                    onCommitField={patch => commitField(row, patch)}
+                    onCommitNote={note => commitNote(row, note)}
+                    onCommitRir={rir => commitRir(row, rir)}
+                    onCommitSwap={replacement => commitSwap(row, replacement)}
+                    onRestoreSwap={() => restoreSwap(row)}
+                    onRemove={() => removeRow(row)}
+                  />
+                  <SessionCueLines cues={cues.after[row.key]} />
+                </Fragment>
               ))}
             </div>
           </div>
         ))}
+        <SessionCueLines cues={cues.outro} />
       </div>
 
       {adding ? (
