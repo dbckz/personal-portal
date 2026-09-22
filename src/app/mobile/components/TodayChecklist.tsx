@@ -88,24 +88,32 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
           <div key={section.title} className="space-y-2">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">
               {section.title}
+              {section.superset && (
+                <span className="ml-1.5 font-normal normal-case tracking-normal">
+                  · back-to-back, then rest
+                </span>
+              )}
             </h3>
-            {section.rows.map(row => (
-              <RowCard
-                key={row.key}
-                row={row}
-                busy={busyKey === row.key}
-                open={openKey === row.key}
-                knownNames={knownNames}
-                onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
-                onToggleDone={() => toggleDone(row)}
-                onCommitField={patch => commitField(row, patch)}
-                onCommitNote={note => commitNote(row, note)}
-                onCommitRir={rir => commitRir(row, rir)}
-                onCommitSwap={replacement => commitSwap(row, replacement)}
-                onRestoreSwap={() => restoreSwap(row)}
-                onRemove={() => removeRow(row)}
-              />
-            ))}
+            {/* A superset's two halves are bound by a bracket so they read as one unit. */}
+            <div className={section.superset ? 'space-y-2 border-l-2 border-slate-300 pl-2' : 'space-y-2'}>
+              {section.rows.map(row => (
+                <RowCard
+                  key={row.key}
+                  row={row}
+                  busy={busyKey === row.key}
+                  open={openKey === row.key}
+                  knownNames={knownNames}
+                  onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
+                  onToggleDone={() => toggleDone(row)}
+                  onCommitField={patch => commitField(row, patch)}
+                  onCommitNote={note => commitNote(row, note)}
+                  onCommitRir={rir => commitRir(row, rir)}
+                  onCommitSwap={replacement => commitSwap(row, replacement)}
+                  onRestoreSwap={() => restoreSwap(row)}
+                  onRemove={() => removeRow(row)}
+                />
+              ))}
+            </div>
           </div>
         ))}
       </div>

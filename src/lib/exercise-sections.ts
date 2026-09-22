@@ -9,6 +9,10 @@
 //   - WITHOUT one, rows are classified by name into Run / Pull / Push / Legs /
 //     Core (only the non-empty ones, cardio first), and within each section the
 //     staples (the driven-up lifts, kind 'core') sit at the top.
+//   - On a SUPERSET day (any row carries a pair tag) neither applies: the rows
+//     keep the programme's order — the order to do them in — and each pair's two
+//     halves sit together in its own "Superset N" section, a before b. Unpaired
+//     rows (calves, the run, anything added on the spot) keep their place.
 //
 // Both checklists (mobile and desktop) render from this, so the layout can't
 // drift between them.
@@ -26,11 +30,15 @@ export interface SectionableRow {
   // section so it always reads last, never buried in the muscle-group section its
   // name would otherwise sort it into.
   toFailure?: boolean;
+  // Antagonist-superset membership (1-based index, a/b half).
+  pair?: { index: number; slot: 'a' | 'b' };
 }
 
 export interface RowSection<T> {
   title: string;
   rows: T[];
+  // A superset: the rows are done back-to-back, so the checklist binds them.
+  superset?: boolean;
 }
 
 const OTHER = 'Other';
@@ -46,6 +54,7 @@ const CLASSIFY_SECTIONS: Array<{ group: ReturnType<typeof classifyExercise>; tit
 ];
 
 export function groupRowsIntoSections<T extends SectionableRow>(rows: T[]): RowSection<T>[] {
+  if (rows.some(r => r.pair)) return groupBySuperset(rows);
   // The finisher (a to-failure accessory) is lifted out of the muscle-group /
   // prescription grouping and rendered in its own section that always trails the
   // rest, so it reads last however its name would otherwise classify.
@@ -95,5 +104,46 @@ function groupByClassification<T extends SectionableRow>(rows: T[]): RowSection<
     if (bucket?.length) sections.push({ title, rows: staplesFirst(bucket) });
   }
   if (other.length) sections.push({ title: OTHER, rows: staplesFirst(other) });
+  return sections;
+}
+
+// A superset day, in the order to do it. Each pair becomes one section, placed
+// where its first half appears, with a before b even if they arrived apart.
+// Consecutive unpaired rows form a block titled by position: "First" ahead of
+// the first superset (a parkrun before the lifts), "Then" after one. The
+// finisher stays in place here — it is a pair half or the calf row, and the
+// order already puts it where it is done.
+function groupBySuperset<T extends SectionableRow>(rows: T[]): RowSection<T>[] {
+  const sections: RowSection<T>[] = [];
+  const emitted = new Set<number>();
+  let loose: T[] = [];
+  const flushLoose = () => {
+    if (!loose.length) return;
+    sections.push({ title: emitted.size ? 'Then' : 'First', rows: loose });
+    loose = [];
+  };
+  for (const row of rows) {
+    if (!row.pair) {
+      loose.push(row);
+      continue;
+    }
+    const { index } = row.pair;
+    if (emitted.has(index)) continue;
+    flushLoose();
+    emitted.add(index);
+    const halves = rows
+      .filter(r => r.pair?.index === index)
+      .sort((x, y) => x.pair!.slot.localeCompare(y.pair!.slot));
+    sections.push({ title: `Superset ${index}`, rows: halves, superset: true });
+  }
+  flushLoose();
+  // Section titles double as React keys: a second "Then" block (unpaired rows
+  // both between supersets and after them) needs a distinct title.
+  const seen = new Map<string, number>();
+  for (const section of sections) {
+    const n = (seen.get(section.title) ?? 0) + 1;
+    seen.set(section.title, n);
+    if (n > 1) section.title = `${section.title} (${n})`;
+  }
   return sections;
 }

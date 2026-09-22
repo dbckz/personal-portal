@@ -94,3 +94,51 @@ describe('groupRowsIntoSections — the finisher', () => {
     expect(sections.some(s => s.title === 'Finisher')).toBe(false);
   });
 });
+
+describe('groupRowsIntoSections — a superset day', () => {
+  const pair = (index: number, slot: 'a' | 'b') => ({ pair: { index, slot } });
+
+  it('keeps programme order with each pair together, a before b, and the run where it is done', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Leg press', kind: 'core', ...pair(1, 'a') }),
+      row({ name: 'Seated leg curl', kind: 'core', ...pair(1, 'b') }),
+      row({ name: 'Incline DB press', kind: 'core', ...pair(2, 'a') }),
+      row({ name: 'Chest-supported DB row', kind: 'core', ...pair(2, 'b') }),
+      row({ name: 'Calf press', toFailure: true }),
+      row({ name: 'Treadmill run', kind: 'cardio' }),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Superset 1', 'Superset 2', 'Then']);
+    expect(sections[0].superset).toBe(true);
+    expect(sections[0].rows.map(r => r.name)).toEqual(['Leg press', 'Seated leg curl']);
+    expect(sections[1].rows.map(r => r.name)).toEqual(['Incline DB press', 'Chest-supported DB row']);
+    expect(sections[2].superset).toBeUndefined();
+    expect(sections[2].rows.map(r => r.name)).toEqual(['Calf press', 'Treadmill run']);
+  });
+
+  it('pulls a stray half up beside its partner and puts a run done first ahead of the lifts', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Parkrun', kind: 'cardio' }),
+      row({ name: 'Chest-supported DB row', ...pair(1, 'b') }),
+      row({ name: 'DB bicep curl', ...pair(2, 'a') }),
+      row({ name: 'Incline DB press', ...pair(1, 'a') }),
+      row({ name: 'Overhead DB tricep extension', ...pair(2, 'b') }),
+    ]);
+    expect(sections.map(s => [s.title, s.rows.map(r => r.name)])).toEqual([
+      ['First', ['Parkrun']],
+      ['Superset 1', ['Incline DB press', 'Chest-supported DB row']],
+      ['Superset 2', ['DB bicep curl', 'Overhead DB tricep extension']],
+    ]);
+  });
+
+  it('gives a second block of unpaired rows a distinct title', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'A', ...pair(1, 'a') }),
+      row({ name: 'B', ...pair(1, 'b') }),
+      row({ name: 'Calf press' }),
+      row({ name: 'C', ...pair(2, 'a') }),
+      row({ name: 'D', ...pair(2, 'b') }),
+      row({ name: 'Added on the spot' }),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Superset 1', 'Then', 'Superset 2', 'Then (2)']);
+  });
+});

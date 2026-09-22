@@ -220,9 +220,9 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
       lastSummary: undefined,
       kind: undefined,
       toFailure: undefined,
-      // The substitute is a different exercise: the original's pair, alternatives
-      // and fixed dose no longer describe it.
-      pair: undefined,
+      // The substitute is a different exercise: the original's alternatives and
+      // fixed dose no longer describe it. It keeps the original's pair, though —
+      // it fills that superset slot, so it stays grouped with its partner.
       alternatives: undefined,
       prescription: undefined,
       targetText: e.targetText,
@@ -255,7 +255,7 @@ function mergeRows(targets: ExerciseTarget[], session: ExerciseSession | null): 
       used.add(match.id);
       // A substituted entry shows itself (its name, actuals and provenance), not
       // the original target's guidance — but stays keyed to the target's slot.
-      if (match.substitutedFor) return { ...rowFromEntry(match), key: t.key };
+      if (match.substitutedFor) return { ...rowFromEntry(match), key: t.key, pair: t.pair };
       return applyEntry(rowFromTarget(t), match);
     }
     return rowFromTarget(t);
