@@ -297,3 +297,46 @@ describe('resolveSessionTargets — a fixed home day', () => {
     expect(mockGetCached).not.toHaveBeenCalled();
   });
 });
+
+// Several weekdays share one title (Mon/Wed "Home core + mobility"), but only
+// Monday's carries 5-a-side football. A Wednesday plan with that shared label
+// must resolve to Wednesday's own routine day, not the first title match
+// (Monday), or Monday-only staples leak into every other home day.
+describe('resolveSessionTargets — a routine title shared by several weekdays', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const homeDay = (dayOfWeek: number, staples: string[]): WeeklyRoutineDay => ({
+      dayOfWeek,
+      title: 'Home core + mobility',
+      anchors: [],
+      staples,
+      venue: 'home',
+      fixed: true,
+      prescriptions: { 'McGill curl-up': '3-2-1 × 10 s holds' },
+    });
+    mockRoutine.mockResolvedValue([
+      homeDay(1, ['McGill curl-up', '5-a-side football']),
+      homeDay(3, ['McGill curl-up']),
+    ]);
+    mockGetCached.mockReturnValue(null);
+  });
+
+  it("uses the date's own weekday entry when its title matches the plan label", async () => {
+    const wednesdayPlan: ExerciseSession = {
+      id: 'home-wed',
+      date: '2026-09-23',
+      type: 'strength',
+      planned: true,
+      completed: false,
+      source: 'routine',
+      createdAt: '2026-09-12T00:00:00.000Z',
+      updatedAt: '2026-09-23T00:00:00.000Z',
+      label: 'Home core + mobility',
+      components: ['Home core', 'mobility'],
+      venue: 'home',
+    };
+    const resolved = await resolveSessionTargets('2026-09-23', [wednesdayPlan]);
+    expect(resolved.input.plan.routineDay?.staples).toEqual(['McGill curl-up']);
+    expect(resolved.targets.map(t => t.name)).not.toContain('5-a-side football');
+  });
+});

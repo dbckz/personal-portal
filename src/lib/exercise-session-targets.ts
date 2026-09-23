@@ -246,18 +246,23 @@ async function resolveRoutineDay(
     // whose label matches a routine day's title, use that routine day — so the
     // moved session carries its routine's anchors/staples (and doesn't get
     // programmed as, say, a Rest day just because it was dropped on a Friday).
-    // An exact title match wins over the override/weekday.
+    // An exact title match wins over the override/weekday — unless the date's
+    // own routine day already carries that title. Several weekdays can share a
+    // title (Mon/Wed/Fri "Home core + mobility") with different staples, and the
+    // first match would otherwise leak one day's staples (Monday's football) into
+    // all the others.
     const plan = sessions.find(s => s.date === date && s.planned);
     const planTitle = (parsePlannedTitle(`🏋️ ${plan?.label ?? ''}`)?.title ?? plan?.label ?? '')
       .trim()
       .toLowerCase();
-    const byLabel = planTitle
-      ? routine.find(d => d.title.trim().toLowerCase() === planTitle)
-      : undefined;
+    const scheduled = routineDayForDate(routine, overrides, date);
+    const matchesPlan = (d: WeeklyRoutineDay) => d.title.trim().toLowerCase() === planTitle;
+    const byLabel =
+      planTitle && !(scheduled && matchesPlan(scheduled)) ? routine.find(matchesPlan) : undefined;
 
     // No title match — fall back to the override for the date (a shifted plan or
     // a rest day), then the plain weekday routine entry.
-    const day = byLabel ?? routineDayForDate(routine, overrides, date);
+    const day = byLabel ?? scheduled;
     return day ? distillRoutineDay(day, sessions, date) : undefined;
   } catch (error) {
     console.error('Failed to load the weekly routine for the programmer:', error);
