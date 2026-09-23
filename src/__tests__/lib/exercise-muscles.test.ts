@@ -82,6 +82,12 @@ describe('exerciseMuscles mapping', () => {
     expect(roles.some(r => r.muscleId === 'calves' && r.role === 'secondary')).toBe(true);
   });
 
+  it('maps the McGill curl-up to the abs, not the biceps', () => {
+    const roles = exerciseMuscles('McGill curl-up');
+    expect(roles.some(r => r.muscleId === 'abs' && r.role === 'primary')).toBe(true);
+    expect(roles.some(r => r.muscleId === 'biceps')).toBe(false);
+  });
+
   it('returns nothing for an unrecognised, non-cardio name', () => {
     expect(exerciseMuscles('Underwater basket weaving')).toEqual([]);
   });

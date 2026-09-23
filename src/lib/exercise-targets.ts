@@ -748,6 +748,9 @@ const CLASSIFY: Array<[Group, RegExp]> = [
   // even though the rest of the glute work — hip thrust, kickbacks — is legs.
   // Must precede the legs entry, whose \bglute\b would otherwise claim it.
   ['core', /\bglute bridge\b/i],
+  // The McGill curl-up is an ab brace, not a curl: must precede pull's \bcurl\b,
+  // which would otherwise claim it. Bird dog rounds out McGill's Big 3.
+  ['core', /\b(curl[- ]?ups?|bird ?dog)\b/i],
   ['legs', /\b(squat|legs?|lunge|glute|calf|calves|hamstring|quad|deadlift|hip thrust|step-?up|leg press|leg extension|leg curl)\b/i],
   ['pull', /\b(row|pulldown|pull-?ups?|pullups?|chin|curl|shrug|rear delt|pec deck|lats?|face pull|y raise|dead hang)\b/i],
   ['push', /\b(press|push|fly|flye|dip|tricep|pushdown|lateral raise|crossover|shoulders?|chest|pec)\b/i],

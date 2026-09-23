@@ -350,6 +350,16 @@ describe('classifyExercise', () => {
     expect(classifyExercise('Glute kickback')).toBe('legs');
   });
 
+  it('treats the McGill curl-up and bird dog as core, not a pull curl', () => {
+    // "curl-up" contains \bcurl\b, which would otherwise make it a biceps curl.
+    expect(classifyExercise('McGill curl-up')).toBe('core');
+    expect(classifyExercise('Curl up')).toBe('core');
+    expect(classifyExercise('Bird dog')).toBe('core');
+    // Real curls stay pull.
+    expect(classifyExercise('Cable bicep curl')).toBe('pull');
+    expect(classifyExercise('Seated leg curl')).toBe('legs');
+  });
+
   it("classifies Dave's real pull staples as pull", () => {
     for (const name of [
       'Lat pulldown',

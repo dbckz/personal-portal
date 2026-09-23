@@ -269,8 +269,9 @@ const CARDIO_MUSCLES: MuscleRole[] = [
 // "Leg press" lands in legs before push's press, "Reverse ..." in rear delts,
 // and push stays the catch-all last.
 const FALLBACK: Array<[RegExp, MuscleRole[]]> = [
-  [/\b(plank|dead ?bug|hollow|sit-?ups?|crunch|hanging (leg|knee))\b/i, [...primary('abs'), ...secondary('obliques')]],
+  [/\b(plank|dead ?bug|hollow|sit-?ups?|curl[- ]?ups?|crunch|hanging (leg|knee))\b/i, [...primary('abs'), ...secondary('obliques')]],
   [/\b(pallof|paloff|oblique|russian twist|woodchop)\b/i, [...primary('obliques'), ...secondary('abs')]],
+  [/\bbird ?dog\b/i, [...primary('lower-back'), ...secondary('glutes', 'abs')]],
   [/\bglute bridge\b/i, [...primary('glutes'), ...secondary('abs')]],
   [/\b(calf|calves)\b/i, primary('calves')],
   [/\b(leg curl|hamstring)\b/i, primary('hamstrings')],
