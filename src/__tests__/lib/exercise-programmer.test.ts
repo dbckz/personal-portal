@@ -8,6 +8,8 @@
  */
 import {
   buildFixedDayRows,
+  buildWarmupRows,
+  withWarmupRows,
   buildProgrammerInput,
   buildProgrammerPrompt,
   capSets,
@@ -1807,5 +1809,60 @@ describe('v2 pairs day — required-name and no-extra-accessory rules', () => {
     const requiredNames = new Set([...anchors, 'Calf press']);
     expect(requiredNames.has(finisher.name)).toBe(true);
     expect(finisher.kind).not.toBe('cardio');
+  });
+});
+
+describe('buildWarmupRows', () => {
+  const gymDay: ProgrammerRoutineDay = {
+    title: 'Full body A',
+    anchors: ['Leg press'],
+    staples: [],
+    warmup: ['Cat-cow', 'Mini-band lateral walk', 'Side plank'],
+    prescriptions: {
+      'Cat-cow': '8 slow',
+      'Mini-band lateral walk': '2 × 10 steps each way',
+      'Side plank': '3-2-1 × 10 s per side',
+    },
+  };
+
+  it('is the warm-up list in order, flagged warmup, with doses, none to failure or badged', () => {
+    const rows = buildWarmupRows(gymDay);
+    expect(rows.map(r => r.name)).toEqual(['Cat-cow', 'Mini-band lateral walk', 'Side plank']);
+    expect(rows.every(r => r.warmup === true)).toBe(true);
+    expect(rows.some(r => r.toFailure || r.fixed)).toBe(false);
+    expect(rows[0].prescription).toBe('8 slow');
+    expect(rows[1].target).toEqual({ sets: 2, reps: 10 });
+    expect(rows[2].target).toEqual({ holdSeconds: 10, perSide: true });
+    expect(programmeRowToTarget(rows[0]).warmup).toBe(true);
+  });
+
+  it('is empty without a warm-up, and on a fixed or rest day', () => {
+    expect(buildWarmupRows(undefined)).toEqual([]);
+    expect(buildWarmupRows({ ...gymDay, warmup: [] })).toEqual([]);
+    expect(buildWarmupRows({ ...gymDay, fixed: true })).toEqual([]);
+    expect(buildWarmupRows({ ...gymDay, rest: true })).toEqual([]);
+  });
+
+  it('leads the programme and drops a programmed repeat of a warm-up movement', () => {
+    const warmup = buildWarmupRows(gymDay);
+    const programme = [
+      { key: 'treadmill run', name: 'Treadmill run' },
+      { key: exerciseKey('Side plank'), name: 'Side plank' },
+      { key: 'leg press', name: 'Leg press' },
+    ];
+    const out = withWarmupRows(programme, warmup.map(r => ({ key: r.key, name: r.name })));
+    expect(out.map(r => r.name)).toEqual([
+      'Cat-cow',
+      'Mini-band lateral walk',
+      'Side plank',
+      'Treadmill run',
+      'Leg press',
+    ]);
+  });
+
+  it('does not move the programme hash when only the warm-up list changes', () => {
+    const base = buildProgrammerInput([], { components: ['Legs'], routineDay: { ...gymDay, warmup: [] } }, '2026-09-29', 0);
+    const edited = buildProgrammerInput([], { components: ['Legs'], routineDay: gymDay }, '2026-09-29', 0);
+    expect(programmeHash(edited)).toBe(programmeHash(base));
   });
 });

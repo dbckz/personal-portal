@@ -342,6 +342,10 @@ export interface WeeklyRoutineDay {
   // runs, done after the session). Default (absent) keeps cardio first — the Sat
   // parkrun leads its day.
   cardioAfter?: boolean;
+  // A gym day's warm-up block, in order: tickable rows at the top of the
+  // checklist, ahead of the run and the lifts, with doses from `prescriptions`.
+  // Never programmed by the AI, never progressed, never the finisher.
+  warmup?: string[];
 }
 
 // A per-DATE deviation from the standing weekly routine (see lib/storage/routine-

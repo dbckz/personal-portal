@@ -63,6 +63,9 @@ export interface TodayRow {
   // Routine anchor/staple provenance (AI programme or deterministic fallback),
   // shown as an "Anchor"/"Staple" badge on the fixed lifts at the top.
   fixed?: 'anchor' | 'staple';
+  // A row from the routine day's warm-up block: shown in its own "Warm-up"
+  // section at the top of the checklist.
+  warmup?: boolean;
   // On a home session, the routine anchor/staple this row is a home stand-in for,
   // shown as "stands in for …".
   standsInFor?: string;
@@ -156,6 +159,7 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     section: t.section,
     isAnchor: t.isAnchor,
     fixed: t.fixed,
+    warmup: t.warmup,
     standsInFor: t.standsInFor,
     pair: t.pair,
     alternatives: t.alternatives,

@@ -50,7 +50,9 @@ export function kickOffGeneration(
       // (a treadmill run seeded before a parkrun day's programme regenerated,
       // 29 Aug 2026); anything ticked, noted, rated or swapped is kept, and
       // rows the new programme still has stay put so the board doesn't jump.
-      await pruneUntouchedSeededEntries(date, rows.map(r => r.name));
+      // The warm-up rows are laid on at serve time, not generated: keep them too.
+      const warmup = input.plan.routineDay?.warmup ?? [];
+      await pruneUntouchedSeededEntries(date, [...warmup, ...rows.map(r => r.name)]);
     })
     .catch(error => {
       console.error('Background exercise programme generation failed:', error);

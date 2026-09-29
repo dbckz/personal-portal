@@ -65,6 +65,8 @@ export interface ProgrammeRow {
   // against the routine day. Threaded to the checklist's "Anchor"/"Staple"
   // badge. Absent on rotating accessories.
   fixed?: 'anchor' | 'staple';
+  // A row from the routine day's warm-up block (see buildWarmupRows).
+  warmup?: boolean;
   // On a HOME session, the exact name of the routine anchor/staple this row is a
   // home stand-in for (e.g. "Band overhead press" stands in for "Seated DB
   // shoulder press"). Lets validation, ordering and the fixed badge treat the
@@ -108,6 +110,10 @@ export interface ProgrammerRoutineDay {
   prescriptions?: Record<string, string>;
   // The day's run goes LAST, after the lifts (Tue/Thu). Default is cardio-first.
   cardioAfter?: boolean;
+  // The day's warm-up block. Deliberately NOT part of the prompt or the hash: its
+  // rows are laid on at serve time (buildWarmupRows), so editing it never
+  // regenerates the programme.
+  warmup?: string[];
 }
 
 export interface ProgrammerPlan {
@@ -1317,28 +1323,51 @@ function parseFixedDose(dose: string): {
 // failure. Exported so the target resolver can short-circuit before any
 // generation and the tests can pin the shape.
 export function buildFixedDayRows(day: ProgrammerRoutineDay): ProgrammeRow[] {
-  return day.staples.map(name => {
-    const key = exerciseKey(name);
-    const dose = day.prescriptions?.[name] ?? '';
-    const parsed = dose ? parseFixedDose(dose) : {};
-    const kind: ExerciseKind = isCardioName(name) ? 'cardio' : isHoldName(name) ? 'hold' : 'core';
-    return {
-      name,
-      key,
-      kind,
-      toFailure: false,
-      fixed: 'staple' as const,
-      ...(dose ? { prescription: dose } : {}),
-      target: {
-        ...(parsed.sets !== undefined ? { sets: parsed.sets } : {}),
-        ...(parsed.reps !== undefined ? { reps: parsed.reps } : {}),
-        ...(parsed.holdSeconds !== undefined ? { holdSeconds: parsed.holdSeconds } : {}),
-        ...(parsed.perSide ? { perSide: true } : {}),
-      },
-      rationale: dose ? `Fixed home block — ${dose}.` : 'Fixed home block.',
-      lastSummary: 'fixed prescription',
-    };
-  });
+  return day.staples.map(name => ({
+    ...doseRow(name, day.prescriptions?.[name] ?? '', 'Fixed home block'),
+    fixed: 'staple' as const,
+  }));
+}
+
+// A gym day's warm-up block as rows: the same fixed-dose shape as a home day's
+// staples, flagged `warmup` so the checklist puts them in their own section at
+// the top. Laid on at serve time, after the finisher is chosen, so a warm-up
+// movement is never taken to failure.
+export function buildWarmupRows(day: ProgrammerRoutineDay | undefined): ProgrammeRow[] {
+  if (!day?.warmup?.length || day.fixed || day.rest) return [];
+  return day.warmup.map(name => ({
+    ...doseRow(name, day.prescriptions?.[name] ?? '', 'Warm-up'),
+    warmup: true,
+  }));
+}
+
+// Put the warm-up rows at the very top, ahead of the run. A programmed row that
+// repeats a warm-up movement is dropped so it isn't done twice.
+export function withWarmupRows<T extends { key: string }>(rows: T[], warmup: T[]): T[] {
+  if (!warmup.length) return rows;
+  const keys = new Set(warmup.map(r => r.key));
+  return [...warmup, ...rows.filter(r => !keys.has(r.key))];
+}
+
+// One fixed-dose row: no AI, no history, no progression, never to failure.
+function doseRow(name: string, dose: string, label: string): ProgrammeRow {
+  const parsed = dose ? parseFixedDose(dose) : {};
+  const kind: ExerciseKind = isCardioName(name) ? 'cardio' : isHoldName(name) ? 'hold' : 'core';
+  return {
+    name,
+    key: exerciseKey(name),
+    kind,
+    toFailure: false,
+    ...(dose ? { prescription: dose } : {}),
+    target: {
+      ...(parsed.sets !== undefined ? { sets: parsed.sets } : {}),
+      ...(parsed.reps !== undefined ? { reps: parsed.reps } : {}),
+      ...(parsed.holdSeconds !== undefined ? { holdSeconds: parsed.holdSeconds } : {}),
+      ...(parsed.perSide ? { perSide: true } : {}),
+    },
+    rationale: dose ? `${label} — ${dose}.` : `${label}.`,
+    lastSummary: 'fixed prescription',
+  };
 }
 
 // Generate the programme, or null if the model is unavailable or returns nothing
@@ -1370,6 +1399,7 @@ export function programmeRowToTarget(row: ProgrammeRow): ExerciseTarget {
     rationale: row.rationale,
     lastSummary: row.lastSummary,
     ...(row.fixed ? { fixed: row.fixed } : {}),
+    ...(row.warmup ? { warmup: true } : {}),
     ...(row.standsInFor ? { standsInFor: row.standsInFor } : {}),
     ...(row.pair ? { pair: row.pair } : {}),
     ...(row.alternatives ? { alternatives: row.alternatives } : {}),

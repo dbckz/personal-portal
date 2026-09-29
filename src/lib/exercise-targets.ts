@@ -153,6 +153,9 @@ export interface ExerciseTarget {
   // always present). Drives the "Anchor"/"Staple" checklist badge. Absent on
   // rotating accessories and ad-hoc rows.
   fixed?: 'anchor' | 'staple';
+  // A row from the routine day's warm-up block: shown in its own "Warm-up"
+  // section at the top of the checklist.
+  warmup?: boolean;
   // On a HOME session, the exact name of the routine anchor/staple this row is a
   // home stand-in for (e.g. "Band overhead press" stands in for "Seated DB
   // shoulder press"). Shown on the row so the substitution is legible. Absent on

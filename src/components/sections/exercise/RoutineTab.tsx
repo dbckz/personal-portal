@@ -244,7 +244,7 @@ function DayCard({
   const toggleRest = () => {
     // A rest day carries no exercises; turning rest off leaves the lists empty
     // for the user to fill in.
-    onChange(day.rest ? { rest: false } : { rest: true, anchors: [], staples: [] });
+    onChange(day.rest ? { rest: false } : { rest: true, anchors: [], staples: [], warmup: [] });
   };
 
   return (
@@ -290,6 +290,15 @@ function DayCard({
             className="w-full px-2 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-md"
           />
 
+          {!day.fixed && (
+            <NameList
+              label="Warm-up"
+              kind="core"
+              names={day.warmup ?? []}
+              onChange={warmup => onChange({ warmup })}
+              addLabel="Add warm-up movement"
+            />
+          )}
           <NameList
             label="Anchors"
             kind="core"

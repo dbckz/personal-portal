@@ -32,6 +32,8 @@ export interface SectionableRow {
   toFailure?: boolean;
   // Antagonist-superset membership (1-based index, a/b half).
   pair?: { index: number; slot: 'a' | 'b' };
+  // A row from the routine day's warm-up block: always its own leading section.
+  warmup?: boolean;
 }
 
 export interface RowSection<T> {
@@ -53,7 +55,16 @@ const CLASSIFY_SECTIONS: Array<{ group: ReturnType<typeof classifyExercise>; tit
   { group: 'core', title: 'Core' },
 ];
 
+const WARMUP = 'Warm-up';
+
+// The warm-up block leads in its own section, whatever mode groups the rest.
 export function groupRowsIntoSections<T extends SectionableRow>(rows: T[]): RowSection<T>[] {
+  const warmup = rows.filter(r => r.warmup);
+  if (!warmup.length) return groupMain(rows);
+  return [{ title: WARMUP, rows: warmup }, ...groupMain(rows.filter(r => !r.warmup))];
+}
+
+function groupMain<T extends SectionableRow>(rows: T[]): RowSection<T>[] {
   if (rows.some(r => r.pair)) return groupBySuperset(rows);
   // The finisher (a to-failure accessory) is lifted out of the muscle-group /
   // prescription grouping and rendered in its own section that always trails the

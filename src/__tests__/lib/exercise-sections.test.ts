@@ -142,3 +142,26 @@ describe('groupRowsIntoSections — a superset day', () => {
     expect(sections.map(s => s.title)).toEqual(['Superset 1', 'Then', 'Superset 2', 'Then (2)']);
   });
 });
+
+describe('groupRowsIntoSections — a warm-up block', () => {
+  it('leads in its own section on a superset day, ahead of the run', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Cat-cow', warmup: true }),
+      row({ name: 'Side plank', warmup: true }),
+      row({ name: 'Treadmill run', kind: 'cardio' }),
+      row({ name: 'Leg press', pair: { index: 1, slot: 'a' } }),
+      row({ name: 'Seated leg curl', pair: { index: 1, slot: 'b' } }),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Warm-up', 'First', 'Superset 1']);
+    expect(sections[0].rows.map(r => r.name)).toEqual(['Cat-cow', 'Side plank']);
+  });
+
+  it('leads without pairs too, and is not classified into Core', () => {
+    const sections = groupRowsIntoSections([
+      row({ name: 'Side plank', warmup: true }),
+      row({ name: 'Dead bug' }),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['Warm-up', 'Core']);
+    expect(sections[1].rows.map(r => r.name)).toEqual(['Dead bug']);
+  });
+});

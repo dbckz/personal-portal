@@ -26,6 +26,8 @@ import { normalizeExerciseName } from '@/lib/exercise-names';
 import { entryWasPerformed } from '@/lib/exercise-entry';
 import {
   buildFixedDayRows,
+  buildWarmupRows,
+  withWarmupRows,
   buildProgrammerInput,
   capSets,
   dropExclusiveDuplicates,
@@ -192,7 +194,8 @@ export async function resolveSessionTargets(
         routineDay
       )
     );
-    return { plan, components, targets: ordered.map(programmeRowToTarget), source: 'ai', input, hash };
+    const withWarmup = withWarmupRows(ordered, buildWarmupRows(routineDay));
+    return { plan, components, targets: withWarmup.map(programmeRowToTarget), source: 'ai', input, hash };
   }
 
   // The deterministic fallback for a cache miss is unchanged: history-driven
@@ -202,11 +205,14 @@ export async function resolveSessionTargets(
   // them. Left as-is because building no-history targets here is not cheap.)
   // The one-variant-per-session rule applies here too: the fallback is built
   // straight from history, which can carry both spellings of a movement.
-  const targets = dropExclusiveDuplicates(
-    markFixedTargets(
-      buildSessionTargets(progressions, components, 8, venue ? { venue } : {}),
-      routineDay
-    )
+  const targets = withWarmupRows(
+    dropExclusiveDuplicates(
+      markFixedTargets(
+        buildSessionTargets(progressions, components, 8, venue ? { venue } : {}),
+        routineDay
+      )
+    ),
+    buildWarmupRows(routineDay).map(programmeRowToTarget)
   );
   return { plan, components, targets, source: 'fallback', input, hash };
 }
@@ -277,7 +283,9 @@ function distillRoutineDay(
 ): ProgrammerRoutineDay {
   const anchors = day.anchors ?? [];
   const staples = day.staples ?? [];
-  const fixedKeys = new Set([...anchors, ...staples].map(exerciseKey));
+  const warmup = day.warmup ?? [];
+  // Warm-up movements are logged too, but they are not accessories to rotate.
+  const fixedKeys = new Set([...anchors, ...staples, ...warmup].map(exerciseKey));
   const recentAccessories = day.rest
     ? []
     : recentAccessoriesForDay(day, sessions, date, fixedKeys);
@@ -300,6 +308,7 @@ function distillRoutineDay(
       ? { prescriptions: day.prescriptions }
       : {}),
     ...(day.cardioAfter ? { cardioAfter: true } : {}),
+    ...(warmup.length ? { warmup } : {}),
   };
 }
 

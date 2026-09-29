@@ -78,3 +78,20 @@ describe('sessionCues', () => {
     expect(sessionCues([])).toEqual({ intro: [], before: {}, after: {}, outro: [] });
   });
 });
+
+describe('sessionCues — with a warm-up block', () => {
+  it('drops the general warm-up line and never ramps up a warm-up movement', () => {
+    const cues = sessionCues(
+      [
+        r({ name: 'Cat-cow', warmup: true }),
+        r({ name: 'Banded glute bridge', warmup: true }),
+        r({ name: 'Treadmill run', kind: 'cardio' }),
+        r({ name: 'Hip thrust', weightKg: 40 }),
+      ],
+      {}
+    );
+    expect(cues.intro).toEqual([]);
+    expect(Object.keys(cues.before)).toEqual(['Hip thrust']);
+    expect(cues.outro[0].kind).toBe('cooldown');
+  });
+});

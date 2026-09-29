@@ -340,3 +340,48 @@ describe('resolveSessionTargets — a routine title shared by several weekdays',
     expect(resolved.targets.map(t => t.name)).not.toContain('5-a-side football');
   });
 });
+
+// A gym day with a warm-up block (Thu 27 Aug 2026): the warm-up rows lead the
+// served targets on both paths, and the to-failure marker never lands on one.
+describe('resolveSessionTargets — a warm-up block', () => {
+  const legsDay: WeeklyRoutineDay = {
+    dayOfWeek: 4,
+    title: 'Legs',
+    anchors: ['Leg press'],
+    staples: [],
+    warmup: ['Cat-cow', 'Side plank'],
+    prescriptions: { 'Cat-cow': '8 slow', 'Side plank': '3-2-1 × 10 s per side' },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRoutine.mockResolvedValue([legsDay]);
+  });
+
+  it('leads a cached programme and drops its repeat of a warm-up movement', async () => {
+    mockGetCached.mockReturnValue([
+      row('Leg press'),
+      row('Side plank', { kind: 'hold' }),
+      row('Leg extension', { toFailure: true }),
+    ]);
+    const resolved = await resolveSessionTargets('2026-08-27', [legsPlan()]);
+    expect(resolved.source).toBe('ai');
+    expect(resolved.targets.map(t => t.name)).toEqual([
+      'Cat-cow',
+      'Side plank',
+      'Leg press',
+      'Leg extension',
+    ]);
+    expect(resolved.targets.slice(0, 2).every(t => t.warmup && !t.toFailure)).toBe(true);
+    expect(resolved.targets[1].prescription).toBe('3-2-1 × 10 s per side');
+    expect(resolved.targets.filter(t => t.toFailure).map(t => t.name)).toEqual(['Leg extension']);
+  });
+
+  it('leads the deterministic fallback on a cache miss', async () => {
+    mockGetCached.mockReturnValue(undefined);
+    const resolved = await resolveSessionTargets('2026-08-27', [legsPlan()]);
+    expect(resolved.source).toBe('fallback');
+    expect(resolved.targets.slice(0, 2).map(t => t.name)).toEqual(['Cat-cow', 'Side plank']);
+    expect(resolved.targets.some(t => t.warmup && t.toFailure)).toBe(false);
+  });
+});

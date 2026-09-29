@@ -116,7 +116,7 @@ function DayEditor({
   // A rest day carries no exercises; turning rest off leaves the lists empty for
   // the user to fill in.
   const toggleRest = () =>
-    onChange(day.rest ? { rest: false } : { rest: true, anchors: [], staples: [] });
+    onChange(day.rest ? { rest: false } : { rest: true, anchors: [], staples: [], warmup: [] });
 
   return (
     <div
@@ -158,6 +158,14 @@ function DayEditor({
             placeholder="Note (optional)"
             className="h-10 w-full rounded-md border border-gray-300 px-2 text-sm text-gray-600"
           />
+          {!day.fixed && (
+            <NameList
+              label="Warm-up"
+              names={day.warmup ?? []}
+              onChange={warmup => onChange({ warmup })}
+              addLabel="Add warm-up movement"
+            />
+          )}
           <NameList
             label="Anchors"
             names={day.anchors}

@@ -94,6 +94,7 @@ function normaliseDay(raw: unknown): WeeklyRoutineDay | null {
   const note = typeof day.note === 'string' ? day.note.trim() : '';
   const anchors = rest ? [] : names(day.anchors);
   const staples = rest ? [] : names(day.staples);
+  const warmup = rest ? [] : names(day.warmup);
 
   // The set of exercise names a pair or an alternative may reference — the day's
   // own anchors and staples. A rest day carries none, so it keeps no pairs or
@@ -131,6 +132,7 @@ function normaliseDay(raw: unknown): WeeklyRoutineDay | null {
     ...(fixed ? { fixed: true } : {}),
     ...(Object.keys(prescriptions).length ? { prescriptions } : {}),
     ...(cardioAfter ? { cardioAfter: true } : {}),
+    ...(warmup.length ? { warmup } : {}),
   };
 }
 

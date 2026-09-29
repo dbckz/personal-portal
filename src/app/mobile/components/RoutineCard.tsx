@@ -164,6 +164,9 @@ export function RoutineCard() {
                     >
                       {day.title || (day.rest ? 'Rest' : '—')}
                     </p>
+                    {!day.rest && day.warmup && day.warmup.length > 0 && (
+                      <p className="text-xs text-gray-400">Warm-up: {day.warmup.join(', ')}</p>
+                    )}
                     {!day.rest && day.anchors.length > 0 && (
                       <p className="text-xs text-gray-600">{day.anchors.join(', ')}</p>
                     )}

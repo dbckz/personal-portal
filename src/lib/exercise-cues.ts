@@ -28,6 +28,7 @@ export interface CueRow {
   pair?: { index: number; slot: 'a' | 'b' };
   distanceKm?: number;
   durationMinutes?: number;
+  warmup?: boolean;
 }
 
 export interface CuePlan {
@@ -118,13 +119,18 @@ export function sessionCues(rows: CueRow[], plan?: CuePlan | null): SessionCues 
   // A standing home day is itself mobility work: nothing else to add.
   if (plan?.fixed) return cues;
 
-  const lifts = rows.filter(r => !isCardio(r));
-  const first = rows[0];
+  // A routine warm-up block, when the day has one, is ticked as rows: it stands
+  // in for the general warm-up line, and its movements are not lifts to ramp up.
+  const hasWarmupBlock = rows.some(r => r.warmup);
+  const main = rows.filter(r => !r.warmup);
+  if (!main.length) return cues;
+  const lifts = main.filter(r => !isCardio(r));
+  const first = main[0];
 
   // General warm-up. A session that opens with a parkrun warms up for the run
   // instead, and the run then warms up the lifts.
   if (isParkrun(first)) push(cues.before, first.key, { kind: 'warmup', text: PARKRUN_WARMUP });
-  else if (lifts.length) {
+  else if (lifts.length && !hasWarmupBlock) {
     cues.intro.push({ kind: 'warmup', text: plan?.venue === 'home' ? HOME_WARMUP : GYM_WARMUP });
   }
 
@@ -148,7 +154,7 @@ export function sessionCues(rows: CueRow[], plan?: CuePlan | null): SessionCues 
 
   // Cool-down at the end: after a run if the session finishes on one, else after
   // the lifts. Football already has its own.
-  const last = rows[rows.length - 1];
+  const last = main[main.length - 1];
   if (!isFootball(last)) {
     cues.outro.push({ kind: 'cooldown', text: isCardio(last) ? RUN_COOLDOWN : LIFT_COOLDOWN });
   }

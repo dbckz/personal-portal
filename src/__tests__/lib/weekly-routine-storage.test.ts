@@ -251,3 +251,19 @@ describe('normaliseDay — the v2 fields', () => {
     expect(day.pairs).toBeUndefined();
   });
 });
+
+describe('weekly routine storage — warm-up', () => {
+  beforeEach(() => {
+    __resetDbForTests();
+  });
+
+  it('keeps a trimmed warm-up list, and drops it on a rest day', async () => {
+    const days: WeeklyRoutineDay[] = [
+      { dayOfWeek: 2, title: 'Full body A', anchors: ['Leg press'], warmup: [' Cat-cow ', '', 'Dead bug'] },
+      { dayOfWeek: 0, title: 'Rest', anchors: [], rest: true, warmup: ['Cat-cow'] },
+    ];
+    const saved = await saveWeeklyRoutine(days);
+    expect(saved.find(d => d.dayOfWeek === 2)!.warmup).toEqual(['Cat-cow', 'Dead bug']);
+    expect(saved.find(d => d.dayOfWeek === 0)!.warmup).toBeUndefined();
+  });
+});
